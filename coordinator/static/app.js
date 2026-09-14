@@ -73,7 +73,7 @@ function renderRegistry(s) {
     }
     fleetKey=key;
   }
-  $('fleet-count').textContent=s.fleet.length+' / 20';$('fleet').replaceChildren();
+  $('fleet-count').textContent=s.fleet.length+' / '+(s.limits?.vms||50);$('fleet').replaceChildren();
   for(const a of s.fleet){
     const item=document.createElement('div');item.className='fleet-item'+(a.fresh?' fresh':'');
     const name=document.createElement('strong');name.textContent=a.name;
@@ -82,7 +82,8 @@ function renderRegistry(s) {
   }
   if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to create a pair.';
   for(const side of ['left','right'])$('pair-'+side).disabled=pending;
-  $('select-pair').disabled=pending||s.fleet.filter(a=>!a.pairId).length<2;
+  $('pairs-count').textContent=s.pairs.length+' / '+(s.limits?.pairs||20);
+  $('select-pair').disabled=pending||s.pairs.length>=(s.limits?.pairs||20)||s.fleet.filter(a=>!a.pairId).length<2;
   $('connections').disabled=false;
   const imported=s.fleet.find(a=>a.id===registeredId);
   if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check that the agent is running and both computers are connected to the same Tailscale network.');

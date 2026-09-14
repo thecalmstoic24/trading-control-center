@@ -182,10 +182,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(other.pair,('vm-right','vm-left'));self.assertTrue(other.active)
         other.pool.shutdown();other.close_pool.shutdown()
         for handler in other.logger.handlers:handler.close()
-    def test_twenty_vm_registration_limit(self):
-        for i in range(3,21):self.add_vm('vm-'+str(i),'VM '+str(i),i)
-        self.assertEqual(len(self.center.config),20)
-        with self.assertRaises(ValueError):self.add_vm('vm-21','VM 21',21)
+    def test_fifty_vm_registration_limit(self):
+        for i in range(3,51):self.add_vm('vm-'+str(i),'VM '+str(i),i)
+        self.assertEqual(len(self.center.config),50)
+        with self.assertRaises(ValueError):self.add_vm('vm-51','VM 51',51)
 
 
 if __name__=='__main__': unittest.main()

@@ -24,11 +24,12 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '15.0-preview.1'
-AGENT_VERSIONS = {VERSION}
+VERSION = '15.0-preview.2'
+AGENT_VERSIONS = {VERSION, '15.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
-MAX_VMS = 20
+MAX_VMS = 50
+MAX_PAIRS = 20
 ROOT = Path(__file__).resolve().parent
 MAX_AGE_MS = 4000
 
@@ -351,7 +352,7 @@ class Center:
                 if self.active:
                     raise ValueError('Verify the current pair is flat before changing connections.')
                 if slot not in self.config and len(self.config) >= MAX_VMS:
-                    raise ValueError('This preview supports up to 20 registered VMs.')
+                    raise ValueError(f'This release supports up to {MAX_VMS} registered VMs.')
                 others = [x for k, x in self.config.items() if k != slot]
                 if any(x.get('name', '').casefold() == value['name'].casefold() for x in others):
                     raise ValueError('Choose a unique VM name.')
@@ -653,6 +654,8 @@ class Fleet:
             for identity,pair in self.pairs.items():
                 if pair.pair == (left, right):
                     return identity
+            if len(self.pairs) >= MAX_PAIRS:
+                raise ValueError(f'Up to {MAX_PAIRS} pairs can be assigned simultaneously. Release an idle pair to create another.')
             if left in self.owners or right in self.owners:
                 raise ValueError('A selected VM belongs to another pair. Close, verify and release that pair first.')
             if not all(self.catalog.safe_flat(self.view(slot)) for slot in (left, right)):
@@ -732,7 +735,7 @@ class Fleet:
                     state = response.get('state', {})
                     age = float(response.get('cacheAgeMs',999999)) + float(state.get('sampleAgeMs',999999)) + float(response.get('_rttMs',0))
                     if not (response.get('ok') and state.get('ok') and state.get('id') == value['id']
-                            and state.get('controlVersion') == VERSION and 0 <= age < MAX_AGE_MS
+                            and state.get('controlVersion') in AGENT_VERSIONS and 0 <= age < MAX_AGE_MS
                             and state.get('position') == 'Flat' and state.get('account')
                             and not any(state.get(k) for k in ('busy','scheduled','pairActive','pendingVerification','closing'))):
                         raise ValueError('The new private endpoint must report fresh, idle Flat status before registration changes.')
@@ -801,7 +804,7 @@ class Fleet:
                 state['id'] = identity
                 state['name'] = ' / '.join(pair.name(slot) for slot in pair.pair)
                 states.append(state)
-            return {'version':VERSION, 'pairs':states,
+            return {'version':VERSION, 'pairs':states, 'limits':{'vms':MAX_VMS,'pairs':MAX_PAIRS},
                     'fleet':[self.view(slot) for slot in self.catalog.config],
                     'events':list(self.global_events), 'serverTime':time.time()}
 

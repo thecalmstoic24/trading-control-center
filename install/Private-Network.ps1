@@ -45,8 +45,11 @@ function Open-PrivateNetworkSetup15 {
         } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
         $exe=Get-TailscaleExecutable
     }
+    try { $null=Get-PrivateAddress15; return } catch { }
     $gui=Join-Path (Split-Path $exe -Parent) 'tailscale-ipn.exe'
-    if(Test-Path $gui) { Start-Process -FilePath $gui }
+    $session=(Get-Process -Id $PID).SessionId
+    $existingGui=@(Get-Process -Name 'tailscale-ipn' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })
+    if((Test-Path $gui) -and $existingGui.Count -eq 0) { Start-Process -FilePath $gui }
     # Official client owns authentication. No credentials or auth keys enter this installer.
     Start-Process -FilePath $exe -Verb RunAs -ArgumentList @('up','--unattended','--timeout=60s')
 }

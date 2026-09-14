@@ -1,5 +1,7 @@
 # Trading Control Center — V15 preview
 
+Patch 2 increases capacity to 50 registered VMs and 20 assigned pairs (40 VMs paired, 10 spare). Both limits are enforced in the coordinator and displayed in the browser. Existing V15 preview 1 agents remain compatible; only the coordinator needs updating for capacity. Setup now reuses an already connected Tailscale client and avoids starting a second tray process. A simulation test with 50 registered agents prepares and opens 20 concurrent pairs, then closes all 40 paired agents without touching the 10 spare agents. This is a correctness test, not a benchmark of real Windows machines or network throughput.
+
 V15 removes manual public/controller/peer-IP entry. The existing third computer remains the coordinator. Every computer joins the same Tailscale private network; setup detects its private address automatically. Paired agents keep the established direct, certificate-pinned TLS protocol over that private network. This is a private-network migration, not the earlier proposed central relay or a hosted public website. Remote web hosting remains deferred.
 
 ## Update all participating computers
