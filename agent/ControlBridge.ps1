@@ -6,12 +6,12 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '15.0-preview.5'
+$script:ControlVersion = '16.0-preview.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
 $agentNameInput.Text = $script:ControlIdentity.Name
-$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V15 account selection"
+$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V16"
 $heading.Text = "Trading Agent - $($script:ControlIdentity.Name)"
 $portInput.Value = 8789
 $peerPortInput.Value = 8789
@@ -237,8 +237,7 @@ $connectionButton.Add_Click({
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password
         $code = @{id=$script:ControlIdentity.Id; name=$script:ControlIdentity.Name; host=$script:ControlIdentity.HostAddress; port=8789;
                   pin=$script:ControlIdentity.Pin; token=$credential} | ConvertTo-Json -Compress
-        [System.Windows.Forms.Clipboard]::SetDataObject([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($code)), $true, 5, 100)
-        $connectionStatus.Text = 'Private code copied. Paste into Register VM in the browser.'
+        Start-ClipboardCopy16 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($code)))
     } catch { Show-ErrorMessage -Message $_.Exception.Message }
 })
 

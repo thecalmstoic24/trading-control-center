@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '15.0-preview.5'
-AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4'}
+VERSION = '16.0-preview.1'
+AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50

@@ -376,7 +376,7 @@ function Initialize-Airtable {
   }
  }
  Write-Host ''
- if($request14.Mode -ne 'setup') { throw 'Airtable login is missing or invalid. Run Airtable Setup on this VM, then refresh accounts.' }
+ if($request14.Mode -notin @('setup','startup')) { throw 'Airtable login is missing or invalid. Run Airtable Setup on this VM, then refresh accounts.' }
  Write-Host 'FIRST-RUN SETUP - this machine needs your Airtable personal access token.' -ForegroundColor Cyan
  Write-Host 'Use a token with data.records:read and data.records:write and access to your base.'
  Write-Host 'Paste your token below and press Enter. Input is hidden. This is needed only once per Windows user/PC.'
@@ -427,7 +427,7 @@ try {
    Move-Item ($queue14+'.tmp') $queue14 -Force
   }
   Initialize-Airtable
-  if($request14.Mode -eq 'setup') { @{ok=$true;message='Airtable login verified.'} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8; exit 0 }
+  if($request14.Mode -in @('setup','startup')) { @{ok=$true;message='Airtable login verified.'} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8; exit 0 }
   if($request14.Mode -eq 'accounts') {
    $records14=@();$offset14=''
    do {

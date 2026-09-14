@@ -2,7 +2,7 @@
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '15.0-preview.5'
+$version = '16.0-preview.1'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
@@ -39,60 +39,68 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Trading Control Center - V15 Private Network Setup'
-$form.ClientSize = New-Object Drawing.Size(650,740)
-$form.StartPosition = 'CenterScreen'
-$form.AutoScroll = $true
-$form.Font = New-Object Drawing.Font('Segoe UI',10)
-$form.FormBorderStyle = 'FixedDialog'; $form.MaximizeBox = $false
+$form.Text='Trading Control Center - V16 Setup'
+$form.Font=New-Object Drawing.Font('Segoe UI',9)
+$form.AutoScaleDimensions=New-Object Drawing.SizeF(96,96)
+$form.AutoScaleMode='Dpi'
+$form.ClientSize=New-Object Drawing.Size(400,330)
+$form.StartPosition='CenterScreen';$form.FormBorderStyle='FixedDialog';$form.MaximizeBox=$false
 function LabelAt([string]$Text,[int]$Y) {
-    $item = New-Object Windows.Forms.Label
-    $item.Text=$Text; $item.Location=New-Object Drawing.Point(24,$Y); $item.Size=New-Object Drawing.Size(600,44)
-    $form.Controls.Add($item); return $item
+ $item=New-Object Windows.Forms.Label
+ $item.Text=$Text;$item.Location=New-Object Drawing.Point(12,$Y);$item.Size=New-Object Drawing.Size(376,20)
+ $form.Controls.Add($item);return $item
 }
-LabelAt 'Choose what to install. Use the same Tailscale network on every computer.' 20 | Out-Null
-$role = New-Object Windows.Forms.ComboBox
-$role.DropDownStyle='DropDownList'; $role.Location=New-Object Drawing.Point(24,70); $role.Size=New-Object Drawing.Size(600,30)
-@('Control center - my third computer','Named VM - NinjaTrader agent') | ForEach-Object { [void]$role.Items.Add($_) }
-$role.SelectedIndex=0; $form.Controls.Add($role)
-$nameLabel=LabelAt 'VM name (examples: MFFLocDao, LCDLocDao, FNThu, FNSean)' 112
+$role=New-Object Windows.Forms.ComboBox
+$role.DropDownStyle='DropDownList';$role.Location=New-Object Drawing.Point(12,12);$role.Width=376
+@('Control center - my third computer','Named VM - NinjaTrader agent') | ForEach-Object {[void]$role.Items.Add($_)}
+$role.SelectedIndex=0;$form.Controls.Add($role)
+$nameLabel=LabelAt 'VM name' 42
 $nameBox=New-Object Windows.Forms.ComboBox
-$nameBox.Location=New-Object Drawing.Point(24,145);$nameBox.Size=New-Object Drawing.Size(600,30)
+$nameBox.Location=New-Object Drawing.Point(12,62);$nameBox.Width=376
 @('MFFLocDao','LCDLocDao','FNThu','FNSean') | ForEach-Object {[void]$nameBox.Items.Add($_)}
 $form.Controls.Add($nameBox)
-$networkLabel=LabelAt 'Private network: not checked' 190
-$networkLabel.Height=65
+LabelAt 'Tailscale auth key (new devices only; optional)' 92 | Out-Null
+$authKey16=New-Object Windows.Forms.TextBox
+$authKey16.UseSystemPasswordChar=$true;$authKey16.Location=New-Object Drawing.Point(12,112);$authKey16.Width=376
+$form.Controls.Add($authKey16)
+$networkLabel=LabelAt 'Checking private network...' 144
 $connectNetwork=New-Object Windows.Forms.Button
-$connectNetwork.Text='SET UP PRIVATE NETWORK (TAILSCALE)'
-$connectNetwork.Location=New-Object Drawing.Point(24,275);$connectNetwork.Size=New-Object Drawing.Size(600,40)
+$connectNetwork.Text='Connect Tailscale';$connectNetwork.Location=New-Object Drawing.Point(12,169);$connectNetwork.Size=New-Object Drawing.Size(184,30)
 $form.Controls.Add($connectNetwork)
-$connectNetwork.Add_Click({
-    try { Open-PrivateNetworkSetup15; $status.Text='Finish signing in to Tailscale, then click CHECK CONNECTION.' }
-    catch { $status.Text=$_.Exception.Message }
-})
 $detect=New-Object Windows.Forms.Button
-$detect.Text='CHECK CONNECTION'
-$detect.Location=New-Object Drawing.Point(24,335);$detect.Size=New-Object Drawing.Size(600,40)
+$detect.Text='Check connection';$detect.Location=New-Object Drawing.Point(204,169);$detect.Size=New-Object Drawing.Size(184,30)
 $form.Controls.Add($detect)
-function Detect-PrivateNetwork {
-    $script:PrivateAddress15=Get-PrivateAddress15
-    $networkLabel.Text='Private network connected. Address detected automatically.'
-    $status.Text='Ready to install. No public or peer IP addresses are needed.'
-}
-$detect.Add_Click({try { Detect-PrivateNetwork } catch { $networkLabel.Text=$_.Exception.Message }})
-$form.Add_Shown({try { Detect-PrivateNetwork } catch { $networkLabel.Text=$_.Exception.Message }})
-$notice=LabelAt 'Control center installs its own Python runtime. No GitHub login or manual Python installation is needed.' 440
 $check=New-Object Windows.Forms.CheckBox
-$check.Text='For agent installation: All accounts are flat, no working orders, and the old agent is closed.'
-$check.Location=New-Object Drawing.Point(24,500); $check.Size=New-Object Drawing.Size(600,52); $form.Controls.Add($check)
+$check.Text='All accounts flat, no working orders; old agent closed.'
+$check.Location=New-Object Drawing.Point(12,204);$check.Size=New-Object Drawing.Size(376,34);$form.Controls.Add($check)
 $install=New-Object Windows.Forms.Button
-$install.Text='INSTALL'; $install.Location=New-Object Drawing.Point(24,580); $install.Size=New-Object Drawing.Size(600,45); $form.Controls.Add($install)
-$status=LabelAt 'Ready. This installer will not submit any trade.' 650
-$role.Add_SelectedIndexChanged({
-    $agent=$role.SelectedIndex -gt 0
-    $check.Enabled=$agent;$nameBox.Enabled=$agent
-    $notice.Text='V15 uses your private network. Paired agents retain direct encrypted connections. Your third computer remains the coordinator.'
-})
+$install.Text='Install / Update';$install.Location=New-Object Drawing.Point(12,242);$install.Size=New-Object Drawing.Size(376,32);$form.Controls.Add($install)
+$status=LabelAt 'Uses your private network. No peer IP lists.' 282;$status.Height=44
+function Detect-PrivateNetwork {
+ $script:PrivateAddress15=Get-PrivateAddress15
+ $networkLabel.Text='Connected: '+$script:PrivateAddress15
+ $status.Text='Ready to install.'
+}
+function Connect-Network16 {
+ $status.Text='Installing / connecting Tailscale...';$form.Refresh()
+ $key=$authKey16.Text.Trim();$authKey16.Clear()
+ if($key) {
+  if($key -notmatch '^tskey-auth-[A-Za-z0-9_-]+$') {throw 'Use a Tailscale auth key, not a password or API token.'}
+  Protect-Directory $base
+  $keyDir=Join-Path $base ('enroll-'+[guid]::NewGuid().ToString('N'));Protect-Directory $keyDir
+  try {
+   $keyFile=Join-Path $keyDir 'key.clixml'
+   ConvertTo-SecureString $key -AsPlainText -Force | Export-Clixml $keyFile
+   $key=$null
+   Open-PrivateNetworkSetup15 -EncryptedKeyPath $keyFile
+  } finally {Remove-Item $keyDir -Recurse -Force -ErrorAction SilentlyContinue;$key=$null}
+ } else {Open-PrivateNetworkSetup15}
+ Detect-PrivateNetwork
+}
+$connectNetwork.Add_Click({try {Connect-Network16} catch {$status.Text=$_.Exception.Message}})
+$detect.Add_Click({try {Detect-PrivateNetwork} catch {$status.Text=$_.Exception.Message}})
+$form.Add_Shown({try {Detect-PrivateNetwork} catch {$networkLabel.Text='Not connected';$status.Text='Enter an auth key, then Install; or use Connect Tailscale.'}})
+$role.Add_SelectedIndexChanged({$agent=$role.SelectedIndex -gt 0;$check.Enabled=$agent;$nameBox.Enabled=$agent})
 $check.Enabled=$false;$nameBox.Enabled=$false
 $identityFile=Join-Path $base 'agent-data\identity.clixml'
 if(Test-Path -LiteralPath $identityFile) {
@@ -104,14 +112,14 @@ $install.Add_Click({
     try {
         $agent=$role.SelectedIndex -gt 0
         if($agent -and -not $check.Checked){throw 'Confirm the agent-installation checkbox first.'}
-        $hostAddress=Get-PrivateAddress15
+        try { $hostAddress=Get-PrivateAddress15 } catch { Connect-Network16; $hostAddress=Get-PrivateAddress15 }
         $name=$nameBox.Text.Trim()
         if($agent -and $name -notmatch '^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}$') { throw 'Enter a unique VM name, up to 40 characters.' }
         $running = Get-CimInstance Win32_Process | Where-Object {
             $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf((Join-Path $base 'releases'),[StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             ($_.Name -match '^(python|pythonw|powershell|pwsh)\.exe$')
         }
-        if($running){throw 'This release is already running. Close it only after verifying both VMs are flat, then run setup again.'}
+        if($running){throw 'A trading agent or coordinator is running. Verify all pairs are flat, close the running program, then retry.'}
         $status.Text='Installing files...'; $form.Refresh()
         Protect-Directory $base
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
@@ -165,7 +173,7 @@ $install.Add_Click({
             $firewall=Join-Path $destination 'install\Allow-Control-Connection.ps1'
             $process=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$firewall+'" -LocalAddress '+$hostAddress)
             if($process.ExitCode -ne 0){throw 'Firewall configuration failed. Installation files are present; rerun setup to finish.'}
-            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v15.ps1'
+            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v16.ps1'
             Add-DesktopShortcut ('Trading Agent - '+$name) $scriptFile
             Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Agent starts automatically. Copy its connection code into the VM registry on your third computer.'

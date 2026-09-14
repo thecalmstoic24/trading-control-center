@@ -33,17 +33,26 @@ function Get-PrivateAddress15 {
     return [string]$addresses[0]
 }
 function Open-PrivateNetworkSetup15 {
+    param([string]$EncryptedKeyPath)
     try { $exe=Get-TailscaleExecutable } catch { $exe=$null }
     if(-not $exe) {
-        $temporary=Join-Path ([IO.Path]::GetTempPath()) ('TccNetwork-'+[guid]::NewGuid().ToString('N')+'.exe')
+        $architecture=if($env:PROCESSOR_ARCHITEW6432){$env:PROCESSOR_ARCHITEW6432}else{$env:PROCESSOR_ARCHITECTURE}
+        $packageArch=switch($architecture){'ARM64'{'arm64'} 'AMD64'{'amd64'} 'x86'{'x86'} default{throw 'Unsupported Windows CPU architecture.'}}
+        $temporary=Join-Path ([IO.Path]::GetTempPath()) ('TccNetwork-'+[guid]::NewGuid().ToString('N')+'.msi')
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4.exe' -OutFile $temporary -TimeoutSec 120
+            Invoke-WebRequest -UseBasicParsing -Uri ('https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-'+$packageArch+'.msi') -OutFile $temporary -TimeoutSec 120
             $signature=Get-AuthenticodeSignature -LiteralPath $temporary
             if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O="?Tailscale Inc\.?"?(,|$)') { throw 'Tailscale publisher signature could not be verified. No installer was launched.' }
-            $install=Start-Process -FilePath $temporary -Verb RunAs -Wait -PassThru
+            $install=Start-Process -FilePath 'msiexec.exe' -Verb RunAs -Wait -PassThru -ArgumentList ('/i "'+$temporary+'" /qn /norestart')
             if($install.ExitCode -notin @(0,3010)) { throw 'Tailscale installation was cancelled or failed.' }
         } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
         $exe=Get-TailscaleExecutable
+    }
+    if($EncryptedKeyPath) {
+        $helper=Join-Path $PSScriptRoot 'Enroll-Private-Network.ps1'
+        $joined=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$helper+'" -EncryptedKeyPath "'+$EncryptedKeyPath+'"')
+        if($joined.ExitCode -ne 0) { throw 'Tailscale enrollment failed. Check the key, expiry and device approval in Tailscale.' }
+        return
     }
     try { $null=Get-PrivateAddress15; return } catch { }
     $gui=Join-Path (Split-Path $exe -Parent) 'tailscale-ipn.exe'

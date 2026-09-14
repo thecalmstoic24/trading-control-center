@@ -87,7 +87,7 @@ function Start-ManualSync15 {
 }
 function Start-Worker14 {
     param([string]$Mode,[string]$TradeId='',[switch]$FreshExport)
-    if($Mode -eq 'export') {
+    if($Mode -in @('export','startup')) {
         if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
     } else { $null=Assert-Idle14 }
     Invalidate-Preparation
@@ -110,10 +110,11 @@ function Start-Worker14 {
     if($Mode -eq 'export') { $refreshTimer.Stop();$script:Sync14='Exporting NinjaTrader Accounts...' }
     $script:Busy=$true
     Set-ControlsForBusyState -Busy $true
+    if($Mode -eq 'startup') { $script:Sync14='Checking Airtable login; complete setup if prompted.' }
     $script:WorkerMode14=$Mode
     $script:WorkerStarted14=[DateTime]::UtcNow
     try {
-        $script:Worker14=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',('"'+$worker+'"'),'-RequestPath',('"'+$requestPath+'"'),'-ResultPath',('"'+$script:WorkerResult14+'"')) -WindowStyle $(if($Mode -eq 'setup'){'Normal'}else{'Hidden'}) -PassThru
+        $script:Worker14=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',('"'+$worker+'"'),'-RequestPath',('"'+$requestPath+'"'),'-ResultPath',('"'+$script:WorkerResult14+'"')) -WindowStyle $(if($Mode -in @('setup','startup')){'Normal'}else{'Hidden'}) -PassThru
     } catch { $script:Busy=$false;Set-ControlsForBusyState -Busy $false;$refreshTimer.Start();throw }
 }
 function Poll-Worker14 {
@@ -130,7 +131,8 @@ function Poll-Worker14 {
         }
         return
     }
-    if(-not $script:Worker14.HasExited -and ([DateTime]::UtcNow-$script:WorkerStarted14).TotalSeconds -lt 120) { return }
+    $deadline14=if($script:WorkerMode14 -in @('setup','startup')){600}else{120}
+    if(-not $script:Worker14.HasExited -and ([DateTime]::UtcNow-$script:WorkerStarted14).TotalSeconds -lt $deadline14) { return }
     if(-not $script:Worker14.HasExited) { $script:Worker14.Kill() }
     $mode=$script:WorkerMode14
     $script:Worker14.Dispose();$script:Worker14=$null
@@ -147,6 +149,7 @@ function Poll-Worker14 {
             $script:AccountStamp14=[DateTime]::UtcNow
             $script:AccountMessage14=[string]$result.message
         } else { $script:Sync14=[string]$result.message }
+        if($mode -eq 'startup') { $script:StartupFinished16=$true;Request-ManualSync15 }
     } catch {
         if($mode -eq 'accounts') { $script:AccountMessage14=$_.Exception.Message } else { $script:Sync14='Sync failed: '+$_.Exception.Message }
     }
