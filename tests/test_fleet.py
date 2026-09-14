@@ -194,3 +194,20 @@ class MigrationTests(FleetTests):
         with self.assertRaises(ValueError):
             self.fleet.enroll(self.ids[0],self.private_code(self.ids[0]))
         self.assertTrue(self.fleet.pairs[self.a].active)
+
+    def test_flat_unresolved_pair_releases_despite_account_quantity_changes(self):
+        pair=self.fleet.pairs[self.a]
+        pair.active=True;pair.mark_active()
+        for slot in self.ids[:2]:
+            self.fake.states[slot].update(account='Different-'+slot,quantity=7,pairActive=True)
+        self.fleet.release_pair(self.a)
+        self.assertNotIn(self.a,self.fleet.pairs)
+        self.assertTrue(all(slot not in self.fleet.owners for slot in self.ids[:2]))
+        self.assertFalse((pair.directory/'entry-unresolved.json').exists())
+        self.assertFalse(any(c[1] in ('entry','close','prepare') for c in self.fake.calls))
+
+    def test_release_keeps_reservations_on_unbind_failure(self):
+        self.fleet.pairs[self.a].active=True
+        self.fake.fail.add((self.ids[1],'unbind_peer'))
+        with self.assertRaises(Exception): self.fleet.release_pair(self.a)
+        self.assertTrue(all(self.fleet.owners[slot]==self.a for slot in self.ids[:2]))

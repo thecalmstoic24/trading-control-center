@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.1'
+$script:ControlVersion = '16.0-preview.2'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -133,10 +133,12 @@ function Invoke-ControlCommand {
         return @{ok=$true;message='TLS peer bound; prepare required.'}
     }
     if ($Pending.Command -eq 'unbind_peer') {
-        $null=Assert-Idle14
-        if ($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
+        if ($script:Busy -or $script:Worker14 -or $script:ScheduledAction -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
         $snapshot = Get-ChartSnapshot
         if($snapshot.Position -cne 'Flat') { throw 'Current chart account must be Flat.' }
+        $script:PairCoordinatorActive=$false
+        $script:LocalOpened=$false
+        $script:CurrentPairId=''
         Invalidate-Preparation
         $script:ControlPreparedId = ''
         $script:BoundPeer = $null

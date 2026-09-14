@@ -85,3 +85,13 @@ $request.peer.host='45.32.199.44';$rejected=$false
 try { Invoke-ControlCommand (Pending 'bind_peer' $request) | Out-Null } catch { $rejected=$_.Exception.Message -like 'Peer is not on*' }
 Check $rejected 'Public peer address bypassed validation'
 'V15 callback scope: later private peer binding succeeds with selected account/quantity; public addresses rejected.'
+
+Reset-Test
+$script:Worker14=$null;$script:PairCoordinatorActive=$true
+Invoke-ControlCommand (Pending 'unbind_peer' @{}) | Out-Null
+Check (-not $script:PairCoordinatorActive -and $null -eq $script:BoundPeer) 'Fresh local Flat did not clear stale pair flag on release'
+Reset-Test
+$script:ScheduledAction=@{Side='BUY'};$rejected=$false
+try {Invoke-ControlCommand (Pending 'unbind_peer' @{}) | Out-Null} catch {$rejected=$true}
+Check ($rejected -and $null -ne $script:BoundPeer) 'Release allowed a pending scheduled click'
+'Flat release: stale active flag clears; scheduled click remains a blocker.'

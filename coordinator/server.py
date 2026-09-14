@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.1'
-AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5'}
+VERSION = '16.0-preview.2'
+AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -205,7 +205,7 @@ class Center:
         if (not self.active or self.operation.locked() or not set(self.pair).issubset(self.opened_ids)
                 or any(j['command']=='close' and j['status']=='running' for j in self.jobs)):
             return
-        if all(self.safe_flat(self.view_agent(slot)) and self.target_matches(self.view_agent(slot)) for slot in self.pair):
+        if all(self.safe_flat(self.view_agent(slot)) for slot in self.pair):
             self.reset_closed('Both positions verified Flat. Dashboard reset; check working orders and Prepare for the next trade.')
 
     def select_pair(self, left, right):
@@ -327,6 +327,11 @@ class Center:
                 and agent['position'] == 'Flat' and not agent['scheduled'] and not agent['busy']
                 and not agent['pairActive'] and not agent['pending'] and not agent.get('closing'))
 
+    def release_flat(self, agent):
+        # A retained pairActive flag is cleared by an authenticated unbind after local Flat readback.
+        return (agent['fresh'] and agent['position'] == 'Flat'
+                and not any(agent.get(k) for k in ('scheduled','busy','pending','closing')))
+
     def target_matches(self, agent):
         return (agent['account'] == self.settings.get('accounts', {}).get(agent['id'], 'Sim101')
                 and str(agent['quantity']) == str(self.settings.get('quantities', {}).get(agent['id'], 1)))
@@ -427,11 +432,9 @@ class Center:
             elif command == 'close':
                 self.close_both()
             else:
-                if body.get('noWorkingOrders') is not True:
-                    raise ValueError('Check both VMs for working orders first.')
                 self.refresh_both()
-                if not all(self.safe_flat(a) and self.target_matches(a) for a in self.state()['agents']):
-                    raise ValueError('Fresh Flat status has not been verified on both agents.')
+                if not all(self.safe_flat(a) for a in self.state()['agents']):
+                    raise ValueError('Both agents must report fresh Flat with no trading or sync operation in progress.')
                 with self.lock:
                     self.reset_closed('Both positions verified Flat; dashboard reset for the next preparation.')
             with self.lock:
@@ -451,8 +454,6 @@ class Center:
                 raise ValueError('Operation cancelled by Close Both; prepare again.')
 
     def prepare(self, body, generation):
-        if body.get('noWorkingOrders') is not True:
-            raise ValueError('Check both selected accounts have no working orders before preparing.')
         ticker = str(body.get('ticker', '')).strip().upper()
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker):
             raise ValueError('Enter the NinjaTrader instrument, for example MNQ 09-26.')
@@ -563,9 +564,9 @@ class Center:
         while time.monotonic() < deadline:
             self.refresh_both()
             agents = self.state()['agents']
-            if all(self.safe_flat(a) and self.target_matches(a) for a in agents):
+            if all(self.safe_flat(a) for a in agents):
                 with self.lock:
-                    self.reset_closed('Both positions independently verified Flat. Dashboard reset; check working orders before preparing again.')
+                    self.reset_closed('Both positions independently verified Flat. Dashboard reset; prepare again before entry.')
                 return
             self.stop.wait(.6)
         raise ValueError('Close not verified on both VMs. Check both NinjaTrader windows manually.')
@@ -683,19 +684,22 @@ class Fleet:
             generation = pair.generation
         try:
             with pair.lock:
-                if pair.active or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
-                    raise ValueError('Close and verify this pair before releasing its VMs.')
+                if pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
+                    raise ValueError('Wait for the current pair operation to finish, then release.')
             pair.refresh_both()
-            if not all(pair.safe_flat(a) for a in pair.state()['agents']):
+            if not all(pair.release_flat(a) for a in pair.state()['agents']):
                 raise ValueError('Both VMs must be fresh, Flat and idle before release.')
             futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {}, 10) for slot in pair.pair]
             for future in futures:
                 future.result()
+            pair.refresh_both()
             with self.lock, pair.lock:
                 pair.prepared = None
                 pair.assert_generation(generation)
-                if pair.active or not all(pair.safe_flat(a) for a in pair.state()['agents']):
+                if not all(pair.release_flat(a) for a in pair.state()['agents']):
                     raise ValueError('Pair readiness changed; release blocked.')
+                pair.active = False
+                (pair.directory / 'entry-unresolved.json').unlink(missing_ok=True)
                 pair.generation += 1
                 del self.pairs[identity]
                 try:

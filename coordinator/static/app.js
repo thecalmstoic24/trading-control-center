@@ -20,8 +20,8 @@ function changed(source) {
   if(pairs[source]) $(pairs[source]).value=$(source).value;
   if(!dirty) api('/api/invalidate',{pairId:selectedPairId}).catch(e=>alertText(e.message,true));
   dirty=true; $('buy').disabled=true; $('sell').disabled=true;
-  $('orders-checked').checked=false;
-  alertText('Settings changed. Check working orders, then Prepare & Verify again.');
+  
+  alertText('Settings changed. Prepare & Verify again.');
 }
 fields.forEach(id=>$(id).addEventListener('input',()=>changed(id)));
 $('connections').onclick=()=>$('connect-dialog').showModal();
@@ -42,8 +42,8 @@ $('select-pair').onclick=async()=>{
   try {
     const result=await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
     saveDraft();selectedPairId=result.pairId;initialized=false;closedSequence=null;
-    $('orders-checked').checked=false; dirty=true; lastJob='';
-    $('pair-result').textContent='Pair created. Check working orders, then Prepare & Verify.';
+     dirty=true; lastJob='';
+    $('pair-result').textContent='Pair created. Prepare & Verify.';
   } catch(e){alertText(e.message,true);} finally{pending=false;await poll();}
 };
 function saveDraft(){
@@ -51,7 +51,7 @@ function saveDraft(){
 }
 function selectView(id){
   saveDraft();selectedPairId=id;sessionStorage.setItem('selected-pair',id);
-  initialized=false;closedSequence=null;lastEvent='';$('orders-checked').checked=false;
+  initialized=false;closedSequence=null;lastEvent='';
   if(fleetState)render(fleetState);
 }
 $('release-pair').onclick=async()=>{
@@ -135,7 +135,7 @@ function render(s){
     }
     renderPair(pair);
     pairJobs[pair.id]=lastJob;
-    $('release-pair').disabled=pair.active||pair.busy||pending||!pair.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
+    $('release-pair').disabled=pair.busy||pending||!pair.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing);
   }else alertText('Register VMs and create a pair to get started.');
 }
 async function action(command) {
@@ -143,13 +143,13 @@ async function action(command) {
   pending=true;
   $('buy').disabled=true; $('sell').disabled=true;
   const actionPairId=selectedPairId;
-  const body={pairId:actionPairId,command,noWorkingOrders:$('orders-checked').checked};
+  const body={pairId:actionPairId,command};
   if(command==='prepare') Object.assign(body,{ticker:$('instrument').value,stopLoss:Number($('left-stop').value),profit:Number($('left-profit').value),accounts:Object.fromEntries(state.agents.map((a,i)=>[a.id,$(['left-account','right-account'][i]).value])),quantities:Object.fromEntries(state.agents.map((a,i)=>[a.id,Number($(['left-quantity','right-quantity'][i]).value)]))});
   try {
     const result=await api('/api/action',body);pairJobs[actionPairId]=result.job;
     if(actionPairId===selectedPairId){lastJob=result.job;if(command==='prepare')dirty=false;}
     if(command==='prepare'&&drafts[actionPairId])drafts[actionPairId].dirty=false;
-    if(['buy','sell','close'].includes(command)) $('orders-checked').checked=false;
+    
     alertText(command==='close'?'Close requested independently on both VMs. Waiting for position verification.':'Request received by coordinator. Waiting for the VM results.');
   } catch(e) {alertText(e.message,true);} finally {pending=false;await poll();}
 }
@@ -164,7 +164,7 @@ function renderPair(s) {
     alertText('Connect both VM agents, check working orders, then Prepare & Verify.');
   }
   if((closedSequence!==null && s.closedSequence!==closedSequence)||(closedSequence===null&&s.closedSequence>0&&!s.prepared&&!s.active)){
-    $('orders-checked').checked=false;lastJob='';dirty=true;
+    lastJob='';dirty=true;
     alertText('Both positions verified Flat. Settings retained. Check working orders, then Prepare & Verify for the next trade.');
   }
   closedSequence=s.closedSequence;
@@ -182,8 +182,7 @@ function renderPair(s) {
   $('sell').textContent='Sell '+s.agents[0].name+' / Buy '+s.agents[1].name;
   const ready=s.canEnter&&!dirty&&!pending;
   $('buy').disabled=$('sell').disabled=!ready;
-  $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
-  $('orders-checked').disabled=s.busy||pending;
+  $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing);
   $('refresh-accounts').disabled=s.busy||s.active||pending;
 
   fields.forEach(id=>$(id).disabled=s.active||s.busy||pending);

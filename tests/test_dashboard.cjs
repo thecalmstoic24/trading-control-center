@@ -4,7 +4,7 @@ class Element {
   addEventListener(event,fn){this[event]=fn;} showModal(){} replaceChildren(){this.children=[];} append(...children){this.children.push(...children);}
   querySelector(key){return this.parts[key]??=(new Element());}
 }
-const elements={},get=id=>elements[id]??=(new Element());
+const elements={},get=id=>{assert.notEqual(id,'orders-checked','removed checkbox must never be accessed');return elements[id]??=(new Element());};
 const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element()},location:{hash:''},sessionStorage:{getItem:()=>'',setItem(){}},history:{replaceState(){}},setInterval(){},fetch:()=>new Promise(()=>{}),console});
 vm.runInContext(fs.readFileSync('coordinator/static/app.js','utf8'),context);
 function render(s){context.fixture=s;vm.runInContext('render(fixture)',context);}
@@ -21,10 +21,10 @@ assert.equal(get('vm-left').querySelector('h2').textContent,'FNThu');assert.matc
 assert.equal(get('left-stop').value,333);assert.equal(get('left-stop').disabled,false);assert.equal(get('prepare').disabled,false);
 get('left-stop').value='777';vm.runInContext("changed('left-stop')",context);
 vm.runInContext("selectView('a');selectView('b')",context);assert.equal(get('left-stop').value,'777','draft settings must stay with their own pair');
-pb.active=true;render(s);get('orders-checked').checked=true;
-assert.equal(get('orders-checked').disabled,false,'recovery confirmation remains available');
+pb.active=true;render(s);assert.equal(get('release-pair').disabled,false,'unresolved but idle Flat pair must allow release');
+
 pb.active=false;pb.closedSequence=1;render(s);
-assert.equal(get('orders-checked').checked,false);assert.equal(get('left-stop').value,'777');assert.equal(get('buy').disabled,true);assert.equal(get('prepare').disabled,false);assert.match(get('alert').textContent,/Both positions verified Flat/);
+assert.equal(get('left-stop').value,'777');assert.equal(get('buy').disabled,true);assert.equal(get('prepare').disabled,false);assert.match(get('alert').textContent,/Both positions verified Flat/);
 assert.equal(pa.active,true,'reset of B must not change A');
 vm.runInContext("registeredId='fnthu'",context);render(s);
 assert.match(get('connection-result').textContent,/FNThu connected/);

@@ -27,7 +27,7 @@ class Fake:
         if command=='status': return {'ok':True,'cacheAgeMs':0,'_rttMs':1,'state':state.copy()}
         if command=='bind_peer':self.bindings[slot]=body['peer']['id']
         if command in ('invalidate','unbind_peer'):state.update(prepared=False,prepareId='')
-        if command=='unbind_peer':self.bindings.pop(slot,None)
+        if command=='unbind_peer':self.bindings.pop(slot,None);state['pairActive']=False
         if command=='prepare':state.update(prepared=True,prepareId=body['prepareId'],ticker=body['ticker'],account=body.get('account','Sim101'),quantity=str(body.get('quantity',1)),stopLoss=body['stopLoss'],profit=body['profit'])
         if command=='entry':
             self.states[slot].update(position='1 L',pairActive=True)
@@ -68,9 +68,9 @@ class Tests(unittest.TestCase):
         self.fake.states['vm-right']['id']='vm-left'
         self.center.refresh_both()
         self.assertFalse(self.center.state()['agents'][1]['online'])
-    def test_manual_working_order_confirmation_required(self):
-        with self.assertRaises(ValueError):self.center.prepare(dict(ticker='MNQ',stopLoss=1,profit=2),0)
-        self.assertFalse(any(c[1]=='prepare' for c in self.fake.calls))
+    def test_prepare_without_manual_checkbox(self):
+        self.center.prepare(dict(ticker='MNQ',stopLoss=1,profit=2),0)
+        self.assertTrue(self.center.state()['canEnter'])
     def test_default_preparation_selects_sim_from_another_flat_account(self):
         self.fake.states['vm-left']['account']='LiveAccount'
         self.prepare()
