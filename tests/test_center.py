@@ -15,6 +15,7 @@ class Fake:
     def __init__(self):
         self.calls=[]
         self.fail=set()
+        self.bindings={}
         self.states={slot:dict(id=slot,controlVersion=module.VERSION,ok=True,sampleAgeMs=0,
                              account='Sim101',quantity='1',position='Flat',ticker='MNQ',
                              prepared=False,prepareId='',scheduled=False,busy=False,
@@ -24,10 +25,12 @@ class Fake:
         if (slot,command) in self.fail: raise TimeoutError('mock timeout')
         state=self.states[slot]
         if command=='status': return {'ok':True,'cacheAgeMs':0,'_rttMs':1,'state':state.copy()}
+        if command=='bind_peer':self.bindings[slot]=body['peer']['id']
+        if command=='invalidate':state.update(prepared=False,prepareId='')
         if command=='prepare':state.update(prepared=True,prepareId=body['prepareId'],ticker=body['ticker'],stopLoss=body['stopLoss'],profit=body['profit'])
         if command=='entry':
-            self.states['vm-left'].update(position='1 L',pairActive=True)
-            self.states['vm-right'].update(position='1 S',pairActive=True)
+            self.states[slot].update(position='1 L',pairActive=True)
+            self.states[self.bindings[slot]].update(position='1 S',pairActive=True)
         if command=='close':state.update(position='Flat',prepared=False,pairActive=False)
         return {'ok':True}
 
@@ -37,7 +40,7 @@ class Tests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.fake=Fake()
         self.center=module.Center(self.temp.name,self.fake,persist=False)
-        self.center.config={slot:{'id':slot} for slot in module.IDS}
+        self.center.config={slot:dict(id=slot,name=module.NAMES[slot],host='192.0.2.'+str(i+1),port=8789,pin=str(i+1)*64,token='b'*64) for i,slot in enumerate(module.IDS)}
     def tearDown(self):
         self.center.stop.set();self.center.pool.shutdown(wait=True);self.center.close_pool.shutdown(wait=True)
         for handler in self.center.logger.handlers:handler.close()
@@ -103,6 +106,82 @@ class Tests(unittest.TestCase):
     def test_invalid_numbers_rejected(self):
         for value in [float('nan'),float('inf'),-1,0,1.234,100001]:
             with self.assertRaises(ValueError):self.center.prepare(dict(ticker='MNQ',stopLoss=value,profit=1,noWorkingOrders=True),0)
+
+    def add_vm(self, slot, name, index):
+        code=base64.b64encode(json.dumps(dict(id=slot,name=name,host='192.0.2.'+str(index),port=8789,pin=format(index,'064x'),token='b'*64)).encode()).decode()
+        self.center.enroll(None,code)
+        self.fake.states[slot]=dict(self.fake.states['vm-left'],id=slot)
+        self.center.observe(slot)
+    def open_pair(self):
+        self.prepare();self.center.entry('buy',self.center.generation);self.center.refresh_both()
+    def flat_pair(self):
+        for slot in self.center.pair:self.fake.states[slot].update(position='Flat',pairActive=False,prepared=False)
+        self.center.refresh_both()
+    def test_four_vm_selection_routes_only_selected_pair(self):
+        self.center.refresh_both()
+        self.add_vm('fnthu','FNThu',3);self.add_vm('fnsean','FNSean',4)
+        self.center.select_pair('fnthu','fnsean')
+        self.fake.calls.clear()
+        generation=self.center.generation
+        self.center.prepare(dict(ticker='MNQ',stopLoss=123,profit=456,noWorkingOrders=True),generation)
+        self.center.entry('buy',generation)
+        self.assertEqual({slot for slot,command,_ in self.fake.calls}, {'fnthu','fnsean'})
+        self.assertEqual(self.fake.states['fnsean']['stopLoss'],456)
+        self.assertEqual(self.fake.bindings,{'fnthu':'fnsean','fnsean':'fnthu'})
+    def test_pair_selection_invalidates_old_readiness(self):
+        self.prepare();self.center.select_pair('vm-right','vm-left')
+        self.assertIsNone(self.center.prepared)
+        self.assertTrue(all(not state['prepared'] for state in self.fake.states.values()))
+        self.assertFalse(self.center.state()['canEnter'])
+    def test_pair_change_blocked_during_active_trade(self):
+        self.open_pair()
+        with self.assertRaises(ValueError):self.center.select_pair('vm-right','vm-left')
+    def test_natural_close_resets_once_preserves_settings_without_actions(self):
+        self.open_pair();self.fake.calls.clear();self.flat_pair()
+        state=self.center.state()
+        self.assertFalse(state['active']);self.assertFalse(state['canEnter'])
+        self.assertEqual(state['closedSequence'],1)
+        self.assertEqual(state['settings']['stopLoss'],123)
+        self.assertFalse(Path(self.temp.name,'entry-unresolved.json').exists())
+        self.assertTrue(all(command=='status' for _,command,_ in self.fake.calls))
+        self.center.refresh_both();self.assertEqual(self.center.state()['closedSequence'],1)
+        self.center.prepare(dict(ticker='MNQ',stopLoss=123,profit=456,noWorkingOrders=True),self.center.generation)
+        self.assertTrue(self.center.state()['canEnter'])
+    def test_initial_flat_after_commit_is_not_a_completed_trade(self):
+        self.prepare();self.center.entry('buy',0)
+        self.flat_pair()
+        self.assertTrue(self.center.active)
+        self.assertEqual(self.center.closed_sequence,0)
+    def test_stale_flat_cannot_reset(self):
+        self.open_pair();self.fake.states['vm-right']['sampleAgeMs']=99999;self.flat_pair()
+        self.assertTrue(self.center.active)
+        self.fake.states['vm-right']['sampleAgeMs']=0;self.center.observe('vm-right')
+        self.assertFalse(self.center.active)
+    def test_pending_close_cannot_reset(self):
+        self.open_pair();self.fake.states['vm-right']['closing']=True;self.flat_pair()
+        self.assertTrue(self.center.active)
+        self.fake.states['vm-right']['closing']=False;self.center.observe('vm-right')
+        self.assertFalse(self.center.active)
+    def test_peer_binding_failure_blocks_prepare_and_entry(self):
+        self.fake.fail.add(('vm-right','bind_peer'))
+        with self.assertRaises(ValueError):self.prepare()
+        self.assertFalse(any(command in ('prepare','entry') for _,command,_ in self.fake.calls))
+    def test_new_pair_requires_distinct_fresh_agents(self):
+        self.center.refresh_both()
+        with self.assertRaises(ValueError):self.center.select_pair('vm-left','vm-left')
+        self.fake.states['vm-right']['sampleAgeMs']=99999;self.center.observe('vm-right')
+        with self.assertRaises(ValueError):self.center.select_pair('vm-right','vm-left')
+    def test_restart_keeps_selected_pair_and_unresolved_lock(self):
+        self.center.refresh_both();self.center.select_pair('vm-right','vm-left')
+        self.center.mark_active()
+        other=module.Center(self.temp.name,self.fake,persist=False)
+        self.assertEqual(other.pair,('vm-right','vm-left'));self.assertTrue(other.active)
+        other.pool.shutdown();other.close_pool.shutdown()
+        for handler in other.logger.handlers:handler.close()
+    def test_twenty_vm_registration_limit(self):
+        for i in range(3,21):self.add_vm('vm-'+str(i),'VM '+str(i),i)
+        self.assertEqual(len(self.center.config),20)
+        with self.assertRaises(ValueError):self.add_vm('vm-21','VM 21',21)
 
 
 if __name__=='__main__': unittest.main()

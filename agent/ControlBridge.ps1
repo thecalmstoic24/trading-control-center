@@ -2,17 +2,66 @@
 Add-Type -Path (Join-Path $PSScriptRoot 'ControlGateway.cs')
 $script:ControlGateway = $null
 $script:ControlPreparedId = ''
+$script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '11.0-preview.1'
+$script:ControlVersion = '12.0-preview.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
 $agentNameInput.Text = $script:ControlIdentity.Name
 $form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - Sim101 / Qty 1"
 $heading.Text = "Trading Agent - $($script:ControlIdentity.Name)"
+$portInput.Value = 8789
+$peerPortInput.Value = 8789
+$secretLabel.Text = 'Managed key'
+$pairHelp.Text = 'Choose this VM and its partner in the browser. Prepare & Verify assigns the encrypted peer connection automatically.'
+
+
+
+# V12 uses pinned TLS for peer traffic, while retaining V10.4 arm/commit/click/monitor logic.
+function Start-AgentListener {
+    if ($script:AgentStarted) { return }
+    $secretInput.Text = [Guid]::NewGuid().ToString('N')
+    $script:AgentStarted = $true
+    $agentToggleButton.Text = 'STOP AGENT'
+    $agentNameInput.Enabled = $false
+    $portInput.Enabled = $false
+    $secretInput.Enabled = $false
+    $showSecret.Enabled = $false
+    $peerIpInput.ReadOnly = $true
+    $peerPortInput.Enabled = $false
+    $pairEnabled.Checked = $true
+    $pairEnabled.Enabled = $false
+    $agentStatus.Text = 'ONLINE - select and prepare the pair in the browser.'
+    $agentStatus.ForeColor = [Drawing.Color]::Green
+}
+function Start-PeerTask {
+    param([System.Collections.IDictionary]$Payload, [int]$TimeoutMilliseconds = 3000)
+    if (-not $script:AgentStarted -or -not $script:BoundPeer) { throw 'Select and prepare this pair in the browser first.' }
+    $body = [ordered]@{}
+    foreach($key in $Payload.Keys) { $body[$key] = $Payload[$key] }
+    $body['controlBindingId'] = $script:BoundPeer.bindingId
+    $body['controlSenderId'] = $script:ControlIdentity.Id
+    $kind = switch([string]$Payload.command) {
+        'ping' {'peer_ping'}
+        'monitor_status' {'peer_monitor'}
+        'emergency_close' {'peer_close'}
+        default {'peer'}
+    }
+    return [ControlGateway11]::Send($script:BoundPeer.host,8789,$script:BoundPeer.pin,$script:BoundPeer.token,
+        $kind,($body | ConvertTo-Json -Compress -Depth 6),$TimeoutMilliseconds)
+}
+function Send-PeerRequest {
+    param([System.Collections.IDictionary]$Payload, [int]$TimeoutMilliseconds = 15000)
+    $task = Start-PeerTask -Payload $Payload -TimeoutMilliseconds $TimeoutMilliseconds
+    $line = $task.GetAwaiter().GetResult()
+    return ($line | ConvertFrom-Json)
+}
 
 function Get-ControlStatus {
     $state = Get-CachedStatus
+    $state['closing'] = ($null -ne $script:CloseCheck)
+    $state['bindingId'] = $(if($script:BoundPeer){$script:BoundPeer.bindingId}else{''})
     $state['id'] = $script:ControlIdentity.Id
     $state['controlVersion'] = $script:ControlVersion
     $state['prepared'] = $script:Prepared -and -not $script:EntryFault -and -not $script:CloseCheck
@@ -31,14 +80,45 @@ function Get-ControlStatus {
 
 function Invoke-ControlCommand {
     param($Pending)
-    if ($Pending.AgeSeconds -gt 10 -and $Pending.Command -ne 'close') { throw 'Command expired in queue; prepare again.' }
+    if ($Pending.AgeSeconds -gt 10 -and $Pending.Command -notin @('close','peer_close')) { throw 'Command expired in queue; prepare again.' }
     $request = $Pending.Body | ConvertFrom-Json
     if (-not $script:AgentStarted) { throw 'Start the agent and verify its peer connection first.' }
+    if ($Pending.Command -eq 'peer' -or $Pending.Command -eq 'peer_close') {
+        if (-not $script:BoundPeer -or [string]$request.controlBindingId -cne $script:BoundPeer.bindingId -or
+            [string]$request.controlSenderId -cne $script:BoundPeer.id) { throw 'Peer binding mismatch.' }
+        $coreCommand = [string]$request.command
+        if ($coreCommand -notin @('status','arm','commit','cancel_schedule','emergency_close')) { throw 'Unsupported TLS peer command.' }
+        if ($Pending.Command -eq 'peer_close' -and $coreCommand -cne 'emergency_close') { throw 'Invalid priority command.' }
+        $request | Add-Member -NotePropertyName token -NotePropertyValue $secretInput.Text -Force
+        return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
+    }
+    if ($Pending.Command -eq 'bind_peer') {
+        if ($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
+        $snapshot = Get-ChartSnapshot
+        Assert-V10Safety -Snapshot $snapshot -RequireFlat $true -ExpectedTicker $null
+        $peer = $request.peer
+        if ([string]$request.bindingId -notmatch '^[a-f0-9]{32}$' -or [string]$peer.id -ceq $script:ControlIdentity.Id -or
+            [string]$peer.token -notmatch '^[a-f0-9]{64}$' -or [string]$peer.pin -notmatch '^[a-f0-9]{64}$') { throw 'Invalid peer registration.' }
+        $address = [Net.IPAddress]::Parse([string]$peer.host)
+        if ([int]$peer.port -ne 8789) { throw 'Peer TLS port must be 8789.' }
+        $script:BoundPeer = @{id=[string]$peer.id;name=[string]$peer.name;host=$address.ToString();port=8789;pin=[string]$peer.pin;token=[string]$peer.token;bindingId=[string]$request.bindingId}
+        $script:ControlPreparedId = ''
+        $script:LocalOpened = $false
+        $script:CurrentPairId = ''
+        Invalidate-Preparation
+        $peerIpInput.Text = $address.ToString()
+        $peerPortInput.Value = 8789
+        $pairEnabled.Checked = $true
+        return @{ok=$true;message='TLS peer bound; prepare required.'}
+    }
     if ($Pending.Command -eq 'close') {
         $script:ControlPreparedId = ''
         $script:ControlRevision++
         # Each VM receives its own close; the baseline continues partner close verification.
-        Invoke-PairedClose
+        if ($script:BoundPeer) { Invoke-PairedClose } else {
+            $script:RemoteCommandActive = $true
+            try { Invoke-Close } finally { $script:RemoteCommandActive = $false; $script:Prepared = $false }
+        }
         return @{ok=$true; message='Close requested. Observe both positions to verify.'}
     }
     if ($Pending.Command -eq 'invalidate') {
@@ -63,7 +143,7 @@ function Invoke-ControlCommand {
         return @{ok=$true; message='Prepared and verified locally.'}
     }
     if ($Pending.Command -eq 'entry') {
-        if ($script:ControlIdentity.Id -cne 'vm-left') { throw 'Paired dashboard entry must be coordinated by VM left.' }
+        if (-not $script:BoundPeer) { throw 'Prepare this selected pair first.' }
         if ([string]::IsNullOrWhiteSpace($script:ControlPreparedId) -or
             [string]$request.prepareId -cne $script:ControlPreparedId) { throw 'Preparation changed. Prepare both VMs again.' }
         $side = [string]$request.side
@@ -100,10 +180,10 @@ $connectionButton.Add_Click({
     try {
         if ($null -eq $script:ControlGateway) { throw 'Encrypted connection is not running. See the status below.' }
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password
-        $code = @{id=$script:ControlIdentity.Id; host=$script:ControlIdentity.HostAddress; port=8789;
+        $code = @{id=$script:ControlIdentity.Id; name=$script:ControlIdentity.Name; host=$script:ControlIdentity.HostAddress; port=8789;
                   pin=$script:ControlIdentity.Pin; token=$credential} | ConvertTo-Json -Compress
-        [System.Windows.Forms.Clipboard]::SetText([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($code)))
-        $connectionStatus.Text = 'Private code copied. Paste into the matching dashboard VM panel.'
+        [System.Windows.Forms.Clipboard]::SetDataObject([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($code)), $true, 5, 100)
+        $connectionStatus.Text = 'Private code copied. Paste into Register VM in the browser.'
     } catch { Show-ErrorMessage -Message $_.Exception.Message }
 })
 
@@ -118,6 +198,9 @@ $controlTimer.Add_Tick({
     if ($null -eq $script:ControlGateway) { return }
     # Cached status is served on a TLS worker even while the UI is busy with NinjaTrader.
     $script:ControlGateway.Publish(((Get-ControlStatus) | ConvertTo-Json -Compress -Depth 5))
+    $cachedPeer = Get-CachedStatus
+    $remaining = if ($cachedPeer.ok -and $script:AgentStarted) { [Math]::Max(0, 2800 - [int]$cachedPeer.sampleAgeMs) } else { 0 }
+    $script:ControlGateway.PublishPeer(($cachedPeer | ConvertTo-Json -Compress -Depth 5), $remaining)
     $pending = $script:ControlGateway.Take()
     if ($null -eq $pending) { return }
     try { $answer = Invoke-ControlCommand -Pending $pending }
@@ -130,6 +213,7 @@ $form.Add_Shown({
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password
         $script:ControlGateway = [ControlGateway11]::new(8789, $certificate, $credential)
         $script:ControlGateway.Start()
+        Start-AgentListener
         $controlTimer.Start()
         $connectionStatus.Text = 'Encrypted browser connection listening on port 8789.'
     } catch {

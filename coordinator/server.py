@@ -23,9 +23,10 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '11.0-preview.1'
+VERSION = '12.0-preview.1'
 IDS = ('vm-left', 'vm-right')
-NAMES = dict(zip(IDS, ('VM left', 'VM right')))
+NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
+MAX_VMS = 20
 ROOT = Path(__file__).resolve().parent
 MAX_AGE_MS = 4000
 
@@ -62,13 +63,20 @@ def atomic_write(path, value):
     os.replace(temp, path)
 
 
-def parse_enrollment(code, slot):
+def parse_enrollment(code, slot=None):
     try:
         value = json.loads(base64.b64decode(code.strip(), validate=True))
     except Exception as exc:
         raise ValueError('Paste the complete connection code from this VM.') from exc
-    if value.get('id') != slot:
-        raise ValueError(f'This connection code is not for {NAMES[slot]}.')
+    identity = str(value.get('id', ''))
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,47}', identity):
+        raise ValueError('Invalid VM identity.')
+    if slot is not None and identity != slot:
+        raise ValueError('Connection code belongs to another VM.')
+    slot = identity
+    name = str(value.get('name') or NAMES.get(slot, slot)).strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}', name):
+        raise ValueError('VM name must be 1–40 letters, numbers, spaces, dots, hyphens or underscores.')
     host = str(value.get('host', '')).strip()
     if not re.fullmatch(r'[A-Za-z0-9.:-]{1,253}', host):
         raise ValueError('Invalid VM address.')
@@ -79,7 +87,7 @@ def parse_enrollment(code, slot):
     port = int(value.get('port', 0))
     if port < 1024 or port > 65535:
         raise ValueError('Invalid VM port.')
-    return dict(id=slot, host=host, port=port, pin=pin, token=token)
+    return dict(id=slot, name=name, host=host, port=port, pin=pin, token=token)
 
 
 def agent_call(config, command, body=None, timeout=5, request_id=None):
@@ -121,6 +129,11 @@ class Center:
         self.poll_locks = {slot:threading.Lock() for slot in IDS}
         self.stop = threading.Event()
         self.config = {}
+        self.pair = IDS
+        self.poll_threads = {}
+        self.closed_sequence = 0
+        self.opened_ids = set()
+        self.binding_id = None
         self.observations = {}
         self.events = deque(maxlen=150)
         self.jobs = deque(maxlen=50)
@@ -138,8 +151,77 @@ class Center:
         path = self.directory / 'connections.dpapi'
         if persist and path.exists():
             self.config = json.loads(protect(path.read_bytes(), decrypt=True))
+        fleet_path = self.directory / 'fleet.json'
+        if fleet_path.exists():
+            saved = json.loads(fleet_path.read_text())
+            self.pair = tuple(saved.get('pair', IDS))
+            self.settings.update(saved.get('settings', {}))
+        for slot, config in self.config.items():
+            config.setdefault('name', NAMES.get(slot, slot))
+            self.poll_locks.setdefault(slot, threading.Lock())
         self.active = (self.directory / 'entry-unresolved.json').exists()
+        if self.active:
+            marker = json.loads((self.directory / 'entry-unresolved.json').read_text())
+            self.pair = tuple(marker.get('pair', self.pair))
         self.event('Coordinator started. Prepare is required before entry.')
+
+    def name(self, slot):
+        return self.config.get(slot, {}).get('name', NAMES.get(slot, slot))
+
+    def save_fleet(self):
+        atomic_write(self.directory / 'fleet.json', json.dumps({'pair':self.pair, 'settings':self.settings}).encode())
+
+    def mark_active(self):
+        atomic_write(self.directory / 'entry-unresolved.json', json.dumps({'pair':self.pair, 'requested':time.time()}).encode())
+
+    def reset_closed(self, message):
+        self.active = False
+        self.prepared = None
+        self.opened_ids.clear()
+        self.closed_sequence += 1
+        (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
+        self.event(message)
+
+    def reconcile_closed(self):
+        if (not self.active or self.operation.locked() or not set(self.pair).issubset(self.opened_ids)
+                or any(j['command']=='close' and j['status']=='running' for j in self.jobs)):
+            return
+        if all(self.safe_flat(self.view_agent(slot)) for slot in self.pair):
+            self.reset_closed('Both positions verified Flat. Dashboard reset; check working orders and Prepare for the next trade.')
+
+    def select_pair(self, left, right):
+        if not self.operation.acquire(blocking=False):
+            raise ValueError('Wait for the current operation.')
+        try:
+            with self.lock:
+                if self.active:
+                    raise ValueError('Close and verify the current pair before changing VMs.')
+                if left == right or left not in self.config or right not in self.config:
+                    raise ValueError('Choose two different registered VMs.')
+                if not all(self.safe_flat(self.view_agent(slot)) for slot in (left, right)):
+                    raise ValueError('Both selected VMs must be fresh, Sim101 / Qty 1 / Flat, and idle.')
+                if not all(self.safe_flat(self.view_agent(slot)) for slot in self.pair if slot in self.config):
+                    raise ValueError('Verify the previous pair is fresh, flat and idle before changing VMs.')
+                outgoing = tuple(slot for slot in self.pair if slot in self.config)
+                generation = self.generation
+                self.prepared = None
+            # Do not block status publication while the outgoing agents acknowledge.
+            invalidations = [self.pool.submit(self.call, slot, 'invalidate', {}, 10) for slot in outgoing]
+            for future in invalidations:
+                future.result()
+            with self.lock:
+                self.assert_generation(generation)
+                if self.active or not all(self.safe_flat(self.view_agent(slot)) for slot in (left, right)):
+                    raise ValueError('Pair readiness changed. Check both selected VMs and retry selection.')
+                self.pair = (left, right)
+                self.prepared = None
+                self.binding_id = None
+                self.opened_ids.clear()
+                self.generation += 1
+                self.save_fleet()
+                self.event(f'Pair selected: {self.name(left)} / {self.name(right)}. Prepare is required.')
+        finally:
+            self.operation.release()
 
     def event(self, text):
         # Callers supply bounded messages; do not log request bodies or enrollment codes.
@@ -166,7 +248,7 @@ class Center:
             observation = dict(online=bool(valid), fresh=fresh, received=time.monotonic(),
                                ageMs=total_age if math.isfinite(total_age) else 999999,
                                rttMs=response.get('_rttMs'), state=state if valid else {},
-                               error='' if valid else 'Agent identity/version mismatch; install both v11 preview agents.')
+                               error='' if valid else 'Agent identity/version mismatch; install v12 on the selected agents.')
         except Exception as exc:
             observation = dict(online=False, fresh=False, received=time.monotonic(), ageMs=999999,
                                state={}, rttMs=None, error=f'Connection unavailable ({type(exc).__name__}).')
@@ -177,13 +259,15 @@ class Center:
                     position = observation['state'].get('position')
                     if self.last_positions.get(slot) != position:
                         self.last_positions[slot] = position
-                        self.event(f'{NAMES[slot]} position observed: {position}.')
-                    if position != 'Flat':
+                        self.event(f'{self.name(slot)} position observed: {position}.')
+                    if position and position not in ('Flat', 'Unknown') and slot in self.pair:
                         self.active = True
+                        self.opened_ids.add(slot)
                         marker = self.directory / 'entry-unresolved.json'
                         if not marker.exists():
-                            atomic_write(marker, json.dumps({'observed':time.time()}).encode())
-                if not observation['fresh'] and not self.active:
+                            self.mark_active()
+                self.reconcile_closed()
+                if slot in self.pair and not observation['fresh'] and not self.active:
                     self.prepared = None
 
     def loop(self, slot):
@@ -192,22 +276,27 @@ class Center:
             self.stop.wait(1)
 
     def start(self):
-        for slot in IDS:
-            threading.Thread(target=self.loop, args=(slot,), daemon=True).start()
+        with self.lock:
+            for slot in self.config:
+                self.poll_locks.setdefault(slot, threading.Lock())
+                if slot not in self.poll_threads:
+                    thread = threading.Thread(target=self.loop, args=(slot,), daemon=True)
+                    self.poll_threads[slot] = thread
+                    thread.start()
 
     def view_agent(self, slot):
         o = self.observations.get(slot, {})
         age = o.get('ageMs', 999999) + (time.monotonic() - o.get('received', time.monotonic())) * 1000
         fresh = bool(o.get('fresh') and age < MAX_AGE_MS)
         s = o.get('state', {})
-        return dict(id=slot, name=NAMES[slot], configured=slot in self.config,
+        return dict(id=slot, name=self.name(slot), configured=slot in self.config,
                     online=bool(o.get('online') and time.monotonic() - o.get('received', 0) < 7), fresh=fresh,
                     ageMs=round(age), rttMs=o.get('rttMs'), position=s.get('position') if fresh else 'Unknown',
                     account=s.get('account') if fresh else None, quantity=s.get('quantity') if fresh else None,
                     ticker=s.get('ticker') if fresh else None, prepared=bool(fresh and s.get('prepared')),
                     prepareId=s.get('prepareId') if fresh else None,
                     scheduled=bool(s.get('scheduled')), busy=bool(s.get('busy')),
-                    pairActive=bool(s.get('pairActive')), pending=bool(s.get('pendingVerification')),
+                    pairActive=bool(s.get('pairActive')), pending=bool(s.get('pendingVerification')), closing=bool(s.get('closing')),
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'))
@@ -215,34 +304,44 @@ class Center:
     def safe_flat(self, agent):
         return (agent['fresh'] and agent['account'] == 'Sim101' and str(agent['quantity']) == '1'
                 and agent['position'] == 'Flat' and not agent['scheduled'] and not agent['busy']
-                and not agent['pairActive'] and not agent['pending'])
+                and not agent['pairActive'] and not agent['pending'] and not agent.get('closing'))
 
     def state(self):
         with self.lock:
-            agents = [self.view_agent(slot) for slot in IDS]
+            self.reconcile_closed()
+            agents = [self.view_agent(slot) for slot in self.pair]
             ready = bool(self.prepared and not self.active and not self.operation.locked()
                          and all(self.safe_flat(a) and a['prepared'] and a['prepareId'] == self.prepared for a in agents))
             return dict(version=VERSION, agents=agents, settings=self.settings.copy(), canEnter=ready,
                         prepared=bool(self.prepared), active=self.active, busy=self.operation.locked(),
-                        events=list(self.events), jobs=list(self.jobs), serverTime=time.time())
+                        events=list(self.events), jobs=list(self.jobs), serverTime=time.time(),
+                        fleet=[self.view_agent(slot) for slot in self.config], pair=list(self.pair), closedSequence=self.closed_sequence)
 
     def enroll(self, slot, code):
         value = parse_enrollment(code, slot)
+        slot = value['id']
         if not self.operation.acquire(blocking=False):
             raise ValueError('Wait for the current operation to finish.')
         try:
             with self.lock:
                 if self.active:
                     raise ValueError('Verify the current pair is flat before changing connections.')
+                if slot not in self.config and len(self.config) >= MAX_VMS:
+                    raise ValueError('This preview supports up to 20 registered VMs.')
                 others = [x for k, x in self.config.items() if k != slot]
+                if any(x.get('name', '').casefold() == value['name'].casefold() for x in others):
+                    raise ValueError('Choose a unique VM name.')
                 if any(x['pin'] == value['pin'] or (x['host'], x['port']) == (value['host'], value['port']) for x in others):
-                    raise ValueError('VM left and VM right must be different agents.')
+                    raise ValueError('Each registration must represent a different VM agent.')
                 self.config[slot] = value
+                self.poll_locks.setdefault(slot, threading.Lock())
                 self.prepared = None
                 self.observations.pop(slot, None)
                 if self.persist:
                     atomic_write(self.directory / 'connections.dpapi', protect(json.dumps(self.config).encode()))
-            self.event(f'{NAMES[slot]} connection saved. Checking agent identity.')
+            self.event(f'{self.name(slot)} connection saved. Checking agent identity.')
+            if self.persist:
+                self.start()
         finally:
             self.operation.release()
 
@@ -250,15 +349,15 @@ class Center:
         with self.lock:
             config = self.config.get(slot)
         if not config:
-            raise ValueError(f'{NAMES[slot]} is not connected.')
+            raise ValueError(f'{self.name(slot)} is not connected.')
         response = self.transport(config, command, body or {}, timeout=timeout)
         if not response.get('ok'):
             # Agent-authenticated messages contain UI errors, never credentials.
-            raise ValueError(f"{NAMES[slot]}: {str(response.get('message', 'Command rejected'))[:400]}")
+            raise ValueError(f"{self.name(slot)}: {str(response.get('message', 'Command rejected'))[:400]}")
         return response
 
     def refresh_both(self):
-        futures = [self.pool.submit(self.observe, slot) for slot in IDS]
+        futures = [self.pool.submit(self.observe, slot) for slot in self.pair]
         for f in futures:
             f.result()
 
@@ -274,6 +373,7 @@ class Center:
                 self.generation += 1
                 self.prepared = None
                 self.active = True
+                self.mark_active()
             job = dict(id=uuid.uuid4().hex, command=command, status='running', message='Requested')
             self.jobs.appendleft(job)
             generation = self.generation
@@ -296,10 +396,7 @@ class Center:
                 if not all(self.safe_flat(a) for a in self.state()['agents']):
                     raise ValueError('Fresh Flat status has not been verified on both agents.')
                 with self.lock:
-                    self.active = False
-                    self.prepared = None
-                    (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
-                self.event('Both positions verified Flat; working-order check confirmed by operator.')
+                    self.reset_closed('Both positions verified Flat; dashboard reset for the next preparation.')
             with self.lock:
                 job.update(status='done', message='Completed; see observations and activity log.')
         except Exception as exc:
@@ -333,15 +430,30 @@ class Center:
         self.refresh_both()
         if not all(self.safe_flat(a) for a in self.state()['agents']):
             raise ValueError('Both VMs must report fresh Sim101 / Qty 1 / Flat, with no pending action.')
+        self.assert_generation(generation)
+        binding = uuid.uuid4().hex
+        bindings = []
+        for slot, peer in (self.pair, self.pair[::-1]):
+            peer_config = self.config[peer].copy()
+            peer_config['name'] = self.name(peer)
+            bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding}))
+        errors = []
+        for future in bindings:
+            try: future.result()
+            except Exception as exc: errors.append(str(exc))
+        if errors: raise ValueError('; '.join(errors))
+        self.assert_generation(generation)
+        self.binding_id = binding
+        self.save_fleet()
         prepare_id = uuid.uuid4().hex
         def one(slot, sl, pt):
             return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id))
-        results = [self.pool.submit(one, IDS[0], stop, profit), self.pool.submit(one, IDS[1], profit, stop)]
+        results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], profit, stop)]
         errors = []
-        for slot, result in zip(IDS, results):
+        for slot, result in zip(self.pair, results):
             try:
                 result.result()
-                self.event(f'{NAMES[slot]} preparation acknowledged; verifying observations.')
+                self.event(f'{self.name(slot)} preparation acknowledged; verifying observations.')
             except Exception as exc:
                 errors.append(str(exc))
         self.assert_generation(generation)
@@ -377,13 +489,14 @@ class Center:
             self.assert_generation(generation)
             self.active = True
             self.prepared = None
-            atomic_write(self.directory / 'entry-unresolved.json', json.dumps({'requested':time.time()}).encode())
+            self.opened_ids.clear()
+            self.mark_active()
         try:
-            # ONE paired entry request to VM left: retain the V10.4 arm/commit and peer monitoring.
+            # ONE paired entry request to the selected left VM: retain the V10.4 arm/commit and peer monitoring.
             # Never retry an entry following a lost response.
-            self.call('vm-left', 'entry', dict(side=side.upper(), prepareId=prepared), timeout=30)
+            self.call(self.pair[0], 'entry', dict(side=side.upper(), prepareId=prepared), timeout=30)
             self.assert_generation(generation)
-            self.event('Pair entry accepted by VM left. Waiting for actual position observations; acceptance is not a fill.')
+            self.event(f'Pair entry accepted by {self.name(self.pair[0])}. Waiting for actual position observations; acceptance is not a fill.')
         except Exception as exc:
             self.event('Entry outcome uncertain. Requesting recovery close on both VMs.')
             with self.lock:
@@ -393,23 +506,20 @@ class Center:
 
     def close_both(self):
         # Independent requests: a failed VM must not prevent the other request.
-        futures = {slot:self.close_pool.submit(self.call, slot, 'close', {}, 30) for slot in IDS}
+        futures = {slot:self.close_pool.submit(self.call, slot, 'close', {}, 30) for slot in self.pair}
         for slot, future in futures.items():
             try:
                 future.result()
-                self.event(f'{NAMES[slot]} close acknowledged. Awaiting Flat observation.')
+                self.event(f'{self.name(slot)} close acknowledged. Awaiting Flat observation.')
             except Exception as exc:
-                self.event(f'{NAMES[slot]} close outcome unknown: {exc}')
+                self.event(f'{self.name(slot)} close outcome unknown: {exc}')
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             self.refresh_both()
             agents = self.state()['agents']
             if all(self.safe_flat(a) for a in agents):
                 with self.lock:
-                    self.active = False
-                    self.prepared = None
-                    (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
-                self.event('Both positions independently verified Flat. Check working orders before preparing again.')
+                    self.reset_closed('Both positions independently verified Flat. Dashboard reset; check working orders before preparing again.')
                 return
             self.stop.wait(.6)
         raise ValueError('Close not verified on both VMs. Check both NinjaTrader windows manually.')
@@ -475,9 +585,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Invalid request body.')
             if self.path == '/api/enroll':
                 slot = body.get('id')
-                if slot not in IDS:
-                    raise ValueError('Choose VM left or VM right.')
                 self.server.center.enroll(slot, body.get('code', ''))
+                self.reply(200, {'ok':True, 'id':parse_enrollment(body.get('code', ''), slot)['id']})
+            elif self.path == '/api/pair':
+                self.server.center.select_pair(body.get('left'), body.get('right'))
                 self.reply(200, {'ok':True})
             elif self.path == '/api/invalidate':
                 with self.server.center.lock:

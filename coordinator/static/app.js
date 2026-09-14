@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const fragment = location.hash.slice(1);
 if (/^[a-f0-9]{64}$/.test(fragment)) { sessionStorage.setItem('control-token', fragment); history.replaceState(null, '', '/'); }
 const token = sessionStorage.getItem('control-token') || '';
-let state, initialized = false, dirty = false, pending = false, lastEvent = '', lastJob = '', lost = true;
+let state, initialized = false, dirty = false, pending = false, lastEvent = '', lastJob = '', lost = true, closedSequence = null, pairKey = '', fleetKey = '', registeredId = '';
 const fields = ['left-stop','left-profit','right-stop','right-profit','instrument'];
 function alertText(text, error=false) { $('alert').textContent=text; $('alert').classList.toggle('error',error); }
 async function api(path, body) {
@@ -23,12 +23,48 @@ function changed(source) {
 }
 fields.forEach(id=>$(id).addEventListener('input',()=>changed(id)));
 $('connections').onclick=()=>$('connect-dialog').showModal();
-for(const side of ['left','right']) {
-  $('save-'+side).onclick=async()=>{
-    const button=$('save-'+side); button.disabled=true;
-    try { await api('/api/enroll',{id:'vm-'+side,code:$('code-'+side).value}); $('code-'+side).value=''; $('connection-result').textContent='VM '+side+' saved. Checking the connection…'; await poll(); }
-    catch(e){$('connection-result').textContent=e.message;} finally{button.disabled=false;}
-  };
+$('register-vm').onclick=async()=>{
+  const button=$('register-vm'); button.disabled=true;
+  try {
+    const result=await api('/api/enroll',{code:$('connection-code').value});
+    registeredId=result.id; $('connection-code').value='';
+    $('connection-result').textContent='Registration saved. Waiting for a fresh agent response…'; await poll();
+  } catch(e){$('connection-result').textContent=e.message;} finally{button.disabled=false;}
+};
+$('select-pair').onclick=async()=>{
+  if(pending)return; pending=true;
+  try {
+    await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
+    $('orders-checked').checked=false; dirty=true; lastJob='';
+    alertText('Pair changed. Check working orders and Prepare & Verify.');
+  } catch(e){alertText(e.message,true);} finally{pending=false;await poll();}
+};
+function renderRegistry(s) {
+  const key=JSON.stringify(s.fleet.map(a=>[a.id,a.name]));
+  const selectedKey=JSON.stringify(s.pair);
+  if(key!==fleetKey || selectedKey!==pairKey){
+    for(const [index,side] of ['left','right'].entries()){
+      const select=$('pair-'+side), previous=select.value;
+      select.replaceChildren();
+      for(const a of s.fleet){const option=document.createElement('option');option.value=a.id;option.textContent=a.name;select.append(option);}
+      select.value=selectedKey!==pairKey?s.pair[index]:previous;
+      if(!select.value && s.fleet.length)select.value=s.fleet[Math.min(index,s.fleet.length-1)].id;
+    }
+    fleetKey=key;pairKey=selectedKey;
+  }
+  $('fleet-count').textContent=s.fleet.length+' / 20';
+  $('fleet').replaceChildren();
+  for(const a of s.fleet){
+    const item=document.createElement('div');item.className='fleet-item'+(a.fresh?' fresh':'');
+    const name=document.createElement('strong');name.textContent=a.name;
+    const status=document.createElement('span');status.textContent=a.fresh?a.position:'Unknown / disconnected';
+    item.append(name,status);$('fleet').append(item);
+  }
+  if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to select a pair.';
+  for(const side of ['left','right'])$('pair-'+side).disabled=s.active||s.busy||pending;
+  $('select-pair').disabled=s.active||s.busy||pending||s.fleet.length<2;
+  const imported=s.fleet.find(a=>a.id===registeredId);
+  if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check the agent and port 8789 firewall scope.');
 }
 async function action(command) {
   if(pending && command!=='close') return;
@@ -52,8 +88,15 @@ function render(s) {
     $('left-profit').value=$('right-stop').value=s.settings.profit; initialized=true;
     alertText('Connect both VM agents, check working orders, then Prepare & Verify.');
   }
-  for(const a of s.agents){
-    const root=$(a.id), status=root.querySelector('.status'), position=root.querySelector('.position');
+  renderRegistry(s);
+  if(closedSequence!==null && s.closedSequence!==closedSequence){
+    $('orders-checked').checked=false;lastJob='';dirty=true;
+    alertText('Both positions verified Flat. Settings retained. Check working orders, then Prepare & Verify for the next trade.');
+  }
+  closedSequence=s.closedSequence;
+  for(const [index,a] of s.agents.entries()){
+    const root=$(['vm-left','vm-right'][index]), status=root.querySelector('.status'), position=root.querySelector('.position');
+    root.querySelector('h2').textContent=a.name;
     status.textContent=a.fresh?'Fresh status':a.online?'Status unknown':a.configured?'Disconnected':'Not connected';
     status.classList.toggle('fresh',a.fresh); position.textContent=a.position || 'Unknown'; position.classList.toggle('fresh',a.fresh);
     for(const key of ['account','quantity','ticker'])root.querySelector('.'+key).textContent=a[key]??'—';
@@ -61,9 +104,12 @@ function render(s) {
     root.querySelector('.latency').textContent=a.rttMs==null?'— ms':a.rttMs+' ms RTT';
     root.querySelector('.vm-message').textContent=a.message || a.execution || (a.configured?'Waiting for agent status.':'Import this VM’s connection code to begin.');
   }
+  $('buy').textContent='Buy '+s.agents[0].name+' / Sell '+s.agents[1].name;
+  $('sell').textContent='Sell '+s.agents[0].name+' / Buy '+s.agents[1].name;
   const ready=s.canEnter&&!dirty&&!pending;
   $('buy').disabled=$('sell').disabled=!ready;
-  $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh);
+  $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
+  $('orders-checked').disabled=s.busy||pending;
   $('connections').disabled=s.active||s.busy;
   fields.forEach(id=>$(id).disabled=s.active||s.busy||pending);
   $('ack-flat').disabled=s.busy||pending;
@@ -82,7 +128,7 @@ let polling=false;
 async function poll(){
   if(polling)return;polling=true;
   try{render(await api('/api/state'));}
-  catch(e){lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
+  catch(e){lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=$('select-pair').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
     for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').classList.remove('fresh');root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}
   finally{polling=false;}
 }

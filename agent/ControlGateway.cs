@@ -10,6 +10,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Security.Cryptography;
 
 // The UI thread owns all NinjaTrader operations. Network workers only authenticate,
 // publish cached observations, and queue commands. Compatible with Windows PowerShell 5.1.
@@ -31,6 +33,8 @@ public sealed class ControlGateway11 : IDisposable {
     private volatile bool running;
     private string cached = "{\"ok\":false,\"position\":null}";
     private long cachedAt;
+    private string peerCache = "{\"ok\":false,\"message\":\"No sample\"}";
+    private long peerFreshUntil;
     private int clients;
     public ControlGateway11(int port, X509Certificate2 cert, string credential) {
         certificate=cert; token=credential;
@@ -38,6 +42,40 @@ public sealed class ControlGateway11 : IDisposable {
     }
     public void Start() { listener.Start(16); running=true; new Thread(Accept){IsBackground=true}.Start(); }
     public void Publish(string json) { lock(gate) { cached=json; cachedAt=Stopwatch.GetTimestamp(); } }
+    public void PublishPeer(string json, int remainingMs) { lock(gate) {
+        peerCache=json;
+        peerFreshUntil=Stopwatch.GetTimestamp()+(long)(Math.Max(0,remainingMs)*Stopwatch.Frequency/1000.0);
+    } }
+    // Peer-to-peer calls use the same pinned TLS envelope as the coordinator.
+    public static Task<string> Send(string host,int port,string pin,string credential,string command,string body,int timeout) {
+        return Task.Run(delegate {
+            using(TcpClient c=new TcpClient()) {
+                var connect=c.BeginConnect(host,port,null,null);
+                using(WaitHandle ready=connect.AsyncWaitHandle) {
+                    if(!ready.WaitOne(2500)) throw new IOException("TLS peer connection timed out");
+                    c.EndConnect(connect);
+                }
+                c.ReceiveTimeout=timeout; c.SendTimeout=timeout;
+                using(SslStream tls=new SslStream(c.GetStream(),false,delegate(object sender,X509Certificate cert,X509Chain chain,SslPolicyErrors errors){
+                    if(cert==null) return false;
+                    using(SHA256 h=SHA256.Create()) {
+                        string actual=BitConverter.ToString(h.ComputeHash(cert.GetRawCertData())).Replace("-","").ToLowerInvariant();
+                        return String.Equals(actual,pin,StringComparison.Ordinal);
+                    }
+                })) {
+                    tls.ReadTimeout=timeout;tls.WriteTimeout=timeout;
+                    tls.AuthenticateAsClient(host,null,SslProtocols.Tls12,false);
+                    using(StreamReader reader=new StreamReader(tls,new UTF8Encoding(false),false,1024,true))
+                    using(StreamWriter writer=new StreamWriter(tls,new UTF8Encoding(false),1024,true)) {
+                        writer.AutoFlush=true;
+                        writer.WriteLine(credential);writer.WriteLine(Guid.NewGuid().ToString("N"));
+                        writer.WriteLine(command);writer.WriteLine(body);
+                        return Line(reader,65536);
+                    }
+                }
+            }
+        });
+    }
     public ControlRequest11 Take() {
         ControlRequest11 r;
         if (closes.TryDequeue(out r)) return r;
@@ -79,6 +117,13 @@ public sealed class ControlGateway11 : IDisposable {
                 string id=Line(reader,64), command=Line(reader,32), body=Line(reader,8192);
                 Guid parsed;
                 if(!Guid.TryParseExact(id,"N",out parsed)) throw new IOException("Invalid request ID");
+                if(command=="peer_ping") {
+                    writer.WriteLine("{\"ok\":true,\"version\":\"10.4\",\"timestampUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}");return;
+                }
+                if(command=="peer_monitor") {
+                    lock(gate) writer.WriteLine(Stopwatch.GetTimestamp()<peerFreshUntil ? peerCache : "{\"ok\":false,\"message\":\"Peer state stale\",\"sampleAgeMs\":999999}");
+                    return;
+                }
                 if(command=="status") {
                     lock(gate) {
                         long age=cachedAt==0 ? 999999 : (long)((Stopwatch.GetTimestamp()-cachedAt)*1000.0/Stopwatch.Frequency);
@@ -86,7 +131,7 @@ public sealed class ControlGateway11 : IDisposable {
                     }
                     return;
                 }
-                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate") throw new IOException("Invalid command");
+                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="peer" && command!="peer_close") throw new IOException("Invalid command");
                 ControlRequest11 request;
                 lock(gate) {
                     if(seen.ContainsKey(id)) {
@@ -99,7 +144,7 @@ public sealed class ControlGateway11 : IDisposable {
                         if(seen.Count>=4096 || commands.Count+closes.Count>=16) throw new IOException("Queue full");
                         request=new ControlRequest11 { Id=id,Command=command,Body=body };
                         seen.Add(id,request);
-                        if(command=="close") { CancelQueued(); closes.Enqueue(request); } else commands.Enqueue(request);
+                        if(command=="close" || command=="peer_close") { CancelQueued(); closes.Enqueue(request); } else commands.Enqueue(request);
                     }
                 }
                 if(request.Done.Wait(90000)) writer.WriteLine(request.Result);
