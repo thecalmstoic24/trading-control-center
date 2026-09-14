@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'coordinator'))
 
 spec=importlib.util.spec_from_file_location('center',Path(__file__).resolve().parents[1]/'coordinator'/'server.py')
 module=importlib.util.module_from_spec(spec)
@@ -58,6 +60,16 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(calls),1)
         self.assertEqual(calls[0][0],'vm-left')
         with self.assertRaises(ValueError):self.center.entry('buy',0)
+    def test_ratio_prepares_and_verifies_distinct_amounts(self):
+        self.center.prepare(dict(ticker='MNQ SEP26',stopLoss=1000,profit=800,ratio='2:3',quantities={'vm-left':10,'vm-right':15}),0)
+        self.assertTrue(self.center.state()['canEnter'])
+        self.assertEqual(self.fake.states['vm-right']['stopLoss'],1200)
+        self.assertEqual(self.fake.states['vm-right']['profit'],1500)
+        self.assertEqual(self.fake.states['vm-right']['quantity'],'15')
+    def test_ratio_quantity_mismatch_sends_no_prepare(self):
+        with self.assertRaises(ValueError):
+            self.center.prepare(dict(ticker='NQ SEP26',stopLoss=1000,profit=800,ratio='2:3',quantities={'vm-left':1,'vm-right':2}),0)
+        self.assertFalse(any(c[1]=='prepare' for c in self.fake.calls))
     def test_stale_is_unknown_and_not_entry_ready(self):
         self.prepare()
         self.fake.states['vm-right']['sampleAgeMs']=4500

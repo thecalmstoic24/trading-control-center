@@ -185,8 +185,9 @@ function renderPair(s) {
   const progress=renderPairStatus(s);
   state=s; lost=false; $('server-dot').classList.add('connected'); $('server-state').textContent='Coordinator running';
   if(!initialized) {
-    $('instrument').value=s.settings.ticker; $('left-stop').value=$('right-profit').value=s.settings.stopLoss;
-    $('left-profit').value=$('right-stop').value=s.settings.profit; initialized=true;
+    const [ra,rb]=(s.settings.ratio||'1:1').split(':').map(Number);
+    $('instrument').value=s.settings.ticker; $('left-stop').value=s.settings.stopLoss; $('right-profit').value=Math.round(s.settings.stopLoss*rb/ra*100)/100;
+    $('left-profit').value=s.settings.profit; $('right-stop').value=Math.round(s.settings.profit*rb/ra*100)/100; initialized=true;
     alertText('Connect both VM agents, check working orders, then Prepare & Verify.');
   }
   if((closedSequence!==null && s.closedSequence!==closedSequence)||(closedSequence===null&&s.closedSequence>0&&!s.prepared&&!s.active)){

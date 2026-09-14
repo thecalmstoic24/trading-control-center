@@ -50,6 +50,14 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def test_ratio_survives_queue_and_reaches_agents(self):
+        self.body.update(ratio='2:3',quantities={'vm-left':10,'vm-right':15},stopLoss=1000,profit=800,ticker='MNQ SEP26')
+        self.queue.add(self.body)
+        self.queue.command('start',{})
+        self.tick_until('Trading')
+        self.assertEqual(self.agent.states['vm-right']['profit'],1500)
+        self.assertEqual(self.agent.states['vm-right']['stopLoss'],1200)
+        self.assertEqual(self.agent.states['vm-right']['quantity'],'15')
     def tick_until(self,status,limit=200):
         for _ in range(limit):
             self.queue.tick()

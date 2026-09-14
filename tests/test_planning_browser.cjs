@@ -5,13 +5,13 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const browser=await chromium.launch({headless:true,executablePath:process.env.TCC_BROWSER_PATH||undefined,args:['--no-sandbox']});
  const page=await browser.newPage({viewport:{width:1280,height:850}}),errors=[],writes=[];
  page.on('pageerror',e=>errors.push(e.message));
- let snapshot={rows:[{id:'a',fields:{Account:'A',Balance:100}},{id:'b',fields:{Account:'B',Balance:9}}],columns:[{name:'Account',type:'singleLineText'},{name:'Balance',type:'currency'}],updatedAt:1,busy:false,error:'',configured:true};
+ let snapshot={rows:[{id:'a',fields:{id:'A',Balance:100}},{id:'b',fields:{id:'B',Balance:9}}],columns:[{name:'id',type:'singleLineText'},{name:'Balance',type:'currency'}],updatedAt:1,busy:false,error:'',configured:true};
  await page.route('http://127.0.0.1:8788/**',async route=>{
   const req=route.request(),url=new URL(req.url());
   let result;
   if(req.method()==='POST'){
    writes.push(url.pathname);assert.equal(url.pathname,'/api/planning/refresh','Planning must not send trading commands');
-   snapshot={...snapshot,updatedAt:snapshot.updatedAt+1,rows:[...snapshot.rows,{id:'c',fields:{Account:'C',Balance:20}}].filter((r,i,a)=>a.findIndex(x=>x.id===r.id)===i)};result={ok:true};
+   snapshot={...snapshot,updatedAt:snapshot.updatedAt+1,rows:[...snapshot.rows,{id:'c',fields:{id:'C',Balance:20}}].filter((r,i,a)=>a.findIndex(x=>x.id===r.id)===i)};result={ok:true};
   }else if(url.pathname==='/api/state')result={fleet:[],pairs:[],events:[]};
   else if(url.pathname==='/api/queue')result={rows:[],running:false,message:'Paused'};
   else if(url.pathname==='/api/planning')result=snapshot;
@@ -45,6 +45,13 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('#planning-table th').count(),4);
  await page.locator('#planning-table tbody tr').nth(2).dragTo(page.locator('#planning-table tbody tr').first());
  assert.deepEqual(await accounts(),['C','B','A']);
+ await page.locator('#planning-panel summary').click();
+ await page.getByLabel('Balance',{exact:true}).check();
+ await page.getByRole('button',{name:'Move Balance column earlier',exact:true}).click();
+ assert.deepEqual(await page.locator('#planning-table thead th').allTextContents(),['Select','Order','Balance','Pair status','id']);
+ await page.reload();await page.locator('#tab-planning').click();
+ await page.waitForFunction(()=>document.querySelectorAll('#planning-table tbody tr').length===3);
+ assert.deepEqual(await page.locator('#planning-table thead th').allTextContents(),['Select','Order','Balance','Pair status','id']);
  await page.locator('#tab-trading').click();assert.equal(await page.locator('#trading-panel').isVisible(),true);
  await page.locator('#tab-planning').click();
  await page.screenshot({path:'/tmp/planning-preview5.png',fullPage:true});

@@ -18,6 +18,7 @@ import urllib.error
 import uuid
 
 from planning import BASE, TABLE, credential
+from ratios import pair_amounts, validate_quantities
 
 PAIR_TABLE = 'tblHhpDgF7rYPQOaA'
 PENDING = {'Queued', 'Waiting'}
@@ -98,8 +99,8 @@ class PairStore:
             f.update({title + ' VM': spec['names'][slot], title + ' Account ID': spec['accounts'][slot],
                       title + ' Master Account': spec['masters'].get(slot, ''),
                       title + ' Quantity': spec['quantities'][slot],
-                      title + ' Stop Loss': spec['stopLoss' if side == 'left' else 'profit'],
-                      title + ' Profit Target': spec['profit' if side == 'left' else 'stopLoss']})
+                      title + ' Stop Loss': pair_amounts(spec)[0 if side == 'left' else 2],
+                      title + ' Profit Target': pair_amounts(spec)[1 if side == 'left' else 3]})
             if slot in spec.get('balances', {}): f[title + ' Current Balance'] = spec['balances'][slot]
             record_id = spec.get('records', {}).get(slot)
             if record_id: f[title + ' Account'] = [record_id]
@@ -188,6 +189,7 @@ class PairQueue:
         for v in amounts.values():
             if isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or not 0 < v <= 100000 or round(v,2) != v:
                 raise ValueError('Enter positive Currency stop loss and profit target amounts, up to two decimals.')
+        pair_amounts(body)
         accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}
         source = self.store.records(TABLE)
         for slot in (left, right):
@@ -201,7 +203,8 @@ class PairQueue:
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
             balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
         if accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
-        return dict(left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
+        validate_quantities(dict(body, quantities=quantities), left, right)
+        return dict(**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
                     names=names,masters=masters,records=records,balances=balances,**amounts)
 
     def command(self, action, body):
@@ -300,7 +303,7 @@ class PairQueue:
                 pair_id=self.fleet.create_pair(*slots)
                 row['pairId']=pair_id
                 pair=self.fleet.get_pair(pair_id)
-                pair.settings.update({k:spec[k] for k in ('ticker','stopLoss','profit','accounts','quantities')})
+                pair.settings.update({k:spec[k] for k in ('ticker','stopLoss','profit','accounts','quantities','ratio') if k in spec})
                 row['beforeId']=uuid.uuid4().hex; row['phase']='before'; row['requested']=[]; row['deadline']=time.time()+300
                 self.set_status(row,'Preparing','Syncing starting balances and Realized PnL.'); return
         pair=self.fleet.get_pair(row['pairId'])

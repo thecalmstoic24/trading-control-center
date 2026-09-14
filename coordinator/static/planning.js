@@ -32,14 +32,14 @@
   function decorate(){
     for(const tr of el('planning-table').querySelectorAll('tbody tr[data-record]')){
       const u=usage[tr.dataset.account]||{};tr.classList.toggle('account-used',!!u.used);
-      const td=tr.querySelector('.usage-cell');td.replaceChildren();
+      const td=tr.querySelector('.usage-cell');if(!td)continue;td.replaceChildren();
       if(u.status){const badge=document.createElement('span');badge.className='account-badge '+u.status.toLowerCase();badge.textContent=u.status;td.append(badge);}
     }
   }
-  let layout={hidden:[],order:[],sort:null};
+  let layout={hidden:[],order:[],columns:[],sort:null};
   try{
     const saved=JSON.parse(localStorage.getItem(key));
-    if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))layout={hidden:saved.hidden,order:saved.order,sort:saved.sort||null};
+    if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))layout={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],sort:saved.sort||null};
   }catch(_){}
   let data={rows:[],columns:[]},lastUpdate=null,dragId='',polling=false,signature=null,eventTimer=null;
   function save(){try{localStorage.setItem(key,JSON.stringify(layout));}catch(_){el('planning-status').textContent='Browser storage is unavailable; layout will last for this session.';}}
@@ -50,23 +50,41 @@
     if(from<0||to<0)return;
     ids.splice(from,1);ids.splice(to,0,id);layout.order=ids;save();renderTable();
   }
+  function columnOrder(){
+    const ranks=new Map(layout.columns.map((name,i)=>[name,i]));
+    return data.columns.slice().sort((a,b)=>(ranks.get(a.name)??(a.name==='id'?-1:Infinity))-(ranks.get(b.name)??(b.name==='id'?-1:Infinity)));
+  }
+  function moveColumn(name,target){
+    const names=columnOrder().map(c=>c.name),from=names.indexOf(name),to=names.indexOf(target);
+    if(from<0||to<0||from===to)return;
+    names.splice(from,1);names.splice(to,0,name);layout.columns=names;save();renderColumns();renderTable();
+  }
   function renderColumns(){
     const container=el('planning-columns');container.replaceChildren();
-    for(const column of data.columns){
+    for(const column of columnOrder()){
       const label=node('label'),box=node('input');box.type='checkbox';box.checked=column.name==='id'||!layout.hidden.includes(column.name);box.disabled=column.name==='id';
       box.onchange=()=>{layout.hidden=layout.hidden.filter(n=>n!==column.name);if(!box.checked)layout.hidden.push(column.name);save();renderTable();};
       label.append(box,document.createTextNode(' '+column.name));container.append(label);
+      const names=columnOrder().map(c=>c.name),i=names.indexOf(column.name);
+      for(const [text,delta] of [['←',-1],['→',1]]){
+        const move=node('button',text);move.className='quiet';move.disabled=!names[i+delta];move.setAttribute('aria-label','Move '+column.name+' column '+(delta<0?'earlier':'later'));
+        move.onclick=()=>moveColumn(column.name,names[i+delta]);container.append(move);
+      }
     }
   }
   function renderTable(){
     const table=el('planning-table');table.replaceChildren();
-    const cols=data.columns.filter(c=>c.name==='id'||!layout.hidden.includes(c.name)).sort((a,b)=>(a.name==='id'?-1:b.name==='id'?1:0));
-    const head=node('thead'),hr=node('tr');hr.append(node('th','Select'),node('th','Order'),node('th','Pair status'));
+    const cols=columnOrder().filter(c=>c.name==='id'||!layout.hidden.includes(c.name));
+    const head=node('thead'),hr=node('tr');hr.append(node('th','Select'),node('th','Order'));
     for(const c of cols){
+      if(c.name==='id')hr.append(node('th','Pair status'));
       const th=node('th'),active=layout.sort?.name===c.name;
       th.setAttribute('aria-sort',active?(layout.sort.direction===1?'ascending':'descending'):'none');
       const b=node('button',c.name+(active?(layout.sort.direction===1?' ↑':' ↓'):''));b.className='quiet';
-      b.onclick=()=>{layout.sort={name:c.name,direction:active?-layout.sort.direction:1};save();renderTable();};th.append(b);hr.append(th);
+      b.onclick=()=>{layout.sort={name:c.name,direction:active?-layout.sort.direction:1};save();renderTable();};th.append(b);th.draggable=true;
+      th.ondragstart=e=>{e.dataTransfer.setData('application/x-planning-column',c.name);};
+      th.ondragover=e=>{if(Array.from(e.dataTransfer.types).includes('application/x-planning-column'))e.preventDefault();};
+      th.ondrop=e=>{e.preventDefault();moveColumn(e.dataTransfer.getData('application/x-planning-column'),c.name);};hr.append(th);
     }
     head.append(hr);table.append(head);const body=node('tbody');
     const rows=ordered(data.rows,layout,data.columns);
@@ -82,7 +100,7 @@
         const b=node('button',label);b.className='quiet';b.disabled=!!layout.sort||!rows[i+delta];b.setAttribute('aria-label',`Move row ${i+1} ${delta<0?'up':'down'}`);
         b.onclick=()=>{move(row.id,rows[i+delta].id);const buttons=table.querySelectorAll('tbody tr');buttons[i+delta]?.querySelector('button')?.focus();};order.append(b);
       }
-      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order,usageCell);for(const c of cols)tr.append(node('td',display(row.fields[c.name])));body.append(tr);
+      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);tr.append(node('td',display(row.fields[c.name])));}body.append(tr);
     });
     if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
     table.append(body);decorate();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
@@ -91,6 +109,7 @@
     if(polling)return;polling=true;
     try{
       const snapshot=await api('/api/planning');data=snapshot;
+      window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:data.rows}));
       el('planning-refresh').disabled=!!data.busy;
       el('planning-status').textContent=`${data.rows.length} accounts · ${data.updatedAt?'Updated '+new Date(data.updatedAt*1000).toLocaleString():'Not loaded yet'}${data.busy?' · Refreshing…':''}${data.error?' · '+data.error:''}`;
       if(el('planning-dialog').open)el('planning-setup-status').textContent=data.busy?'Checking Airtable…':data.error||(data.configured?'Airtable connected.':'');

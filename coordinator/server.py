@@ -24,8 +24,10 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.8'
-AGENT_VERSIONS = {VERSION, '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+from ratios import pair_amounts, validate_quantities
+
+VERSION = '16.0-preview.9'
+AGENT_VERSIONS = {VERSION, '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -494,9 +496,7 @@ class Center:
         ticker = str(body.get('ticker', '')).strip().upper()
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker):
             raise ValueError('Enter the NinjaTrader instrument, for example MNQ 09-26.')
-        stop, profit = float(body.get('stopLoss', 0)), float(body.get('profit', 0))
-        if not all(math.isfinite(v) and 0 < v <= 100000 and round(v, 2) == v for v in (stop, profit)):
-            raise ValueError('Stop loss and profit must be positive currency amounts with at most two decimals.')
+        stop, profit, right_stop, right_profit = pair_amounts(body)
         accounts, quantities = {}, {}
         for slot in self.pair:
             account = body.get('accounts', {}).get(slot, 'Sim101')
@@ -506,11 +506,12 @@ class Center:
             if type(quantity) is not int or not 1 <= quantity <= 1000:
                 raise ValueError('Quantity must be a whole number from 1 to 1000.')
             accounts[slot], quantities[slot] = account, quantity
+        validate_quantities(dict(body, quantities=quantities), *self.pair)
         with self.lock:
             if self.active:
                 raise ValueError('Verify Both Flat before preparing another pair.')
             self.prepared = None
-            self.settings = dict(ticker=ticker, stopLoss=stop, profit=profit, accounts=accounts, quantities=quantities)
+            self.settings = dict(ticker=ticker, stopLoss=stop, profit=profit, ratio=body.get('ratio', '1:1'), accounts=accounts, quantities=quantities)
         self.refresh_both()
         if not all(self.safe_flat(a) for a in self.state()['agents']):
             raise ValueError('Both VMs must report fresh Flat, with no pending action.')
@@ -532,7 +533,7 @@ class Center:
         prepare_id = uuid.uuid4().hex
         def one(slot, sl, pt):
             return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=accounts[slot], quantity=quantities[slot]))
-        results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], profit, stop)]
+        results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], right_stop, right_profit)]
         errors = []
         for slot, result in zip(self.pair, results):
             try:
@@ -550,7 +551,7 @@ class Center:
             self.refresh_both()
             agents = self.state()['agents']
             if all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepare_id for a in agents):
-                if [(float(a['stopLoss']), float(a['profit'])) for a in agents] != [(stop, profit), (profit, stop)]:
+                if [(float(a['stopLoss']), float(a['profit'])) for a in agents] != [(stop, profit), (right_stop, right_profit)]:
                     raise ValueError('Mirrored stop-loss/profit readback does not match.')
                 with self.lock:
                     self.assert_generation(generation)
@@ -960,7 +961,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/ratio.js': 'ratio.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
