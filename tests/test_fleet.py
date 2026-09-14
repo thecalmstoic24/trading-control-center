@@ -173,3 +173,24 @@ class MigrationTests(FleetTests):
     def test_stale_new_endpoint_cannot_migrate(self):
         self.fake.states[self.ids[0]]['sampleAgeMs']=99999
         with self.assertRaises(ValueError):self.fleet.enroll(self.ids[0],self.private_code(self.ids[0]))
+
+    def test_unresolved_flat_pair_can_restore_address_without_clearing_recovery(self):
+        pair=self.fleet.pairs[self.a]
+        pair.active=True
+        pair.prepared='old-preparation'
+        generation=pair.generation
+        slot=self.ids[0]
+        self.fleet.enroll(slot,self.private_code(slot))
+        self.assertEqual(pair.config[slot]['host'],'100.77.1.2')
+        self.assertTrue(pair.active)
+        self.assertIsNone(pair.prepared)
+        self.assertGreater(pair.generation,generation)
+        self.assertEqual(self.fleet.owners[slot],self.a)
+        self.assertFalse(any(command!='status' for _,command,_ in self.fake.calls))
+
+    def test_unresolved_busy_endpoint_cannot_restore_address(self):
+        self.fleet.pairs[self.a].active=True
+        self.fake.states[self.ids[0]]['busy']=True
+        with self.assertRaises(ValueError):
+            self.fleet.enroll(self.ids[0],self.private_code(self.ids[0]))
+        self.assertTrue(self.fleet.pairs[self.a].active)

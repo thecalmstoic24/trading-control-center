@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '15.0-preview.2'
-AGENT_VERSIONS = {VERSION, '15.0-preview.1'}
+VERSION = '15.0-preview.3'
+AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -729,8 +729,8 @@ class Fleet:
                     raise ValueError('Release this VM from its pair before changing its identity. Network migration requires the same VM credentials.')
                 try:
                     with pair.lock:
-                        if pair.active or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
-                            raise ValueError('Close and verify this pair before updating its network registration.')
+                        if pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
+                            raise ValueError('Wait for the current pair operation before updating its network registration.')
                     response = self.transport(value, 'status', timeout=5)
                     state = response.get('state', {})
                     age = float(response.get('cacheAgeMs',999999)) + float(state.get('sampleAgeMs',999999)) + float(response.get('_rttMs',0))
@@ -740,7 +740,8 @@ class Fleet:
                             and not any(state.get(k) for k in ('busy','scheduled','pairActive','pendingVerification','closing'))):
                         raise ValueError('The new private endpoint must report fresh, idle Flat status before registration changes.')
                     with pair.lock:
-                        if pair.active: raise ValueError('Pair became active; network registration was not changed.')
+                        # Restore reachability without clearing an unresolved trade or releasing ownership.
+                        # The authenticated new endpoint has reported fresh, idle Flat above.
                         updated = dict(self.catalog.config);updated[value['id']] = value
                         if self.persist:
                             atomic_write(self.directory / 'connections.dpapi', protect(json.dumps(updated).encode()))

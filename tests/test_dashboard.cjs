@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 class Element {
   constructor(){this.value='';this.checked=false;this.disabled=false;this.textContent='';this.children=[];this.parts={};this.classList={add(){},remove(){},toggle(){}};}
-  addEventListener(){} showModal(){} replaceChildren(){this.children=[];} append(...children){this.children.push(...children);}
+  addEventListener(event,fn){this[event]=fn;} showModal(){} replaceChildren(){this.children=[];} append(...children){this.children.push(...children);}
   querySelector(key){return this.parts[key]??=(new Element());}
 }
 const elements={},get=id=>elements[id]??=(new Element());
@@ -26,6 +26,12 @@ assert.equal(get('orders-checked').disabled,false,'recovery confirmation remains
 pb.active=false;pb.closedSequence=1;render(s);
 assert.equal(get('orders-checked').checked,false);assert.equal(get('left-stop').value,'777');assert.equal(get('buy').disabled,true);assert.equal(get('prepare').disabled,false);assert.match(get('alert').textContent,/Both positions verified Flat/);
 assert.equal(pa.active,true,'reset of B must not change A');
+vm.runInContext("registeredId='fnthu'",context);render(s);
+assert.match(get('connection-result').textContent,/FNThu connected/);
+get('connection-code').input();
+get('connection-result').textContent='Registration rejected: unresolved pair';
+render(s);
+assert.equal(get('connection-result').textContent,'Registration rejected: unresolved pair','polling must not overwrite a new registration error with old success');
 (async()=>{
   const calls=[];
   context.fetch=async(path,options)=>{calls.push([path,JSON.parse(options.body)]);return {ok:true,json:async()=>({job:'test-job'})};};

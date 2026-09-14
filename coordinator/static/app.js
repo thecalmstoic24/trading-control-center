@@ -25,8 +25,12 @@ function changed(source) {
 }
 fields.forEach(id=>$(id).addEventListener('input',()=>changed(id)));
 $('connections').onclick=()=>$('connect-dialog').showModal();
+$('connection-code').addEventListener('input',()=>{
+  registeredId=''; $('connection-result').textContent='Click Save & check connection to register this code.';
+});
 $('register-vm').onclick=async()=>{
   const button=$('register-vm'); button.disabled=true;
+  registeredId=''; $('connection-result').textContent='Checking this registration…';
   try {
     const result=await api('/api/enroll',{code:$('connection-code').value});
     registeredId=result.id; $('connection-code').value='';
