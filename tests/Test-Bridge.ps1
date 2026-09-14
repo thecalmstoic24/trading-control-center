@@ -62,9 +62,12 @@ try {
  $body.quantity=2;$body.account='OTHER';$rejected=$false
  try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
  Check $rejected 'Unmatched account accepted'
- $body.account='MFF-123';$script:AccountStamp14=[DateTime]::UtcNow.AddMinutes(-6);$rejected=$false
+ $body.account='MFF-123';$script:AccountStamp14=[DateTime]::UtcNow.AddDays(-1);$rejected=$false
  try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
- Check $rejected 'Expired account list accepted'
+ Check $rejected 'Prior-day account list accepted'
+ $script:AccountStamp14=[DateTime]::Today.ToUniversalTime();$rejected=$false
+ try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
+ Check (-not $rejected) 'Same-day account list should remain usable'
  'V14 bridge: exact account membership, selected quantity, invalid quantity and stale list rejection passed.'
 } finally { Remove-Item $script:controlDirectory -Recurse -Force }
 

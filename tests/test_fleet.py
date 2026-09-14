@@ -87,9 +87,11 @@ class FleetTests(unittest.TestCase):
         self.prepare(new)
         self.assertEqual(self.fake.bindings['vm-left'],'fnsean')
         self.assertTrue(all(not self.fake.states[slot]['prepared'] for slot in ['vm-right','fnthu']))
-    def test_stale_flat_pair_cannot_release(self):
+    def test_one_flat_one_unknown_can_release(self):
         self.fake.states['vm-right']['sampleAgeMs']=99999
-        with self.assertRaises(ValueError):self.fleet.release_pair(self.a)
+        self.fleet.release_pair(self.a)
+        self.assertNotIn(self.a,self.fleet.pairs)
+        self.assertNotIn('vm-right',self.fleet.owners)
     def test_actions_require_explicit_pair_id(self):
         with self.assertRaises(ValueError):self.fleet.submit('buy',{})
     def test_close_all_dispatches_despite_a_blocked_vm(self):
@@ -211,3 +213,29 @@ class MigrationTests(FleetTests):
         self.fake.fail.add((self.ids[1],'unbind_peer'))
         with self.assertRaises(Exception): self.fleet.release_pair(self.a)
         self.assertTrue(all(self.fleet.owners[slot]==self.a for slot in self.ids[:2]))
+
+    def test_idle_polling_pauses_but_active_and_prepared_continue(self):
+        pair=self.fleet.pairs[self.a]
+        pair.refresh_both()
+        self.assertTrue(self.fleet.idle_snapshot_held(self.ids[0]))
+        pair.active=True
+        self.assertFalse(self.fleet.idle_snapshot_held(self.ids[0]))
+        pair.active=False;pair.prepared={'test':True}
+        self.assertFalse(self.fleet.idle_snapshot_held(self.ids[0]))
+
+    def test_cached_accounts_do_not_make_failed_status_fresh(self):
+        pair=self.fleet.pairs[self.a]
+        slot=self.ids[0]
+        self.fake.states[slot]['accounts']=['Sim101','MatchedAccount']
+        pair.refresh_both()
+        pair.observations[slot]={'fresh':False,'state':{},'received':time.monotonic()}
+        view=pair.view_agent(slot)
+        self.assertEqual(view['accounts'],['Sim101','MatchedAccount'])
+        self.assertEqual(view['lastKnown']['position'],'Flat')
+        self.assertFalse(view['fresh'])
+        self.assertEqual(view['position'],'Unknown')
+
+    def test_two_unknown_vms_cannot_release(self):
+        for slot in self.ids[:2]:self.fake.states[slot]['sampleAgeMs']=99999
+        with self.assertRaises(ValueError):self.fleet.release_pair(self.a)
+        self.assertIn(self.a,self.fleet.pairs)

@@ -81,7 +81,7 @@ function renderRegistry(s) {
   for(const a of s.fleet){
     const item=document.createElement('div');item.className='fleet-item'+(a.fresh?' fresh':'');
     const name=document.createElement('strong');name.textContent=a.name;
-    const status=document.createElement('span');status.textContent=(a.fresh?a.position:'Unknown / disconnected')+(a.pairId?' · paired':' · available');
+    const status=document.createElement('span');status.textContent=(a.snapshotHeld?a.lastKnown.position+' (last known)':a.fresh?a.position:'Unknown / disconnected')+(a.pairId?' · paired':' · available');
     item.append(name,status);$('fleet').append(item);
   }
   if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to create a pair.';
@@ -97,7 +97,7 @@ function renderRegistry(s) {
     const info=document.createElement('div'),title=document.createElement('strong'),detail=document.createElement('small');
     title.textContent=pair.name;
     const failed=pair.jobs.find(j=>j.status==='error');
-    detail.textContent=pair.agents.map(a=>a.name+': '+(a.position||'Unknown')).join(' · ')+' · '+(pair.busy?'Operation running':pair.active?'Active / outcome awaiting verification':pair.prepared?'Prepared':'Ready to prepare');
+    detail.textContent=pair.agents.map(a=>a.name+': '+(a.snapshotHeld?a.lastKnown.position+' (last known)':a.position||'Unknown')).join(' · ')+' · '+(pair.busy?'Operation running':pair.active?'Active / outcome awaiting verification':pair.prepared?'Prepared':'Ready to prepare');
     if(failed&&pair.active)detail.textContent+=' · '+failed.message;
     info.append(title,detail);
     const view=document.createElement('button');view.className='quiet';view.textContent=pair.id===selectedPairId?'Viewing':'View pair';view.onclick=()=>selectView(pair.id);
@@ -135,7 +135,7 @@ function render(s){
     }
     renderPair(pair);
     pairJobs[pair.id]=lastJob;
-    $('release-pair').disabled=pair.busy||pending||!pair.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing);
+    $('release-pair').disabled=pair.busy||pending||!(pair.agents.some(a=>(a.fresh?a.position:a.lastKnown?.position)==='Flat')&&pair.agents.every(a=>(!a.fresh||a.position==='Flat')&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing));
   }else alertText('Register VMs and create a pair to get started.');
 }
 async function action(command) {
@@ -171,10 +171,12 @@ function renderPair(s) {
   for(const [index,a] of s.agents.entries()){
     const root=$(['vm-left','vm-right'][index]), status=root.querySelector('.status'), position=root.querySelector('.position');
     root.querySelector('h2').textContent=a.name;
-    status.textContent=a.fresh?'Fresh status':a.online?'Status unknown':a.configured?'Disconnected':'Not connected';
-    status.classList.toggle('fresh',a.fresh); position.textContent=a.position || 'Unknown'; position.classList.toggle('fresh',a.fresh);
-    for(const key of ['account','quantity','ticker'])root.querySelector('.'+key).textContent=a[key]??'—';
-    root.querySelector('.sample').textContent=a.fresh?'Observed '+(a.ageMs/1000).toFixed(1)+'s ago':'No fresh position observation';
+    const held=!s.active&&!s.prepared&&!s.busy&&a.lastKnown?.position;
+    const display=held?a.lastKnown:a;
+    status.textContent=held?'Last known status':a.fresh?'Fresh status':a.online?'Status unknown':a.configured?'Disconnected':'Not connected';
+    status.classList.toggle('fresh',a.fresh); position.textContent=display.position || 'Unknown'; position.classList.toggle('fresh',a.fresh);
+    for(const key of ['account','quantity','ticker'])root.querySelector('.'+key).textContent=display[key]??'—';
+    root.querySelector('.sample').textContent=held?'Cached — Prepare & Verify checks again':a.fresh?'Observed '+(a.ageMs/1000).toFixed(1)+'s ago':'No fresh position observation';
     root.querySelector('.latency').textContent=a.rttMs==null?'— ms':a.rttMs+' ms RTT';
     root.querySelector('.vm-message').textContent=a.message || a.execution || (a.configured?'Waiting for agent status.':'Import this VM’s connection code to begin.');
   }
@@ -182,7 +184,7 @@ function renderPair(s) {
   $('sell').textContent='Sell '+s.agents[0].name+' / Buy '+s.agents[1].name;
   const ready=s.canEnter&&!dirty&&!pending;
   $('buy').disabled=$('sell').disabled=!ready;
-  $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing);
+  $('prepare').disabled=s.busy||s.active||pending;
   $('refresh-accounts').disabled=s.busy||s.active||pending;
 
   fields.forEach(id=>$(id).disabled=s.active||s.busy||pending);

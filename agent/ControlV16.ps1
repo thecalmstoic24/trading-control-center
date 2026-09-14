@@ -1,3 +1,13 @@
+# Hide only this process console; closing the form returns from ShowDialog and exits its dedicated host.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AgentConsole16 {
+ [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+}
+'@
+[void][AgentConsole16]::ShowWindow([AgentConsole16]::GetConsoleWindow(),0)
 # Compact presentation; legacy controls remain private implementation state for tested trade functions.
 $form.SuspendLayout()
 $form.Controls.Clear()

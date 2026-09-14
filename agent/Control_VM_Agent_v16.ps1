@@ -2222,7 +2222,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.2'
+$script:ControlVersion = '16.0-preview.3'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2395,7 +2395,7 @@ function Invoke-ControlCommand {
         $qty14=0
         if(-not [int]::TryParse([string]$request.quantity,[ref]$qty14) -or $qty14 -lt 1 -or $qty14 -gt 1000) { throw 'Quantity must be a whole number from 1 to 1000.' }
         if($account14 -cne 'Sim101') {
-            if(([DateTime]::UtcNow-$script:AccountStamp14).TotalMinutes -gt 5 -or $script:Accounts14 -cnotcontains $account14) { throw 'Refresh accounts first. Choose a current Airtable / NinjaTrader match.' }
+            if($script:AccountStamp14.ToLocalTime().Date -ne [DateTime]::Today -or $script:Accounts14 -cnotcontains $account14) { throw 'Refresh accounts first. Choose a current Airtable / NinjaTrader match.' }
         }
         $available14=@(Get-Accounts14)
         if($available14 -cnotcontains $account14) { throw 'Selected account is no longer in NinjaTrader.' }
@@ -2550,6 +2550,16 @@ $syncStatus15.Location=New-Object Drawing.Point(15,170)
 $syncStatus15.Size=New-Object Drawing.Size(570,42)
 $controlGroup.Controls.Add($syncStatus15)
 
+# Hide only this process console; closing the form returns from ShowDialog and exits its dedicated host.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AgentConsole16 {
+ [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+}
+'@
+[void][AgentConsole16]::ShowWindow([AgentConsole16]::GetConsoleWindow(),0)
 # Compact presentation; legacy controls remain private implementation state for tested trade functions.
 $form.SuspendLayout()
 $form.Controls.Clear()
@@ -2629,3 +2639,4 @@ $form.Add_Shown({$maintenanceTimer16.Start()})
 $form.Add_FormClosed({$maintenanceTimer16.Stop();$clipboardTimer16.Stop();$script:ClipboardText16=$null})
 
 [void]$form.ShowDialog()
+exit 0

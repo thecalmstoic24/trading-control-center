@@ -34,6 +34,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
     $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) ($Name + '.lnk')))
     $shortcut.TargetPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $shortcut.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + $Script + '"'
+    $shortcut.WindowStyle = 7
     $shortcut.WorkingDirectory = Split-Path $Script -Parent
     $shortcut.Save()
 }
@@ -145,7 +146,7 @@ $install.Add_Click({
             $data=Join-Path $base 'coordinator-data'; Protect-Directory $data
             $scriptFile=Join-Path $destination 'install\Start-Control-Center.ps1'
             Add-DesktopShortcut 'Trading Control Center' $scriptFile
-            Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
+            Start-Process powershell.exe -WindowStyle Minimized -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Dashboard is opening on your third computer.'
         }else{
             $id=($name.ToLowerInvariant() -replace '[^a-z0-9]+','-').Trim('-')
@@ -175,10 +176,11 @@ $install.Add_Click({
             if($process.ExitCode -ne 0){throw 'Firewall configuration failed. Installation files are present; rerun setup to finish.'}
             $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v16.ps1'
             Add-DesktopShortcut ('Trading Agent - '+$name) $scriptFile
-            Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
+            Start-Process powershell.exe -WindowStyle Minimized -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Agent starts automatically. Copy its connection code into the VM registry on your third computer.'
         }
         $install.Text='INSTALLED'
+        $form.Close()
     }catch{
         $status.Text='Installation stopped: '+$_.Exception.Message
         [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Installation stopped') | Out-Null

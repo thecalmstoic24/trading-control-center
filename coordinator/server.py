@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.2'
-AGENT_VERSIONS = {VERSION, '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.3'
+AGENT_VERSIONS = {VERSION, '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -139,12 +139,14 @@ class Center:
         self.opened_ids = set()
         self.binding_id = None
         self.observations = {}
+        self.last_good = {}
+        self.discovery_until = 0
         self.events = deque(maxlen=150)
         self.jobs = deque(maxlen=50)
         self.prepared = None
         self.active = False
         self.generation = 0
-        self.settings = dict(ticker='MNQ', stopLoss=100, profit=200, accounts={}, quantities={})
+        self.settings = dict(ticker='MNQ', stopLoss=0, profit=0, accounts={}, quantities={})
         self.last_positions = {}
         self.logger = logging.getLogger('center-' + uuid.uuid4().hex)
         self.logger.setLevel(logging.INFO)
@@ -275,6 +277,7 @@ class Center:
             if self.config.get(slot) == config:
                 self.observations[slot] = observation
                 if observation['fresh']:
+                    self.last_good[slot] = dict(observation['state'])
                     position = observation['state'].get('position')
                     if self.last_positions.get(slot) != position:
                         self.last_positions[slot] = position
@@ -308,6 +311,7 @@ class Center:
         age = o.get('ageMs', 999999) + (time.monotonic() - o.get('received', time.monotonic())) * 1000
         fresh = bool(o.get('fresh') and age < MAX_AGE_MS)
         s = o.get('state', {})
+        cached = self.last_good.get(slot, {})
         return dict(id=slot, name=self.name(slot), configured=slot in self.config,
                     online=bool(o.get('online') and time.monotonic() - o.get('received', 0) < 7), fresh=fresh,
                     ageMs=round(age), rttMs=o.get('rttMs'), position=s.get('position') if fresh else 'Unknown',
@@ -319,7 +323,7 @@ class Center:
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
-                    accounts=s.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=s.get('accounts') or cached.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
                     selectedAccount=s.get('selectedAccount', 'Sim101'), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -416,6 +420,7 @@ class Center:
         try:
             self.event(f'{command.upper()} requested.')
             if command == 'accounts':
+                self.discovery_until = time.monotonic() + 130
                 self.prepared = None
                 if self.active: raise ValueError('Close and verify this pair before refreshing accounts.')
                 requests = {slot:self.pool.submit(self.call, slot, 'accounts', {}, 15) for slot in self.pair}
@@ -627,6 +632,7 @@ class Fleet:
             pair.poll_locks.setdefault(slot, threading.Lock())
             if slot in self.catalog.observations:
                 pair.observations[slot] = self.catalog.observations[slot]
+                pair.last_good[slot] = self.catalog.last_good.get(slot, {})
         self.pairs[identity] = pair
         for slot in members:
             self.owners[slot] = identity
@@ -687,17 +693,24 @@ class Fleet:
                 if pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
                     raise ValueError('Wait for the current pair operation to finish, then release.')
             pair.refresh_both()
-            if not all(pair.release_flat(a) for a in pair.state()['agents']):
-                raise ValueError('Both VMs must be fresh, Flat and idle before release.')
-            futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {}, 10) for slot in pair.pair]
+            agents = pair.state()['agents']
+            def releasable(items):
+                return (any(pair.release_flat(a) for a in items)
+                        and all(pair.release_flat(a) or (not a['fresh'] and not any(a[k] for k in ('busy','scheduled','pending','closing'))) for a in items))
+            if not releasable(agents):
+                raise ValueError('Release requires idle Flat / Flat or Flat / Unknown status.')
+            verified_slots = [a['id'] for a in agents if pair.release_flat(a)]
+            futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {}, 10) for slot in verified_slots]
             for future in futures:
                 future.result()
             pair.refresh_both()
             with self.lock, pair.lock:
                 pair.prepared = None
                 pair.assert_generation(generation)
-                if not all(pair.release_flat(a) for a in pair.state()['agents']):
+                if not releasable(pair.state()['agents']):
                     raise ValueError('Pair readiness changed; release blocked.')
+                if len(verified_slots) != 2:
+                    pair.event('Pair assignment released with an Unknown VM. Its remote position and binding were not verified or closed.')
                 pair.active = False
                 (pair.directory / 'entry-unresolved.json').unlink(missing_ok=True)
                 pair.generation += 1
@@ -709,6 +722,7 @@ class Fleet:
                     raise
                 for slot in pair.pair:
                     self.catalog.observations[slot] = pair.observations.get(slot, {})
+                    self.catalog.last_good[slot] = pair.last_good.get(slot, {})
                     self.owners.pop(slot, None)
                 self.retired.append(pair)
                 pair.pool.shutdown(wait=False)
@@ -819,9 +833,24 @@ class Fleet:
             center = self.pairs[owner] if owner else self.catalog
         center.observe(slot)
 
+    def idle_snapshot_held(self, slot):
+        with self.lock:
+            owner = self.owners.get(slot)
+            center = self.pairs.get(owner)
+            if center is None:
+                return False
+            with center.lock:
+                cached = center.last_good.get(slot, {})
+                return (not center.active and not center.prepared and not center.sync_dispatch
+                        and time.monotonic() >= center.discovery_until
+                        and not any(j['status'] == 'running' for j in center.jobs)
+                        and cached.get('position') == 'Flat'
+                        and not any(cached.get(k) for k in ('busy','scheduled','pendingVerification','closing','pairActive')))
+
     def loop(self, slot):
         while not self.stop.is_set():
-            self.observe(slot)
+            if not self.idle_snapshot_held(slot):
+                self.observe(slot)
             self.stop.wait(1)
 
     def start(self):

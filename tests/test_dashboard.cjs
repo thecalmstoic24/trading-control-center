@@ -32,6 +32,15 @@ get('connection-code').input();
 get('connection-result').textContent='Registration rejected: unresolved pair';
 render(s);
 assert.equal(get('connection-result').textContent,'Registration rejected: unresolved pair','polling must not overwrite a new registration error with old success');
+c.lastKnown={position:'Flat',account:'Sim101',quantity:1,ticker:'MNQ'};
+c.fresh=false;c.position='Unknown';pb.active=false;render(s);
+assert.equal(get('vm-left').querySelector('.position').textContent,'Flat');
+assert.equal(get('vm-left').querySelector('.status').textContent,'Last known status');
+assert.equal(get('prepare').disabled,false,'stale idle status must allow a new verification request');
+assert.equal(get('release-pair').disabled,false,'Flat / Unknown permits release request');
+pb.active=true;render(s);
+assert.equal(get('vm-left').querySelector('.position').textContent,'Unknown','active pair must expose missing status');
+pb.active=false;
 (async()=>{
   const calls=[];
   context.fetch=async(path,options)=>{calls.push([path,JSON.parse(options.body)]);return {ok:true,json:async()=>({job:'test-job'})};};
