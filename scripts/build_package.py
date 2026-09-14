@@ -61,6 +61,8 @@ release = ROOT / 'release'
 release.mkdir(exist_ok=True)
 installer = release / 'Setup_Trading_Control_Center_v14_0_2.ps1'
 installer.write_text(wrapper, encoding='utf-8-sig')
+# Permanent launchers accept only a major-version filename; the commit pins the exact patch.
+(release / 'Setup_Trading_Control_Center_v14.ps1').write_bytes(installer.read_bytes())
 print('Payload SHA256:', sha)
 print('Installer SHA256:', hashlib.sha256(installer.read_bytes()).hexdigest())
 print('Packaged files:', len(files))
