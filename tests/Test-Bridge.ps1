@@ -67,3 +67,21 @@ try {
  Check $rejected 'Expired account list accepted'
  'V14 bridge: exact account membership, selected quantity, invalid quantity and stale list rejection passed.'
 } finally { Remove-Item $script:controlDirectory -Recurse -Force }
+
+# Load the actual top-level import, then dispatch after a separate startup callback returns.
+$imports=@($ast.EndBlock.Statements | Where-Object { $_.Extent.Text -match '^\. \(Join-Path \$PSScriptRoot .*Private-Network.ps1' })
+Check ($imports.Count -eq 1) 'Private network helpers must load at script scope, not in the Shown callback'
+$bridgeDirectory=(Resolve-Path (Join-Path $PSScriptRoot '../agent')).Path
+$importText=$imports[0].Extent.Text.Replace('$PSScriptRoot',("'"+$bridgeDirectory.Replace("'","''")+"'"))
+Invoke-Expression $importText
+& { Test-PrivateAddress15 '100.91.78.85' | Out-Null }
+Reset-Test
+$script:ControlIdentity=@{Id='local'};$script:peerPortInput=@{};$script:pairEnabled=@{}
+function Save-Target14 {}
+$request=@{bindingId=('c'*32);peerAccount='ACTUAL-PEER';peerQuantity=3;peer=@{id='other';name='Other';host='100.91.78.85';port=8789;pin=('a'*64);token=('b'*64)}}
+$result=Invoke-ControlCommand (Pending 'bind_peer' $request)
+Check ($result.ok -and $script:PeerAccount14 -ceq 'ACTUAL-PEER' -and $script:PeerQuantity14 -eq 3) 'Private peer binding failed after startup scope ended'
+$request.peer.host='45.32.199.44';$rejected=$false
+try { Invoke-ControlCommand (Pending 'bind_peer' $request) | Out-Null } catch { $rejected=$_.Exception.Message -like 'Peer is not on*' }
+Check $rejected 'Public peer address bypassed validation'
+'V15 callback scope: later private peer binding succeeds with selected account/quantity; public addresses rejected.'

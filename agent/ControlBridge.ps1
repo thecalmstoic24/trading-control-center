@@ -1,10 +1,12 @@
 ﻿# Appended before ShowDialog by scripts/build_package.py. Core V10.4 functions remain intact.
+# Load in script scope so later timer callbacks retain these functions.
+. (Join-Path $PSScriptRoot '..\install\Private-Network.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'ControlGateway.cs')
 $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '15.0-preview.3'
+$script:ControlVersion = '15.0-preview.4'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -265,7 +267,6 @@ $form.Add_Shown({
     try {
         $certificate = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $script:ControlIdentity.Thumbprint)
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password
-        . (Join-Path $PSScriptRoot '..\install\Private-Network.ps1')
         $privateAddress15=Get-PrivateAddress15
         if($privateAddress15 -cne $script:ControlIdentity.HostAddress) { throw 'Private network address changed. Rerun the installer and re-import this VM connection code.' }
         $script:ControlGateway = [ControlGateway11]::new(8789, $certificate, $credential, $privateAddress15)
