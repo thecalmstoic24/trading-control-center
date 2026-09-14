@@ -131,7 +131,7 @@ public sealed class ControlGateway11 : IDisposable {
                     }
                     return;
                 }
-                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="peer" && command!="peer_close") throw new IOException("Invalid command");
+                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close") throw new IOException("Invalid command");
                 ControlRequest11 request;
                 lock(gate) {
                     if(seen.ContainsKey(id)) {
@@ -144,7 +144,7 @@ public sealed class ControlGateway11 : IDisposable {
                         if(seen.Count>=4096 || commands.Count+closes.Count>=16) throw new IOException("Queue full");
                         request=new ControlRequest11 { Id=id,Command=command,Body=body };
                         seen.Add(id,request);
-                        if(command=="close" || command=="peer_close") { CancelQueued(); closes.Enqueue(request); } else commands.Enqueue(request);
+                        if(command=="close" || command=="peer_close") { if(command=="close") CancelQueued(); closes.Enqueue(request); } else commands.Enqueue(request);
                     }
                 }
                 if(request.Done.Wait(90000)) writer.WriteLine(request.Result);

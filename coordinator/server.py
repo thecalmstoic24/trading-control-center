@@ -23,7 +23,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '12.0-preview.1'
+VERSION = '13.0-preview.1'
+AGENT_VERSIONS = {VERSION}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 20
@@ -243,12 +244,12 @@ class Center:
             response = self.transport(config, 'status')
             state = response.get('state', {})
             total_age = float(response.get('cacheAgeMs', 999999)) + float(state.get('sampleAgeMs', 999999)) + response.get('_rttMs', 0)
-            valid = response.get('ok') and state.get('id') == slot and state.get('controlVersion') == VERSION
+            valid = response.get('ok') and state.get('id') == slot and state.get('controlVersion') in AGENT_VERSIONS
             fresh = bool(valid and state.get('ok') and math.isfinite(total_age) and 0 <= total_age < MAX_AGE_MS)
             observation = dict(online=bool(valid), fresh=fresh, received=time.monotonic(),
                                ageMs=total_age if math.isfinite(total_age) else 999999,
                                rttMs=response.get('_rttMs'), state=state if valid else {},
-                               error='' if valid else 'Agent identity/version mismatch; install v12 on the selected agents.')
+                               error='' if valid else 'Agent identity/version mismatch; install V13 on this VM before using multiple pairs.')
         except Exception as exc:
             observation = dict(online=False, fresh=False, received=time.monotonic(), ageMs=999999,
                                state={}, rttMs=None, error=f'Connection unavailable ({type(exc).__name__}).')
@@ -525,6 +526,236 @@ class Center:
         raise ValueError('Close not verified on both VMs. Check both NinjaTrader windows manually.')
 
 
+class Fleet:
+    """One coordinator registry; each immutable pair owns an independent Center.
+
+    Fleet lock orders before any Center lock. Pair jobs never acquire fleet lock.
+    Poll locks are shared by VM, and only one background poller exists per VM.
+    """
+    def __init__(self, directory, transport=agent_call, persist=True):
+        self.directory = Path(directory)
+        self.catalog = Center(directory, transport, persist)
+        self.lock = threading.RLock()
+        self.stop = threading.Event()
+        self.pairs = {}
+        self.owners = {}
+        self.threads = {}
+        self.retired = []
+        self.releasing = set()
+        self.persist = persist
+        self.transport = transport
+        self.started = False
+        self.global_events = deque(maxlen=50)
+        self.index_path = self.directory / 'pairs-v13.json'
+        if self.index_path.exists():
+            records = json.loads(self.index_path.read_text())
+            for record in records:
+                self._load_pair(record['id'], tuple(record['members']))
+        else:
+            # Migrate the former single pair, preserving any unresolved-entry lock.
+            members = self.catalog.pair
+            if len(members) == 2 and (self.catalog.active or all(slot in self.catalog.config for slot in members)):
+                pair = self._load_pair(uuid.uuid4().hex, members)
+                pair.settings = self.catalog.settings.copy()
+                pair.active = self.catalog.active
+                if pair.active:
+                    pair.mark_active()
+                pair.save_fleet()
+            self.save_index()
+        # A retained root marker protects a V12 rollback; V13 uses per-pair markers.
+        self.catalog.pair = ()
+        self.catalog.active = False
+
+    def _load_pair(self, identity, members):
+        if not re.fullmatch('[a-f0-9]{32}', identity) or len(members) != 2 or members[0] == members[1]:
+            raise ValueError('Invalid saved pair. Restore the coordinator configuration backup.')
+        if any(slot in self.owners for slot in members):
+            raise ValueError('Saved pairs share a VM. Restore the coordinator configuration backup.')
+        pair = Center(self.directory / 'pairs' / identity, self.transport, persist=False)
+        if pair.active and pair.pair != members:
+            raise ValueError('Unresolved pair membership differs from its saved reservation.')
+        pair.pair = members
+        pair.config = self.catalog.config
+        pair.poll_locks = self.catalog.poll_locks
+        for slot in members:
+            pair.poll_locks.setdefault(slot, threading.Lock())
+            if slot in self.catalog.observations:
+                pair.observations[slot] = self.catalog.observations[slot]
+        self.pairs[identity] = pair
+        for slot in members:
+            self.owners[slot] = identity
+        return pair
+
+    def save_index(self):
+        atomic_write(self.index_path, json.dumps([{'id':key,'members':pair.pair} for key,pair in self.pairs.items()]).encode())
+
+    def get_pair(self, identity):
+        if identity not in self.pairs:
+            raise ValueError('Select an existing pair first.')
+        return self.pairs[identity]
+
+    def view(self, slot):
+        owner = self.owners.get(slot)
+        center = self.pairs[owner] if owner else self.catalog
+        with center.lock:
+            result = center.view_agent(slot)
+        result['pairId'] = owner
+        return result
+
+    def create_pair(self, left, right):
+        with self.lock:
+            if left == right or left not in self.catalog.config or right not in self.catalog.config:
+                raise ValueError('Choose two different registered VMs.')
+            for identity,pair in self.pairs.items():
+                if pair.pair == (left, right):
+                    return identity
+            if left in self.owners or right in self.owners:
+                raise ValueError('A selected VM belongs to another pair. Close, verify and release that pair first.')
+            if not all(self.catalog.safe_flat(self.view(slot)) for slot in (left, right)):
+                raise ValueError('New pair requires two fresh, idle Sim101 / Qty 1 / Flat agents.')
+            identity = uuid.uuid4().hex
+            pair = self._load_pair(identity, (left, right))
+            try:
+                pair.save_fleet()
+                self.save_index()
+            except Exception:
+                del self.pairs[identity]
+                for slot in (left, right):
+                    del self.owners[slot]
+                self.retired.append(pair)
+                raise
+            pair.event('Pair created. Prepare & Verify is required before entry.')
+            return identity
+
+    def release_pair(self, identity):
+        with self.lock:
+            pair = self.get_pair(identity)
+            if identity in self.releasing or not pair.operation.acquire(blocking=False):
+                raise ValueError('Wait for this pair operation to finish.')
+            self.releasing.add(identity)
+            generation = pair.generation
+        try:
+            with pair.lock:
+                if pair.active or any(j['status']=='running' for j in pair.jobs):
+                    raise ValueError('Close and verify this pair before releasing its VMs.')
+            pair.refresh_both()
+            if not all(pair.safe_flat(a) for a in pair.state()['agents']):
+                raise ValueError('Both VMs must be fresh, Flat and idle before release.')
+            futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {}, 10) for slot in pair.pair]
+            for future in futures:
+                future.result()
+            with self.lock, pair.lock:
+                pair.prepared = None
+                pair.assert_generation(generation)
+                if pair.active or not all(pair.safe_flat(a) for a in pair.state()['agents']):
+                    raise ValueError('Pair readiness changed; release blocked.')
+                pair.generation += 1
+                del self.pairs[identity]
+                try:
+                    self.save_index()
+                except Exception:
+                    self.pairs[identity] = pair
+                    raise
+                for slot in pair.pair:
+                    self.catalog.observations[slot] = pair.observations.get(slot, {})
+                    self.owners.pop(slot, None)
+                self.retired.append(pair)
+                pair.pool.shutdown(wait=False)
+                pair.close_pool.shutdown(wait=False)
+        finally:
+            with self.lock:
+                self.releasing.discard(identity)
+                pair.operation.release()
+
+    def enroll(self, slot, code):
+        value = parse_enrollment(code, slot)
+        with self.lock:
+            owner = self.owners.get(value['id'])
+            if owner:
+                raise ValueError('Release this VM from its pair before changing its registration. Other pairs may keep running.')
+            # Center.enroll persists credentials. Fleet supplies its own pollers.
+            old_persist = self.catalog.persist
+            self.catalog.persist = False
+            try:
+                old = self.catalog.config.get(value['id'])
+                self.catalog.enroll(slot, code)
+                if self.persist:
+                    try:
+                        atomic_write(self.directory / 'connections.dpapi', protect(json.dumps(self.catalog.config).encode()))
+                    except Exception:
+                        if old is None: self.catalog.config.pop(value['id'], None)
+                        else: self.catalog.config[value['id']] = old
+                        raise
+            finally:
+                self.catalog.persist = old_persist
+            if self.started:
+                self.start()
+
+    def invalidate(self, identity):
+        with self.lock:
+            pair = self.get_pair(identity)
+            with pair.lock:
+                pair.prepared = None
+                pair.generation += 1
+
+    def submit(self, command, body):
+        with self.lock:
+            pair = self.get_pair(body.get('pairId'))
+            return pair.submit(command, body)
+
+    def close_all(self):
+        results = {}
+        with self.lock:
+            # Submission starts independent threads; do not wait for any close reply.
+            for identity,pair in self.pairs.items():
+                try:
+                    results[identity] = {'job':pair.submit('close', {})}
+                except ValueError as exc:
+                    results[identity] = {'error':str(exc)}
+            self.global_events.appendleft({'time':time.strftime('%H:%M:%S', time.gmtime()),
+                'message':f'Close All Pairs requested for {len(results)} pairs. Verify each result separately.'})
+        return {'ok':True, 'pairs':results}
+
+    def state(self):
+        with self.lock:
+            states = []
+            for identity,pair in self.pairs.items():
+                state = pair.state()
+                state['id'] = identity
+                state['name'] = ' / '.join(pair.name(slot) for slot in pair.pair)
+                states.append(state)
+            return {'version':VERSION, 'pairs':states,
+                    'fleet':[self.view(slot) for slot in self.catalog.config],
+                    'events':list(self.global_events), 'serverTime':time.time()}
+
+    def observe(self, slot):
+        with self.lock:
+            owner = self.owners.get(slot)
+            center = self.pairs[owner] if owner else self.catalog
+        center.observe(slot)
+
+    def loop(self, slot):
+        while not self.stop.is_set():
+            self.observe(slot)
+            self.stop.wait(1)
+
+    def start(self):
+        with self.lock:
+            self.started = True
+            for slot in self.catalog.config:
+                if slot not in self.threads:
+                    thread = threading.Thread(target=self.loop, args=(slot,), daemon=True)
+                    self.threads[slot] = thread
+                    thread.start()
+
+    def shutdown(self):
+        self.stop.set()
+        for center in [self.catalog, *self.pairs.values(), *self.retired]:
+            center.stop.set()
+            center.pool.shutdown(wait=False)
+            center.close_pool.shutdown(wait=False)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'TradingControlCenter'
     def setup(self):
@@ -588,13 +819,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.center.enroll(slot, body.get('code', ''))
                 self.reply(200, {'ok':True, 'id':parse_enrollment(body.get('code', ''), slot)['id']})
             elif self.path == '/api/pair':
-                self.server.center.select_pair(body.get('left'), body.get('right'))
-                self.reply(200, {'ok':True})
+                pair_id = self.server.center.create_pair(body.get('left'), body.get('right'))
+                self.reply(200, {'ok':True, 'pairId':pair_id})
             elif self.path == '/api/invalidate':
-                with self.server.center.lock:
-                    self.server.center.prepared = None
-                    self.server.center.generation += 1
+                self.server.center.invalidate(body.get('pairId'))
                 self.reply(200, {'ok':True})
+            elif self.path == '/api/release-pair':
+                self.server.center.release_pair(body.get('pairId'))
+                self.reply(200, {'ok':True})
+            elif self.path == '/api/close-all':
+                self.reply(202, self.server.center.close_all())
             elif self.path == '/api/action':
                 job = self.server.center.submit(body.get('command'), body)
                 self.reply(202, {'ok':True, 'job':job})
@@ -611,7 +845,7 @@ def main():
     parser.add_argument('--data-dir', type=Path, required=True)
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
-    center = Center(args.data_dir)
+    center = Fleet(args.data_dir)
     server = ThreadingHTTPServer(('127.0.0.1', 8788), Handler)
     server.daemon_threads = True
     server.authority = '127.0.0.1:8788'
@@ -628,7 +862,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        center.stop.set()
+        center.shutdown()
         server.server_close()
 
 

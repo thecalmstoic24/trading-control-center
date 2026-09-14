@@ -4,6 +4,8 @@ const fragment = location.hash.slice(1);
 if (/^[a-f0-9]{64}$/.test(fragment)) { sessionStorage.setItem('control-token', fragment); history.replaceState(null, '', '/'); }
 const token = sessionStorage.getItem('control-token') || '';
 let state, initialized = false, dirty = false, pending = false, lastEvent = '', lastJob = '', lost = true, closedSequence = null, pairKey = '', fleetKey = '', registeredId = '';
+let fleetState, selectedPairId=sessionStorage.getItem('selected-pair')||'';
+const drafts={}, pairJobs={};
 const fields = ['left-stop','left-profit','right-stop','right-profit','instrument'];
 function alertText(text, error=false) { $('alert').textContent=text; $('alert').classList.toggle('error',error); }
 async function api(path, body) {
@@ -16,7 +18,7 @@ async function api(path, body) {
 function changed(source) {
   const pairs={'left-stop':'right-profit','left-profit':'right-stop','right-stop':'left-profit','right-profit':'left-stop'};
   if(pairs[source]) $(pairs[source]).value=$(source).value;
-  if(!dirty) api('/api/invalidate',{}).catch(e=>alertText(e.message,true));
+  if(!dirty) api('/api/invalidate',{pairId:selectedPairId}).catch(e=>alertText(e.message,true));
   dirty=true; $('buy').disabled=true; $('sell').disabled=true;
   $('orders-checked').checked=false;
   alertText('Settings changed. Check working orders, then Prepare & Verify again.');
@@ -34,62 +36,115 @@ $('register-vm').onclick=async()=>{
 $('select-pair').onclick=async()=>{
   if(pending)return; pending=true;
   try {
-    await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
+    const result=await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
+    saveDraft();selectedPairId=result.pairId;initialized=false;closedSequence=null;
     $('orders-checked').checked=false; dirty=true; lastJob='';
-    alertText('Pair changed. Check working orders and Prepare & Verify.');
+    $('pair-result').textContent='Pair created. Check working orders, then Prepare & Verify.';
   } catch(e){alertText(e.message,true);} finally{pending=false;await poll();}
 };
+function saveDraft(){
+  if(selectedPairId&&initialized)drafts[selectedPairId]={values:fields.map(id=>$(id).value),dirty};
+}
+function selectView(id){
+  saveDraft();selectedPairId=id;sessionStorage.setItem('selected-pair',id);
+  initialized=false;closedSequence=null;lastEvent='';$('orders-checked').checked=false;
+  if(fleetState)render(fleetState);
+}
+$('release-pair').onclick=async()=>{
+  const id=selectedPairId;
+  try{await api('/api/release-pair',{pairId:id});delete drafts[id];delete pairJobs[id];if(selectedPairId===id){selectedPairId='';initialized=false;}await poll();}
+  catch(e){$('pair-result').textContent=e.message;}
+};
+$('close-all').onclick=async()=>{
+  try{
+    const result=await api('/api/close-all',{});
+    for(const [id,value] of Object.entries(result.pairs))if(value.job)pairJobs[id]=value.job;
+    $('pair-result').textContent='Close requested on all pairs. Watch each pair until both positions are verified Flat.';await poll();
+  }catch(e){$('pair-result').textContent=e.message;}
+};
 function renderRegistry(s) {
-  const key=JSON.stringify(s.fleet.map(a=>[a.id,a.name]));
-  const selectedKey=JSON.stringify(s.pair);
-  if(key!==fleetKey || selectedKey!==pairKey){
+  const key=JSON.stringify(s.fleet.map(a=>[a.id,a.name,a.pairId]));
+  if(key!==fleetKey){
     for(const [index,side] of ['left','right'].entries()){
-      const select=$('pair-'+side), previous=select.value;
-      select.replaceChildren();
-      for(const a of s.fleet){const option=document.createElement('option');option.value=a.id;option.textContent=a.name;select.append(option);}
-      select.value=selectedKey!==pairKey?s.pair[index]:previous;
-      if(!select.value && s.fleet.length)select.value=s.fleet[Math.min(index,s.fleet.length-1)].id;
+      const select=$('pair-'+side), previous=select.value;select.replaceChildren();
+      const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose an available VM';select.append(placeholder);
+      for(const a of s.fleet){const option=document.createElement('option');option.value=a.id;option.disabled=!!a.pairId;option.textContent=a.name+(a.pairId?' — assigned to a pair':'');select.append(option);}
+      select.value=s.fleet.some(a=>a.id===previous&&!a.pairId)?previous:'';
     }
-    fleetKey=key;pairKey=selectedKey;
+    fleetKey=key;
   }
-  $('fleet-count').textContent=s.fleet.length+' / 20';
-  $('fleet').replaceChildren();
+  $('fleet-count').textContent=s.fleet.length+' / 20';$('fleet').replaceChildren();
   for(const a of s.fleet){
     const item=document.createElement('div');item.className='fleet-item'+(a.fresh?' fresh':'');
     const name=document.createElement('strong');name.textContent=a.name;
-    const status=document.createElement('span');status.textContent=a.fresh?a.position:'Unknown / disconnected';
+    const status=document.createElement('span');status.textContent=(a.fresh?a.position:'Unknown / disconnected')+(a.pairId?' · paired':' · available');
     item.append(name,status);$('fleet').append(item);
   }
-  if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to select a pair.';
-  for(const side of ['left','right'])$('pair-'+side).disabled=s.active||s.busy||pending;
-  $('select-pair').disabled=s.active||s.busy||pending||s.fleet.length<2;
+  if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to create a pair.';
+  for(const side of ['left','right'])$('pair-'+side).disabled=pending;
+  $('select-pair').disabled=pending||s.fleet.filter(a=>!a.pairId).length<2;
+  $('connections').disabled=false;
   const imported=s.fleet.find(a=>a.id===registeredId);
   if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check the agent and port 8789 firewall scope.');
+  $('pair-list').replaceChildren();
+  for(const pair of s.pairs){
+    const row=document.createElement('div');row.className='pair-summary'+(pair.id===selectedPairId?' selected':'')+(pair.active?' active':'');
+    const info=document.createElement('div'),title=document.createElement('strong'),detail=document.createElement('small');
+    title.textContent=pair.name;
+    const failed=pair.jobs.find(j=>j.status==='error');
+    detail.textContent=pair.agents.map(a=>a.name+': '+(a.position||'Unknown')).join(' · ')+' · '+(pair.busy?'Operation running':pair.active?'Active / outcome awaiting verification':pair.prepared?'Prepared':'Ready to prepare');
+    if(failed&&pair.active)detail.textContent+=' · '+failed.message;
+    info.append(title,detail);
+    const view=document.createElement('button');view.className='quiet';view.textContent=pair.id===selectedPairId?'Viewing':'View pair';view.onclick=()=>selectView(pair.id);
+    row.append(info,view);$('pair-list').append(row);
+  }
+  if(!s.pairs.length)$('pair-list').textContent='Choose two available VMs above and create your first pair.';
+  $('close-all').disabled=s.pairs.length===0;
+}
+function render(s){
+  fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';
+  if(!s.pairs.some(p=>p.id===selectedPairId)){
+    selectedPairId=s.pairs[0]?.id||'';initialized=false;closedSequence=null;
+  }
+  renderRegistry(s);
+  const pair=s.pairs.find(p=>p.id===selectedPairId);
+  $('pair-workspace').hidden=!pair;
+  if(pair){
+    $('selected-pair-title').textContent=pair.name;
+    if(!initialized){
+      const draft=drafts[pair.id];dirty=draft?.dirty||false;lastJob=pairJobs[pair.id]||'';
+      if(draft){fields.forEach((id,index)=>$(id).value=draft.values[index]);initialized=true;}
+    }
+    renderPair(pair);
+    pairJobs[pair.id]=lastJob;
+    $('release-pair').disabled=pair.active||pair.busy||pending||!pair.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
+  }else alertText('Register VMs and create a pair to get started.');
 }
 async function action(command) {
   if(pending && command!=='close') return;
   pending=true;
   $('buy').disabled=true; $('sell').disabled=true;
-  const body={command,noWorkingOrders:$('orders-checked').checked};
+  const actionPairId=selectedPairId;
+  const body={pairId:actionPairId,command,noWorkingOrders:$('orders-checked').checked};
   if(command==='prepare') Object.assign(body,{ticker:$('instrument').value,stopLoss:Number($('left-stop').value),profit:Number($('left-profit').value)});
   try {
-    const result=await api('/api/action',body); lastJob=result.job;
-    if(command==='prepare') dirty=false;
+    const result=await api('/api/action',body);pairJobs[actionPairId]=result.job;
+    if(actionPairId===selectedPairId){lastJob=result.job;if(command==='prepare')dirty=false;}
+    if(command==='prepare'&&drafts[actionPairId])drafts[actionPairId].dirty=false;
     if(['buy','sell','close'].includes(command)) $('orders-checked').checked=false;
     alertText(command==='close'?'Close requested independently on both VMs. Waiting for position verification.':'Request received by coordinator. Waiting for the VM results.');
   } catch(e) {alertText(e.message,true);} finally {pending=false;await poll();}
 }
 for(const command of ['prepare','buy','sell','close']) $(command).onclick=()=>action(command);
 $('ack-flat').onclick=()=>action('ack_flat');
-function render(s) {
+function renderPair(s) {
   state=s; lost=false; $('server-dot').classList.add('connected'); $('server-state').textContent='Coordinator running';
   if(!initialized) {
     $('instrument').value=s.settings.ticker; $('left-stop').value=$('right-profit').value=s.settings.stopLoss;
     $('left-profit').value=$('right-stop').value=s.settings.profit; initialized=true;
     alertText('Connect both VM agents, check working orders, then Prepare & Verify.');
   }
-  renderRegistry(s);
-  if(closedSequence!==null && s.closedSequence!==closedSequence){
+  if((closedSequence!==null && s.closedSequence!==closedSequence)||(closedSequence===null&&s.closedSequence>0&&!s.prepared&&!s.active)){
     $('orders-checked').checked=false;lastJob='';dirty=true;
     alertText('Both positions verified Flat. Settings retained. Check working orders, then Prepare & Verify for the next trade.');
   }
@@ -110,11 +165,11 @@ function render(s) {
   $('buy').disabled=$('sell').disabled=!ready;
   $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
   $('orders-checked').disabled=s.busy||pending;
-  $('connections').disabled=s.active||s.busy;
+
   fields.forEach(id=>$(id).disabled=s.active||s.busy||pending);
   $('ack-flat').disabled=s.busy||pending;
   $('close').disabled=!s.agents.some(a=>a.configured);
-  $('readiness').textContent=ready?'Ready for paired entry.':s.active?'Pair outcome must be verified before another entry.':'Both VMs must be fresh, flat, and prepared before entry.';
+  $('readiness').textContent=ready?'Ready for paired entry.':s.active?'This pair is active or unresolved. Other pairs remain available above.':'Both VMs must be fresh, flat, and prepared before entry.';
   const latest=s.events[0];
   if(latest && JSON.stringify(latest)!==lastEvent){
     lastEvent=JSON.stringify(latest);$('events').replaceChildren();
@@ -122,7 +177,7 @@ function render(s) {
   }
   const job=s.jobs.find(j=>j.id===lastJob);
   if(job && job.status!=='running'){alertText(job.status==='error'?job.message:(latest?.message||job.message),job.status==='error');lastJob='';}
-  else if(!lastJob&&!dirty&&s.events.length===1)alertText('Connect both VM agents to get started. No trade has been requested.');
+  else if(!lastJob&&!dirty&&s.active)alertText('This pair is active or awaiting verification. You can view or create another independent pair above.');
 }
 let polling=false;
 async function poll(){

@@ -4,7 +4,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '12.0-preview.1'
+$script:ControlVersion = '13.0-preview.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -89,6 +89,7 @@ function Invoke-ControlCommand {
         $coreCommand = [string]$request.command
         if ($coreCommand -notin @('status','arm','commit','cancel_schedule','emergency_close')) { throw 'Unsupported TLS peer command.' }
         if ($Pending.Command -eq 'peer_close' -and $coreCommand -cne 'emergency_close') { throw 'Invalid priority command.' }
+        if ($Pending.Command -eq 'peer_close') { $script:ControlGateway.CancelQueued() }
         $request | Add-Member -NotePropertyName token -NotePropertyValue $secretInput.Text -Force
         return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
     }
@@ -111,14 +112,33 @@ function Invoke-ControlCommand {
         $pairEnabled.Checked = $true
         return @{ok=$true;message='TLS peer bound; prepare required.'}
     }
+    if ($Pending.Command -eq 'unbind_peer') {
+        if ($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
+        $snapshot = Get-ChartSnapshot
+        Assert-V10Safety -Snapshot $snapshot -RequireFlat $true -ExpectedTicker $null
+        Invalidate-Preparation
+        $script:ControlPreparedId = ''
+        $script:BoundPeer = $null
+        $script:CurrentPairId = ''
+        $script:LocalOpened = $false
+        $peerIpInput.Text = ''
+        return @{ok=$true;message='Previous peer removed; VM is available for another pair.'}
+    }
     if ($Pending.Command -eq 'close') {
         $script:ControlPreparedId = ''
         $script:ControlRevision++
-        # Each VM receives its own close; the baseline continues partner close verification.
-        if ($script:BoundPeer) { Invoke-PairedClose } else {
-            $script:RemoteCommandActive = $true
-            try { Invoke-Close } finally { $script:RemoteCommandActive = $false; $script:Prepared = $false }
-        }
+        # Coordinator dispatches to each selected VM independently. Never follow
+        # a retained peer address here: a newly created pair may not be bound yet.
+        if ($script:Busy) { throw 'Agent is busy; close outcome must be verified.' }
+        $script:ScheduledAction = $null
+        $script:PendingVerification = $null
+        $script:PairCoordinatorActive = $false
+        $script:PeerMonitorTask = $null
+        $script:CloseCheck = $null
+        $script:EntryFault = $true
+        $script:RemoteCommandActive = $true
+        try { Invoke-Close } finally { $script:RemoteCommandActive = $false; $script:Prepared = $false }
+        if (-not [string]::IsNullOrWhiteSpace($script:LastError)) { throw $script:LastError }
         return @{ok=$true; message='Close requested. Observe both positions to verify.'}
     }
     if ($Pending.Command -eq 'invalidate') {

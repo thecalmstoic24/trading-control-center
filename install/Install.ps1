@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '12.0-preview.1'
+$version = '13.0-preview.1'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
@@ -38,7 +38,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Trading Control Center - V12 Named VM Setup'
+$form.Text = 'Trading Control Center - V13 Multiple Pair Setup'
 $form.ClientSize = New-Object Drawing.Size(650,740)
 $form.StartPosition = 'CenterScreen'
 $form.AutoScroll = $true
@@ -78,7 +78,7 @@ $status=LabelAt 'Ready. This installer will not submit any trade.' 650
 $role.Add_SelectedIndexChanged({
     $agent = $role.SelectedIndex -gt 0
     $hostBox.Enabled=$agent; $sourceBox.Enabled=$agent; $check.Enabled=$agent; $nameBox.Enabled=$agent; $peerBox.Enabled=$agent
-    $notice.Text = $(if($agent){'V12 retains the SIM click logic and uses TLS for selected peer connections. Previous releases are kept for rollback.'}else{'Install here on your Windows 11 third computer. The dashboard opens in your normal browser.'})
+    $notice.Text = $(if($agent){'V13 retains the SIM click logic and uses TLS for selected peer connections. Previous releases are kept for rollback.'}else{'Install here on your Windows 11 third computer. The dashboard opens in your normal browser.'})
 })
 $hostBox.Enabled=$false; $sourceBox.Enabled=$false; $check.Enabled=$false; $nameBox.Enabled=$false; $peerBox.Enabled=$false
 $identityFile=Join-Path $base 'agent-data\identity.clixml'
@@ -90,6 +90,22 @@ if(Test-Path -LiteralPath $identityFile){
     $networkConfig=Join-Path $base 'agent-data\network.json'
     if(Test-Path -LiteralPath $networkConfig){$savedNetwork=Get-Content -LiteralPath $networkConfig -Raw|ConvertFrom-Json;$sourceBox.Text=$savedNetwork.controller;$peerBox.Text=$savedNetwork.peers -join ','}
 }
+# Detect the address on the computer running setup; never use its private LAN IP.
+$detect=New-Object Windows.Forms.Button
+$detect.Text='DETECT THIS COMPUTER PUBLIC IP'
+$detect.Location=New-Object Drawing.Point(24,412)
+$detect.Size=New-Object Drawing.Size(600,28)
+$form.Controls.Add($detect)
+function Detect-PublicAddress {
+    $detected=(Invoke-WebRequest -UseBasicParsing -Uri 'https://api.ipify.org' -TimeoutSec 5).Content.Trim()
+    $address=[Net.IPAddress]::Parse($detected)
+    if($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){throw 'Public IPv4 detection unavailable. Enter the public IPv4 manually.'}
+    if($role.SelectedIndex -gt 0){$hostBox.Text=$address.ToString();$status.Text='This VM public IP detected. Saved controller and peer addresses are retained.'}
+    else{$status.Text='This computer public IPv4: '+$address.ToString()}
+}
+$detect.Add_Click({try{Detect-PublicAddress}catch{$status.Text='IP detection failed. Existing values retained; you can enter the address manually.'}})
+$form.Add_Shown({try{Detect-PublicAddress}catch{$status.Text='Public IP detection unavailable. Existing values retained; manual entry is available.'}})
+$role.Add_SelectedIndexChanged({if($role.SelectedIndex -gt 0 -and -not $hostBox.Text){try{Detect-PublicAddress}catch{}}})
 $install.Add_Click({
     $install.Enabled=$false
     try {
@@ -173,7 +189,7 @@ $install.Add_Click({
             $firewall=Join-Path $destination 'install\Allow-Control-Connection.ps1'
             $process=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$firewall+'" -SourceAddress '+((@($sourceAddress)+$peers | Select-Object -Unique) -join ','))
             if($process.ExitCode -ne 0){throw 'Firewall configuration failed. Installation files are present; rerun setup to finish.'}
-            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v12.ps1'
+            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v13.ps1'
             Add-DesktopShortcut ('Trading Agent - '+$name) $scriptFile
             Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Agent starts automatically. Copy its connection code into the VM registry on your third computer.'

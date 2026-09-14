@@ -26,7 +26,8 @@ class Fake:
         state=self.states[slot]
         if command=='status': return {'ok':True,'cacheAgeMs':0,'_rttMs':1,'state':state.copy()}
         if command=='bind_peer':self.bindings[slot]=body['peer']['id']
-        if command=='invalidate':state.update(prepared=False,prepareId='')
+        if command in ('invalidate','unbind_peer'):state.update(prepared=False,prepareId='')
+        if command=='unbind_peer':self.bindings.pop(slot,None)
         if command=='prepare':state.update(prepared=True,prepareId=body['prepareId'],ticker=body['ticker'],stopLoss=body['stopLoss'],profit=body['profit'])
         if command=='entry':
             self.states[slot].update(position='1 L',pairActive=True)
