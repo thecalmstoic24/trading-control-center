@@ -1,6 +1,6 @@
 # Three-computer deployment
 
-Status: deployment specification for the next release. The dashboard and coordinator are not implemented or installed by this change.
+Status: implemented as v11 preview on this branch; not installed on the user's computers. The third computer is confirmed to run Windows 11. See the repository README for installation, validation status, and initial transport limitations.
 
 ## Machine assignments
 
@@ -10,7 +10,7 @@ Status: deployment specification for the next release. The dashboard and coordin
 | vm-left | VM left | SEAN1 | NinjaTrader and local agent |
 | vm-right | VM right | SEAN2 | NinjaTrader and local agent |
 
-These are application labels, not Windows host renames. Do not change existing VM IP addresses or peer settings merely to rename the panels. The third computer's operating system must be confirmed before selecting its installer.
+These are application labels, not Windows host renames. Do not change existing VM IP addresses or peer settings merely to rename the panels. The control-center installer targets Windows 11.
 
 ## Initial configuration contract
 

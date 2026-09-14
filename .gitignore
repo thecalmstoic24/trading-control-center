@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.dpapi
+*.clixml
+*.pfx
+*.key
+*.log
+launch.json
+entry-unresolved.json
+coordinator-data/
+agent-data/
+runtime/
+test-output/
