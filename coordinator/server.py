@@ -23,7 +23,7 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '14.0-preview.1'
+VERSION = '14.0-preview.2'
 AGENT_VERSIONS = {VERSION}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
@@ -411,8 +411,12 @@ class Center:
             if command == 'accounts':
                 self.prepared = None
                 if self.active: raise ValueError('Close and verify this pair before refreshing accounts.')
-                for slot in self.pair:
-                    self.call(slot, 'accounts', {}, 15)
+                requests = {slot:self.pool.submit(self.call, slot, 'accounts', {}, 15) for slot in self.pair}
+                errors = []
+                for slot, future in requests.items():
+                    try: future.result()
+                    except Exception as exc: errors.append(f'{self.name(slot)}: {exc}')
+                if errors: raise ValueError('; '.join(errors))
                 self.event('Account refresh started on both VMs. Lists update when discovery finishes.')
             elif command == 'prepare':
                 self.prepare(body, generation)

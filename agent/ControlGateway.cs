@@ -131,7 +131,7 @@ public sealed class ControlGateway11 : IDisposable {
                     }
                     return;
                 }
-                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close") throw new IOException("Invalid command");
+                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close" && command!="accounts" && command!="post_trade") { writer.WriteLine("{\"ok\":false,\"message\":\"Unsupported command. Update this VM agent.\"}"); return; }
                 ControlRequest11 request;
                 lock(gate) {
                     if(seen.ContainsKey(id)) {

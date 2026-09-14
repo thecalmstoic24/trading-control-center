@@ -26,11 +26,15 @@ try {
     $rejected=$false
     try { Call 'status' ('0'*64) | Out-Null } catch {$rejected=$true}
     Check $rejected 'Bad certificate pin accepted'
-    $task=[ControlGateway11]::Send('127.0.0.1',18789,$pin,$credential,'bind_peer','{}',2000)
-    $pending=$null
-    for($i=0;$i -lt 50 -and -not $pending;$i++){ $pending=$gateway.Take();Start-Sleep -Milliseconds 10 }
-    Check ($pending.Command -eq 'bind_peer') 'Named peer command did not reach queue'
-    $pending.Complete('{"ok":true}')
-    Check (($task.GetAwaiter().GetResult() | ConvertFrom-Json).ok) 'Queue reply failed'
+    foreach($command in @('bind_peer','accounts','post_trade')) {
+        $task=[ControlGateway11]::Send('127.0.0.1',18789,$pin,$credential,$command,'{}',2000)
+        $pending=$null
+        for($i=0;$i -lt 50 -and -not $pending;$i++){ $pending=$gateway.Take();Start-Sleep -Milliseconds 10 }
+        Check ($pending.Command -eq $command) "Command $command did not reach queue"
+        $pending.Complete('{"ok":true}')
+        Check (($task.GetAwaiter().GetResult() | ConvertFrom-Json).ok) "Queue reply failed: $command"
+    }
+    $invalid=Call 'not_a_command'
+    Check (-not $invalid.ok -and $invalid.message -match 'Unsupported command') 'Unsupported command lacked structured error'
     'TLS gateway: pinning, authentication, status expiry, timing and queued peer command passed.'
 } finally {$gateway.Dispose();$certificate.Dispose();$rsa.Dispose();$hash.Dispose()}

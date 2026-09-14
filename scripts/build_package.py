@@ -59,7 +59,7 @@ try {
 '''.replace('__PAYLOAD__', b64).replace('__SHA__', sha)
 release = ROOT / 'release'
 release.mkdir(exist_ok=True)
-installer = release / 'Setup_Trading_Control_Center_v14.ps1'
+installer = release / 'Setup_Trading_Control_Center_v14_0_2.ps1'
 installer.write_text(wrapper, encoding='utf-8-sig')
 print('Payload SHA256:', sha)
 print('Installer SHA256:', hashlib.sha256(installer.read_bytes()).hexdigest())
