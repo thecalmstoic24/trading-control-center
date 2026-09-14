@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.5'
-AGENT_VERSIONS = {VERSION, '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.6'
+AGENT_VERSIONS = {VERSION, '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -136,6 +136,7 @@ class Center:
         self.poll_threads = {}
         self.closed_sequence = 0
         self.sync_dispatch = 0
+        self.account_refresh = {}
         self.opened_ids = set()
         self.binding_id = None
         self.observations = {}
@@ -186,20 +187,49 @@ class Center:
         export_id = self.binding_id if self.opened_ids else None
         self.opened_ids.clear()
         self.closed_sequence += 1
-        if export_id:
-            self.sync_dispatch += len(self.pair)
-            for slot in self.pair:
-                self.pool.submit(self.post_trade, slot, export_id)
+        self.sync_dispatch += len(self.pair)
+        self.discovery_until = time.monotonic() + 280
+        for slot in self.pair:
+            self.account_refresh[slot] = 'Waiting for post-trade sync' if export_id else 'Refreshing accounts'
+            self.pool.submit(self.post_trade, slot, export_id)
         (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
         self.event(message)
 
+    def wait_refresh_idle(self, slot, timeout=130):
+        deadline = time.monotonic() + timeout
+        while not self.stop.is_set() and time.monotonic() < deadline:
+            self.observe(slot)
+            with self.lock:
+                agent = self.view_agent(slot)
+                if self.active:
+                    raise ValueError('Pair activity changed; automatic refresh stopped.')
+                if self.safe_flat(agent):
+                    return
+                if agent['fresh'] and agent['position'] != 'Flat':
+                    raise ValueError('Position is no longer Flat; automatic refresh stopped.')
+            self.stop.wait(.5)
+        raise ValueError('Account refresh could not verify an idle VM. Use Refresh accounts to retry.')
+
     def post_trade(self, slot, trade_id):
         try:
-            self.call(slot, 'post_trade', {'tradeId':trade_id}, 15)
-            self.observe(slot)
-            self.event(f'{self.name(slot)} post-trade export queued.')
-        except Exception:
-            self.event(f'{self.name(slot)} export could not start. Refresh sync on that VM.')
+            if trade_id:
+                try:
+                    self.call(slot, 'post_trade', {'tradeId':trade_id}, 15)
+                    self.event(f'{self.name(slot)} post-trade export queued.')
+                except Exception:
+                    self.event(f'{self.name(slot)} export could not start. Refresh sync on that VM.')
+            self.wait_refresh_idle(slot)
+            with self.lock:
+                self.account_refresh[slot] = 'Refreshing accounts'
+            self.call(slot, 'accounts', {}, 15)
+            self.wait_refresh_idle(slot)
+            with self.lock:
+                self.account_refresh[slot] = 'Account refresh finished'
+            self.event(f'{self.name(slot)} account refresh finished. Select accounts and Prepare & Verify.')
+        except Exception as exc:
+            with self.lock:
+                self.account_refresh[slot] = 'Refresh needs attention: ' + str(exc)[:200]
+            self.event(f'{self.name(slot)} automatic account refresh needs attention. Use Refresh accounts to retry.')
         finally:
             with self.lock: self.sync_dispatch -= 1
 
@@ -349,7 +379,7 @@ class Center:
             return dict(version=VERSION, agents=agents, settings=self.settings.copy(), canEnter=ready,
                         prepared=bool(self.prepared), active=self.active, busy=self.operation.locked() or self.sync_dispatch > 0,
                         events=list(self.events), jobs=list(self.jobs), serverTime=time.time(),
-                        fleet=[self.view_agent(slot) for slot in self.config], pair=list(self.pair), closedSequence=self.closed_sequence)
+                        fleet=[self.view_agent(slot) for slot in self.config], pair=list(self.pair), closedSequence=self.closed_sequence, accountRefresh=self.account_refresh.copy())
 
     def enroll(self, slot, code):
         value = parse_enrollment(code, slot)
@@ -397,7 +427,7 @@ class Center:
 
     def submit(self, command, body):
         if self.sync_dispatch and command != 'close':
-            raise ValueError('Post-trade export is starting. Wait for its status.')
+            raise ValueError('Post-trade sync and account refresh are running. Wait for their status.')
         if command not in ('prepare', 'buy', 'sell', 'close', 'ack_flat', 'accounts'):
             raise ValueError('Unknown action.')
         if command != 'close' and not self.operation.acquire(blocking=False):
@@ -420,6 +450,7 @@ class Center:
         try:
             self.event(f'{command.upper()} requested.')
             if command == 'accounts':
+                with self.lock: self.account_refresh.clear()
                 self.discovery_until = time.monotonic() + 130
                 self.prepared = None
                 if self.active: raise ValueError('Close and verify this pair before refreshing accounts.')

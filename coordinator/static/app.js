@@ -159,7 +159,30 @@ async function action(command) {
 for(const command of ['prepare','buy','sell','close']) $(command).onclick=()=>action(command);
 $('refresh-accounts').onclick=()=>action('accounts');
 $('ack-flat').onclick=()=>action('ack_flat');
+function pairStatus(s) {
+  const open=s.agents.some(a=>a.fresh&&a.position&& !['Flat','Unknown'].includes(a.position));
+  if(s.active||open)return {label:'Pairing',tone:'pairing',detail:'Trade in progress or awaiting close verification.'};
+  if(s.prepared)return {label:'Prepared',tone:'prepared',detail:'Ready for your entry command.'};
+  const flat=s.agents.every(a=>(a.fresh?a.position:a.lastKnown?.position)==='Flat');
+  if(s.closedSequence>0&&flat)return {label:'Complete',tone:'complete',detail:'Both sides were verified closed.'};
+  return {label:flat?'Flat':'Unknown',tone:'idle',detail:flat?'Select accounts and prepare the pair.':'Waiting for position verification.'};
+}
+function renderPairStatus(s) {
+  const status=pairStatus(s);
+  $('pair-status-label').textContent=status.label;$('pair-status-label').className=status.tone;
+  $('pair-status-detail').textContent=status.detail;
+  $('pair-status-agents').replaceChildren();
+  for(const a of s.agents){
+    const block=document.createElement('div'),name=document.createElement('strong'),position=document.createElement('p'),refresh=document.createElement('p');
+    name.textContent=a.name;
+    position.textContent=a.fresh?'Position: '+a.position:'Last position: '+(a.lastKnown?.position||'Unknown')+' · awaiting fresh status';
+    refresh.textContent=(!s.active&&!s.prepared?s.accountRefresh?.[a.id]:'')||'';block.append(name,position,refresh);$('pair-status-agents').append(block);
+  }
+  $('pair-next-step').textContent=s.busy?'Finishing the current operation…':s.active?'Monitoring this pair.':s.prepared?'Choose Buy / Sell to enter.':'Select accounts, then Prepare & Verify.';
+  return status;
+}
 function renderPair(s) {
+  const progress=renderPairStatus(s);
   state=s; lost=false; $('server-dot').classList.add('connected'); $('server-state').textContent='Coordinator running';
   if(!initialized) {
     $('instrument').value=s.settings.ticker; $('left-stop').value=$('right-profit').value=s.settings.stopLoss;
@@ -168,7 +191,7 @@ function renderPair(s) {
   }
   if((closedSequence!==null && s.closedSequence!==closedSequence)||(closedSequence===null&&s.closedSequence>0&&!s.prepared&&!s.active)){
     lastJob='';dirty=true;
-    alertText('Both positions verified Flat. Settings retained. Check working orders, then Prepare & Verify for the next trade.');
+    alertText('Both positions verified Flat. Accounts refresh automatically. Settings retained for the next preparation.');
   }
   closedSequence=s.closedSequence;
   for(const [index,a] of s.agents.entries()){
@@ -177,7 +200,7 @@ function renderPair(s) {
     const held=!s.active&&!s.prepared&&!s.busy&&a.lastKnown?.position;
     const display=held?a.lastKnown:a;
     status.textContent=held?'Last known status':a.fresh?'Fresh status':a.online?'Status unknown':a.configured?'Disconnected':'Not connected';
-    status.classList.toggle('fresh',a.fresh); position.textContent=display.position || 'Unknown'; position.classList.toggle('fresh',a.fresh);
+    status.classList.toggle('fresh',a.fresh); position.textContent=progress.label; position.className='position '+progress.tone;
     for(const key of ['account','quantity','ticker'])root.querySelector('.'+key).textContent=display[key]??'—';
     root.querySelector('.sample').textContent=held?'Cached — Prepare & Verify checks again':a.fresh?'Observed '+(a.ageMs/1000).toFixed(1)+'s ago':'No fresh position observation';
     root.querySelector('.latency').textContent=a.rttMs==null?'— ms':a.rttMs+' ms RTT';
@@ -207,8 +230,8 @@ let polling=false;
 async function poll(){
   if(polling)return;polling=true;
   try{render(await api('/api/state'));}
-  catch(e){lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=$('select-pair').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
-    for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').classList.remove('fresh');root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}
+  catch(e){$('pair-status-label').textContent='Unknown';$('pair-status-label').className='idle';$('pair-status-detail').textContent='Coordinator unavailable. Reconnect to verify this pair.';lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=$('select-pair').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
+    for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').className='position idle';root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}
   finally{polling=false;}
 }
 poll();setInterval(poll,1000);

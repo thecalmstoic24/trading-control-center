@@ -137,20 +137,57 @@ class Tests(unittest.TestCase):
     def test_pair_change_blocked_during_active_trade(self):
         self.open_pair()
         with self.assertRaises(ValueError):self.center.select_pair('vm-right','vm-left')
-    def test_natural_close_resets_once_preserves_settings_without_actions(self):
+    def test_natural_close_resets_once_preserves_settings_and_refreshes_accounts(self):
         self.open_pair();self.fake.calls.clear();self.flat_pair()
         state=self.center.state()
         self.assertFalse(state['active']);self.assertFalse(state['canEnter'])
         self.assertEqual(state['closedSequence'],1)
         self.assertEqual(state['settings']['stopLoss'],123)
         self.assertFalse(Path(self.temp.name,'entry-unresolved.json').exists())
-        self.assertTrue(all(command in ('status','post_trade') for _,command,_ in self.fake.calls))
+        self.assertTrue(all(command in ('status','post_trade','accounts') for _,command,_ in self.fake.calls))
         self.center.refresh_both();self.assertEqual(self.center.state()['closedSequence'],1)
         for _ in range(100):
             if not self.center.sync_dispatch: break
             threading.Event().wait(.01)
+        self.assertEqual(sorted(slot for slot,command,_ in self.fake.calls if command=='accounts'),sorted(self.center.pair))
         self.center.prepare(dict(ticker='MNQ',stopLoss=123,profit=456,noWorkingOrders=True),self.center.generation)
         self.assertTrue(self.center.state()['canEnter'])
+    def test_auto_refresh_waits_for_export_and_never_enters_trade(self):
+        self.open_pair()
+        original=self.center.transport
+        def transport(config,command,body=None,**kwargs):
+            result=original(config,command,body,**kwargs)
+            if command=='post_trade':self.fake.states[config['id']]['busy']=True
+            return result
+        self.center.transport=transport
+        self.fake.calls.clear();self.flat_pair()
+        for _ in range(100):
+            if sum(c[1]=='post_trade' for c in self.fake.calls)==2:break
+            threading.Event().wait(.01)
+        self.assertFalse(any(c[1]=='accounts' for c in self.fake.calls))
+        self.assertTrue(self.center.state()['busy'])
+        with self.assertRaises(ValueError):self.center.submit('prepare',{})
+        for state in self.fake.states.values():state['busy']=False
+        for _ in range(200):
+            if not self.center.sync_dispatch:break
+            threading.Event().wait(.01)
+        self.assertEqual(sum(c[1]=='accounts' for c in self.fake.calls),2)
+        self.assertFalse(any(c[1] in ('prepare','entry') for c in self.fake.calls))
+        self.assertFalse(self.center.state()['busy'])
+        self.assertTrue(all(x=='Account refresh finished' for x in self.center.account_refresh.values()))
+    def test_auto_refresh_stops_if_position_reopens(self):
+        self.fake.states['vm-left']['position']='3 L'
+        self.center.sync_dispatch=1
+        self.center.post_trade('vm-left',None)
+        self.assertFalse(any(c[1]=='accounts' for c in self.fake.calls))
+        self.assertIn('automatic refresh stopped',self.center.account_refresh['vm-left'])
+        self.assertEqual(self.center.sync_dispatch,0)
+    def test_auto_refresh_failure_is_visible_and_unblocks_retry(self):
+        self.fake.fail.add(('vm-left','accounts'))
+        self.center.sync_dispatch=1
+        self.center.post_trade('vm-left',None)
+        self.assertIn('Refresh needs attention',self.center.account_refresh['vm-left'])
+        self.assertEqual(self.center.sync_dispatch,0)
     def test_initial_flat_after_commit_is_not_a_completed_trade(self):
         self.prepare();self.center.entry('buy',0)
         self.flat_pair()
