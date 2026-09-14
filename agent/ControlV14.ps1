@@ -1,4 +1,5 @@
-﻿# V14 account targets are retained across restarts; never silently fall back to Sim101 for an active account.
+﻿$script:SyncReceipt17 = $null
+# V14 account targets are retained across restarts; never silently fall back to Sim101 for an active account.
 $script:PeerAccount14 = 'Sim101'
 $script:PeerQuantity14 = 1
 $script:Accounts14 = @('Sim101')
@@ -13,6 +14,8 @@ $script:DesktopLease14 = $null
 $script:RetryAfter14=[DateTime]::UtcNow.AddSeconds(30)
 $data14 = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 New-Item -ItemType Directory -Path $data14 -Force | Out-Null
+$receiptPath17=Join-Path $data14 'sync-done.json'
+if(Test-Path $receiptPath17) { try { $script:SyncReceipt17=(Get-Content $receiptPath17 -Raw | ConvertFrom-Json).receipt } catch { $script:SyncReceipt17=$null } }
 $script:TargetPath14 = Join-Path $data14 'trade-target.clixml'
 if(Test-Path -LiteralPath $script:TargetPath14) {
     $saved14 = Import-Clixml -LiteralPath $script:TargetPath14
@@ -144,6 +147,7 @@ function Poll-Worker14 {
         if(-not (Test-Path $script:WorkerResult14)) { throw 'Worker timed out or stopped. Check the local sync log.' }
         $result=Get-Content $script:WorkerResult14 -Raw | ConvertFrom-Json
         if(-not $result.ok) { throw [string]$result.error }
+        if($mode -eq 'export' -and $result.receipt) { $script:SyncReceipt17=$result.receipt }
         if($mode -eq 'accounts') {
             $script:Accounts14=@('Sim101')+@($result.accounts | Where-Object { $_ -cne 'Sim101' })
             $script:AccountStamp14=[DateTime]::UtcNow

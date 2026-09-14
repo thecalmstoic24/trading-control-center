@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.6'
-AGENT_VERSIONS = {VERSION, '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.7'
+AGENT_VERSIONS = {VERSION, '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -354,6 +354,7 @@ class Center:
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
                     snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=s.get('accounts') or cached.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=s.get('selectedAccount', 'Sim101'), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -950,13 +951,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed(auth=self.path.startswith('/api/')):
             return
+        if self.path == '/api/queue':
+            self.reply(200, self.server.queue.snapshot())
+            return
         if self.path == '/api/planning':
             self.reply(200, self.server.planning.snapshot())
             return
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
@@ -964,6 +968,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = ROOT / 'static' / files[self.path]
         self.reply(200, path.read_bytes(), kinds[path.suffix])
+
+    def queue_guard(self, identity):
+        queue = getattr(self.server, 'queue', None)
+        if queue and queue.owned(identity):
+            raise ValueError('This pair belongs to the Planning queue. Pause the queue to stop new entries; Close Pair remains available.')
 
     def do_POST(self):
         if not self.allowed(auth=True, post=True):
@@ -975,7 +984,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError('Invalid request body.')
-            if self.path == '/api/planning/refresh':
+            if self.path.startswith('/api/queue/'):
+                self.reply(200, self.server.queue.command(self.path.rsplit('/',1)[1], body))
+            elif self.path == '/api/planning/refresh':
                 self.server.planning.refresh(body.get('token'))
                 self.reply(202, {'ok':True})
             elif self.path == '/api/enroll':
@@ -986,14 +997,19 @@ class Handler(BaseHTTPRequestHandler):
                 pair_id = self.server.center.create_pair(body.get('left'), body.get('right'))
                 self.reply(200, {'ok':True, 'pairId':pair_id})
             elif self.path == '/api/invalidate':
+                self.queue_guard(body.get('pairId'))
                 self.server.center.invalidate(body.get('pairId'))
                 self.reply(200, {'ok':True})
             elif self.path == '/api/release-pair':
+                self.queue_guard(body.get('pairId'))
                 self.server.center.release_pair(body.get('pairId'))
                 self.reply(200, {'ok':True})
             elif self.path == '/api/close-all':
+                if getattr(self.server, 'queue', None): self.server.queue.command('pause', {})
                 self.reply(202, self.server.center.close_all())
             elif self.path == '/api/action':
+                if body.get('command') != 'close': self.queue_guard(body.get('pairId'))
+                elif getattr(self.server, 'queue', None) and self.server.queue.owned(body.get('pairId')): self.server.queue.command('pause', {})
                 job = self.server.center.submit(body.get('command'), body)
                 self.reply(202, {'ok':True, 'job':job})
             else:
@@ -1013,6 +1029,7 @@ def main():
     import sys
     sys.path.insert(0, str(ROOT))
     from planning import Planning
+    from pair_queue import PairQueue
     center = Fleet(args.data_dir)
     server = ThreadingHTTPServer(('127.0.0.1', 8788), Handler)
     server.daemon_threads = True
@@ -1020,6 +1037,8 @@ def main():
     server.center = center
     server.planning = Planning(args.data_dir)
     server.planning.start()
+    server.queue = PairQueue(center, server.planning)
+    server.queue.start()
     server.token = secrets.token_hex(32)
     url = 'http://' + server.authority + '/#' + server.token
     atomic_write(args.data_dir / 'launch.json', json.dumps({'pid':os.getpid(), 'url':url}).encode())
@@ -1032,6 +1051,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        server.queue.close()
         server.planning.close()
         center.shutdown()
         server.server_close()

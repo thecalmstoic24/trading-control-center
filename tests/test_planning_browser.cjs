@@ -13,6 +13,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    writes.push(url.pathname);assert.equal(url.pathname,'/api/planning/refresh','Planning must not send trading commands');
    snapshot={...snapshot,updatedAt:snapshot.updatedAt+1,rows:[...snapshot.rows,{id:'c',fields:{Account:'C',Balance:20}}].filter((r,i,a)=>a.findIndex(x=>x.id===r.id)===i)};result={ok:true};
   }else if(url.pathname==='/api/state')result={fleet:[],pairs:[],events:[]};
+  else if(url.pathname==='/api/queue')result={rows:[],running:false,message:'Paused'};
   else if(url.pathname==='/api/planning')result=snapshot;
   if(result)return route.fulfill({json:result});
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);

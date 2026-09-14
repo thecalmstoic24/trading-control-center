@@ -454,7 +454,7 @@ try {
    $doneValue14=Get-Content $done14 -Raw | ConvertFrom-Json
    if($doneValue14.tradeId -ceq $request14.TradeId -and -not $request14.FreshExport) {
     Remove-Item $queue14 -ErrorAction SilentlyContinue
-    @{ok=$true;message='Already synced this trade.'} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8
+    @{ok=$true;message='Already synced this trade.';receipt=$doneValue14.receipt} | ConvertTo-Json -Depth 8 | Set-Content $ResultPath -Encoding UTF8
     exit 0
    }
   }
@@ -482,12 +482,19 @@ try {
   foreach($row in $rows) {
    $id=(([string]$row.'Display name') -split '!',2)[0].Trim()
    if(-not $id) { throw 'CSV has a blank account ID.' }
-   if($id -ieq 'Sim101') { Log 'Skipped Sim101'; continue }
+   # Sim101 is read for queue test receipts; it is never uploaded to Accounts.
    if($row.PSObject.Properties.Name -contains 'ConnectionStatus' -and $row.ConnectionStatus -ne 'Connected') { Log "Skipped disconnected account: $id"; continue }
    if($seen.ContainsKey($id)) { throw "Duplicate CSV account ID: $id. Nothing updated." }
    $seen[$id]=$true
    $fields=[ordered]@{}
-   foreach($key in $mapping.Keys) { $fields[$mapping[$key]]=Money ([string]$row.$key) }
+   if($id -ieq 'Sim101') {
+    try {
+     $fields['CurrentBalance']=Money ([string]$row.'Net liquidation')
+     $fields['Realized PnL']=Money ([string]$row.'Realized PnL')
+    } catch { Log 'Sim101 receipt unavailable: numeric balance/PnL not exported. Other accounts will still sync.'; continue }
+   } else {
+    foreach($key in $mapping.Keys) { $fields[$mapping[$key]]=Money ([string]$row.$key) }
+   }
    $data+=@{Account=$id; Fields=$fields}
   }
   if($ExportOnly) {
@@ -514,7 +521,8 @@ try {
   $updates=@(); $report=@()
   foreach($item in $data) {
    $id=$item.Account
-   if(-not $index.ContainsKey($id)) { Log "UNMATCHED: $id"; $status='Unmatched' }
+   if($id -ieq 'Sim101') { $status='Simulation' }
+   elseif(-not $index.ContainsKey($id)) { Log "UNMATCHED: $id"; $status='Unmatched' }
    elseif($index[$id].Count -ne 1) { Log "DUPLICATE in Airtable, skipped: $id"; $status='Duplicate Airtable ID' }
    elseif(([string]$index[$id][0].fields.id).Trim() -cne $id) { Log "Case mismatch, skipped: $id"; $status='Case mismatch' }
    else { $updates+=@{id=$index[$id][0].id; fields=$item.Fields}; $status='Matched' }
@@ -550,10 +558,11 @@ try {
    Log "SUCCESS: CSV saved; $script:sent matched accounts confirmed in Airtable; $skippedCount unmatched/ambiguous accounts skipped."
   }
  }
- @{tradeId=$request14.TradeId;csvPath=$CsvPath} | ConvertTo-Json | Set-Content ($done14+'.tmp') -Encoding UTF8
+ $receipt17=@{id=$request14.TradeId;completedUtc=[DateTime]::UtcNow.ToString('o');accounts=@($report | Where-Object {$_.Status -in @('Matched','Simulation')})}
+ @{tradeId=$request14.TradeId;csvPath=$CsvPath;receipt=$receipt17} | ConvertTo-Json -Depth 8 | Set-Content ($done14+'.tmp') -Encoding UTF8
  Move-Item ($done14+'.tmp') $done14 -Force
  Remove-Item $queue14 -ErrorAction SilentlyContinue
- @{ok=$true;message=('Synced '+$script:sent+' account records to Airtable.')} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8
+ @{ok=$true;message=('Synced '+$script:sent+' account records to Airtable.');receipt=$receipt17} | ConvertTo-Json -Depth 8 | Set-Content $ResultPath -Encoding UTF8
 } catch {
  Log "STOPPED at [$script:stage]: $($_.Exception.Message)"
  Log "Diagnostic log: $logFile"

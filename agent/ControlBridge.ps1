@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.4'
+$script:ControlVersion = '16.0-preview.7'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -73,6 +73,8 @@ function Get-ControlStatus {
     $state['accounts'] = @($script:Accounts14)
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
+    $state['syncReceipt'] = $script:SyncReceipt17
+    $state['queueReceipts'] = $true
     $state['selectedAccount'] = $script:LockedAccount
     $state['selectedQuantity'] = $script:LockedQuantity
     $state['ticker'] = $(if ($state.ok) { $script:StateCache.Ticker } else { $null })

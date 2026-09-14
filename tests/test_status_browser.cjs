@@ -12,6 +12,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const req=route.request(),url=new URL(req.url());let result;
   if(req.method()==='POST'){writes.push(url.pathname);assert.equal(url.pathname,'/api/planning/refresh');result={ok:true};}
   else if(url.pathname==='/api/state')result=state;
+  else if(url.pathname==='/api/queue')result={rows:[],running:false,message:'Paused'};
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:null,error:'',busy:false};
   if(result)return route.fulfill({json:result});
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);

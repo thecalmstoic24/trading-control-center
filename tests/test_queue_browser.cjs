@@ -1,0 +1,38 @@
+const {chromium}=require('playwright');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.TCC_BROWSER_PATH,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[],writes=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ const fleet=['left','right'].map(id=>({id,name:'VM '+id,accounts:['Sim101','Account-'+id],fresh:true,position:'Flat',lastKnown:{position:'Flat'},configured:true}));
+ const spec={left:'left',right:'right',accounts:{left:'Account-left',right:'Account-right'},names:{left:'VM left',right:'VM right'},masters:{left:'MFF',right:'LCD'},quantities:{left:3,right:3},ticker:'NQ SEP26',stopLoss:100,profit:200,direction:'buy'};
+ const queue={running:false,message:'Queue paused.',rows:[{id:'PAIR-0001',spec,status:'Complete',message:'Results saved.',results:{left:900,right:-900},after:{left:{balance:50900},right:{balance:49100}}}]};
+ await page.route('http://127.0.0.1:8788/**',async route=>{
+  const req=route.request(),url=new URL(req.url());let result;
+  if(req.method()==='POST'){
+   writes.push({path:url.pathname,body:req.postDataJSON()});
+   if(url.pathname==='/api/queue/start')queue.running=true;
+   if(url.pathname==='/api/queue/pause')queue.running=false;
+   result={ok:true};
+  }else if(url.pathname==='/api/state')result={fleet,pairs:[],events:[],limits:{vms:50,pairs:20}};
+  else if(url.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:null,error:'',busy:false};
+  else if(url.pathname==='/api/queue')result=queue;
+  if(result)return route.fulfill({json:result});
+  const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
+  await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+ });
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-planning').click();
+ await page.waitForFunction(()=>document.querySelector('#queue-table').textContent.includes('PAIR-0001'));
+ assert.equal(await page.locator('.queue-win').textContent(),'$900.00');assert.equal(await page.locator('.queue-loss').textContent(),'-$900.00');
+ await page.locator('#queue-add').click();await page.locator('#queue-dialog').waitFor({state:'visible'});
+ assert.equal(await page.locator('#queue-left-account').inputValue(),'Sim101');
+ await page.locator('#queue-left-account').selectOption('Account-left');await page.locator('#queue-right-account').selectOption('Account-right');
+ await page.locator('#queue-left-quantity').fill('3');await page.locator('#queue-right-quantity').fill('2');
+ await page.locator('#queue-stop').fill('100');await page.locator('#queue-profit').fill('200');await page.locator('#queue-save').click();
+ await page.locator('#queue-dialog').waitFor({state:'hidden'});
+ const added=writes.find(w=>w.path==='/api/queue/add');assert.equal(added.body.quantities.left,3);assert.equal(added.body.quantities.right,2);assert.equal(added.body.accounts.left,'Account-left');
+ assert.ok(!writes.some(w=>w.path==='/api/action'),'adding a plan must not trade');
+ await page.locator('#queue-start').click();await page.waitForFunction(()=>!document.querySelector('#queue-pause').disabled);await page.locator('#queue-pause').click();
+ await page.screenshot({path:'/tmp/queue-preview7.png',fullPage:true});
+ assert.deepEqual(errors,[]);await browser.close();console.log('Queue browser passed: planning form, defaults, accounts, quantities, colors, Start/Pause; adding plans sends no trade command.');
+})().catch(e=>{console.error(e);process.exit(1)});
