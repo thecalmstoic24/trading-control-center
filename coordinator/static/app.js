@@ -109,6 +109,7 @@ function renderRegistry(s) {
   $('close-all').disabled=s.pairs.length===0;
 }
 function render(s){
+  if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));
   fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';
   if(!s.pairs.some(p=>p.id===selectedPairId)){
     selectedPairId=s.pairs[0]?.id||'';initialized=false;closedSequence=null;

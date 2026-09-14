@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.4'
-AGENT_VERSIONS = {VERSION, '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.5'
+AGENT_VERSIONS = {VERSION, '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -146,7 +146,7 @@ class Center:
         self.prepared = None
         self.active = False
         self.generation = 0
-        self.settings = dict(ticker='MNQ', stopLoss=0, profit=0, accounts={}, quantities={})
+        self.settings = dict(ticker='NQ SEP26', stopLoss=0, profit=0, accounts={}, quantities={})
         self.last_positions = {}
         self.logger = logging.getLogger('center-' + uuid.uuid4().hex)
         self.logger.setLevel(logging.INFO)
@@ -919,10 +919,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed(auth=self.path.startswith('/api/')):
             return
+        if self.path == '/api/planning':
+            self.reply(200, self.server.planning.snapshot())
+            return
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
@@ -941,7 +944,10 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError('Invalid request body.')
-            if self.path == '/api/enroll':
+            if self.path == '/api/planning/refresh':
+                self.server.planning.refresh(body.get('token'))
+                self.reply(202, {'ok':True})
+            elif self.path == '/api/enroll':
                 slot = body.get('id')
                 self.server.center.enroll(slot, body.get('code', ''))
                 self.reply(200, {'ok':True, 'id':parse_enrollment(body.get('code', ''), slot)['id']})
@@ -972,11 +978,17 @@ def main():
     parser.add_argument('--data-dir', type=Path, required=True)
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
+    # The Windows embedded runtime excludes the script directory from sys.path.
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from planning import Planning
     center = Fleet(args.data_dir)
     server = ThreadingHTTPServer(('127.0.0.1', 8788), Handler)
     server.daemon_threads = True
     server.authority = '127.0.0.1:8788'
     server.center = center
+    server.planning = Planning(args.data_dir)
+    server.planning.start()
     server.token = secrets.token_hex(32)
     url = 'http://' + server.authority + '/#' + server.token
     atomic_write(args.data_dir / 'launch.json', json.dumps({'pid':os.getpid(), 'url':url}).encode())
@@ -989,6 +1001,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        server.planning.close()
         center.shutdown()
         server.server_close()
 
