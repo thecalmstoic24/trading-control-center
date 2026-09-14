@@ -452,7 +452,7 @@ try {
   if($request14.Mode -ne 'export') { throw 'Unsupported worker mode.' }
   if(Test-Path $done14) {
    $doneValue14=Get-Content $done14 -Raw | ConvertFrom-Json
-   if($doneValue14.tradeId -ceq $request14.TradeId) {
+   if($doneValue14.tradeId -ceq $request14.TradeId -and -not $request14.FreshExport) {
     Remove-Item $queue14 -ErrorAction SilentlyContinue
     @{ok=$true;message='Already synced this trade.'} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8
     exit 0
@@ -461,7 +461,7 @@ try {
   if(Test-Path $queue14) {
    $pending14=Get-Content $queue14 -Raw | ConvertFrom-Json
    if($pending14.tradeId -cne $request14.TradeId) { throw 'Previous sync is pending. Retry it before exporting another trade.' }
-   $CsvPath=$pending14.csvPath
+   if(-not $request14.FreshExport) { $CsvPath=$pending14.csvPath }
   }
   if(-not $CsvPath) {
    @{tradeId=$request14.TradeId;csvPath=$null} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8

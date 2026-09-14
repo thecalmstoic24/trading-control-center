@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '15.0-preview.4'
+$script:ControlVersion = '15.0-preview.5'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -171,7 +171,7 @@ function Invoke-ControlCommand {
         throw 'Agent is busy, scheduled, active, or closing.'
     }
     if ($Pending.Command -eq 'prepare') {
-        if(Test-Path (Join-Path $controlDirectory 'sync-pending.json')) { throw 'Post-trade sync is pending. Retry Airtable Sync before preparing another trade.' }
+        if(Test-Path (Join-Path $controlDirectory 'sync-pending.json')) { throw 'Post-trade sync is pending. Sync Airtable Now before preparing another trade.' }
         $null=Assert-Idle14
         $account14=[string]$request.account
         $qty14=0
@@ -252,6 +252,7 @@ $controlTimer.Interval = 50
 $controlTimer.Add_Tick({
     if ($null -eq $script:ControlGateway) { return }
     Poll-Worker14
+    if($syncStatus15) { $syncStatus15.Text=$script:Sync14 }
     # Cached status is served on a TLS worker even while the UI is busy with NinjaTrader.
     $script:ControlGateway.Publish(((Get-ControlStatus) | ConvertTo-Json -Compress -Depth 5))
     $cachedPeer = Get-CachedStatus
@@ -284,7 +285,7 @@ $form.Add_FormClosed({
     if ($null -ne $script:ControlGateway) { $script:ControlGateway.Dispose() }
 })
 
-$controlGroup.Height=190
+$controlGroup.Height=220
 $master14=New-Object System.Windows.Forms.TextBox
 $master14.Location=New-Object Drawing.Point(15,95)
 $master14.Size=New-Object Drawing.Size(210,25)
@@ -308,15 +309,13 @@ $saveMaster14.Add_Click({
 })
 $controlGroup.Controls.Add($saveMaster14)
 $retry14=New-Object System.Windows.Forms.Button
-$retry14.Text='Retry Airtable Sync'
+$retry14.Text='Sync Airtable Now'
 $retry14.Location=New-Object Drawing.Point(15,132)
 $retry14.Size=New-Object Drawing.Size(180,30)
 $retry14.Add_Click({
  try {
-  $pendingPath14=Join-Path $controlDirectory 'sync-pending.json'
-  if(Test-Path $pendingPath14) { $script:RetryTrade14=(Get-Content $pendingPath14 -Raw | ConvertFrom-Json).tradeId }
-  if(-not $script:RetryTrade14) { throw 'No pending post-trade export.' }
-  Start-Worker14 -Mode 'export' -TradeId $script:RetryTrade14
+  Request-ManualSync15
+  $syncStatus15.Text=$script:Sync14
  } catch { Show-ErrorMessage $_.Exception.Message }
 })
 $controlGroup.Controls.Add($retry14)
@@ -327,3 +326,9 @@ $setup14.Location=New-Object Drawing.Point(240,132)
 $setup14.Size=New-Object Drawing.Size(175,30)
 $setup14.Add_Click({ try { Start-Worker14 -Mode 'setup' } catch { Show-ErrorMessage $_.Exception.Message } })
 $controlGroup.Controls.Add($setup14)
+
+$syncStatus15=New-Object System.Windows.Forms.Label
+$syncStatus15.Text=$script:Sync14
+$syncStatus15.Location=New-Object Drawing.Point(15,170)
+$syncStatus15.Size=New-Object Drawing.Size(570,42)
+$controlGroup.Controls.Add($syncStatus15)

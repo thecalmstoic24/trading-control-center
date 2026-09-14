@@ -2122,13 +2122,37 @@ function Get-Accounts14 {
         return @($names)
     } finally { if($expand) { $expand.Collapse() } }
 }
+function Test-SyncDesktopBusy15 {
+    return [bool]($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:PendingVerification -or $script:CloseCheck -or $script:Worker14)
+}
+function Request-ManualSync15 {
+    $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
+    $path=Join-Path $directory 'sync-manual.json'
+    @{requestedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content ($path+'.tmp') -Encoding UTF8
+    Move-Item ($path+'.tmp') $path -Force
+    $script:Sync14='Sync requested; waiting for trading automation to release the desktop.'
+    Start-ManualSync15
+}
+function Start-ManualSync15 {
+    $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
+    $path=Join-Path $directory 'sync-manual.json'
+    if(-not (Test-Path $path) -or (Test-SyncDesktopBusy15)) { return }
+    $pending=Join-Path $directory 'sync-pending.json'
+    $id=[guid]::NewGuid().ToString('N')
+    if(Test-Path $pending) { $id=[string](Get-Content $pending -Raw | ConvertFrom-Json).tradeId }
+    if($id -notmatch '^[a-f0-9]{32}$') { throw 'Pending sync ID is invalid. Check the sync log.' }
+    Start-Worker14 -Mode 'export' -TradeId $id -FreshExport
+    Remove-Item $path -ErrorAction SilentlyContinue
+}
 function Start-Worker14 {
-    param([string]$Mode,[string]$TradeId='')
-    $null=Assert-Idle14
+    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport)
+    if($Mode -eq 'export') {
+        if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
+    } else { $null=Assert-Idle14 }
     Invalidate-Preparation
     $script:ControlPreparedId=''
     $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
-    $request=@{Mode=$Mode;TradeId=$TradeId;MasterAccount=$script:ControlIdentity.Name}
+    $request=@{Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
     $mappingPath=Join-Path $directory 'airtable-master.txt'
     if(Test-Path $mappingPath) { $request.MasterAccount=(Get-Content $mappingPath -Raw).Trim() }
     if($Mode -eq 'accounts') {
@@ -2153,6 +2177,11 @@ function Start-Worker14 {
 }
 function Poll-Worker14 {
     if(-not $script:Worker14) {
+        $manualPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-manual.json'
+        if(Test-Path $manualPath) {
+            try { Start-ManualSync15 } catch { $script:Sync14='Sync failed: '+$_.Exception.Message }
+            return
+        }
         $retryPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-pending.json'
         if([DateTime]::UtcNow -gt $script:RetryAfter14 -and (Test-Path $retryPath)) {
             $script:RetryAfter14=[DateTime]::UtcNow.AddSeconds(30)
@@ -2190,7 +2219,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '15.0-preview.4'
+$script:ControlVersion = '15.0-preview.5'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2355,7 +2384,7 @@ function Invoke-ControlCommand {
         throw 'Agent is busy, scheduled, active, or closing.'
     }
     if ($Pending.Command -eq 'prepare') {
-        if(Test-Path (Join-Path $controlDirectory 'sync-pending.json')) { throw 'Post-trade sync is pending. Retry Airtable Sync before preparing another trade.' }
+        if(Test-Path (Join-Path $controlDirectory 'sync-pending.json')) { throw 'Post-trade sync is pending. Sync Airtable Now before preparing another trade.' }
         $null=Assert-Idle14
         $account14=[string]$request.account
         $qty14=0
@@ -2436,6 +2465,7 @@ $controlTimer.Interval = 50
 $controlTimer.Add_Tick({
     if ($null -eq $script:ControlGateway) { return }
     Poll-Worker14
+    if($syncStatus15) { $syncStatus15.Text=$script:Sync14 }
     # Cached status is served on a TLS worker even while the UI is busy with NinjaTrader.
     $script:ControlGateway.Publish(((Get-ControlStatus) | ConvertTo-Json -Compress -Depth 5))
     $cachedPeer = Get-CachedStatus
@@ -2468,7 +2498,7 @@ $form.Add_FormClosed({
     if ($null -ne $script:ControlGateway) { $script:ControlGateway.Dispose() }
 })
 
-$controlGroup.Height=190
+$controlGroup.Height=220
 $master14=New-Object System.Windows.Forms.TextBox
 $master14.Location=New-Object Drawing.Point(15,95)
 $master14.Size=New-Object Drawing.Size(210,25)
@@ -2492,15 +2522,13 @@ $saveMaster14.Add_Click({
 })
 $controlGroup.Controls.Add($saveMaster14)
 $retry14=New-Object System.Windows.Forms.Button
-$retry14.Text='Retry Airtable Sync'
+$retry14.Text='Sync Airtable Now'
 $retry14.Location=New-Object Drawing.Point(15,132)
 $retry14.Size=New-Object Drawing.Size(180,30)
 $retry14.Add_Click({
  try {
-  $pendingPath14=Join-Path $controlDirectory 'sync-pending.json'
-  if(Test-Path $pendingPath14) { $script:RetryTrade14=(Get-Content $pendingPath14 -Raw | ConvertFrom-Json).tradeId }
-  if(-not $script:RetryTrade14) { throw 'No pending post-trade export.' }
-  Start-Worker14 -Mode 'export' -TradeId $script:RetryTrade14
+  Request-ManualSync15
+  $syncStatus15.Text=$script:Sync14
  } catch { Show-ErrorMessage $_.Exception.Message }
 })
 $controlGroup.Controls.Add($retry14)
@@ -2511,5 +2539,11 @@ $setup14.Location=New-Object Drawing.Point(240,132)
 $setup14.Size=New-Object Drawing.Size(175,30)
 $setup14.Add_Click({ try { Start-Worker14 -Mode 'setup' } catch { Show-ErrorMessage $_.Exception.Message } })
 $controlGroup.Controls.Add($setup14)
+
+$syncStatus15=New-Object System.Windows.Forms.Label
+$syncStatus15.Text=$script:Sync14
+$syncStatus15.Location=New-Object Drawing.Point(15,170)
+$syncStatus15.Size=New-Object Drawing.Size(570,42)
+$controlGroup.Controls.Add($syncStatus15)
 
 [void]$form.ShowDialog()

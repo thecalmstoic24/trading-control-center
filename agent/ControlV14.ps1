@@ -63,13 +63,37 @@ function Get-Accounts14 {
         return @($names)
     } finally { if($expand) { $expand.Collapse() } }
 }
+function Test-SyncDesktopBusy15 {
+    return [bool]($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:PendingVerification -or $script:CloseCheck -or $script:Worker14)
+}
+function Request-ManualSync15 {
+    $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
+    $path=Join-Path $directory 'sync-manual.json'
+    @{requestedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content ($path+'.tmp') -Encoding UTF8
+    Move-Item ($path+'.tmp') $path -Force
+    $script:Sync14='Sync requested; waiting for trading automation to release the desktop.'
+    Start-ManualSync15
+}
+function Start-ManualSync15 {
+    $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
+    $path=Join-Path $directory 'sync-manual.json'
+    if(-not (Test-Path $path) -or (Test-SyncDesktopBusy15)) { return }
+    $pending=Join-Path $directory 'sync-pending.json'
+    $id=[guid]::NewGuid().ToString('N')
+    if(Test-Path $pending) { $id=[string](Get-Content $pending -Raw | ConvertFrom-Json).tradeId }
+    if($id -notmatch '^[a-f0-9]{32}$') { throw 'Pending sync ID is invalid. Check the sync log.' }
+    Start-Worker14 -Mode 'export' -TradeId $id -FreshExport
+    Remove-Item $path -ErrorAction SilentlyContinue
+}
 function Start-Worker14 {
-    param([string]$Mode,[string]$TradeId='')
-    $null=Assert-Idle14
+    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport)
+    if($Mode -eq 'export') {
+        if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
+    } else { $null=Assert-Idle14 }
     Invalidate-Preparation
     $script:ControlPreparedId=''
     $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
-    $request=@{Mode=$Mode;TradeId=$TradeId;MasterAccount=$script:ControlIdentity.Name}
+    $request=@{Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
     $mappingPath=Join-Path $directory 'airtable-master.txt'
     if(Test-Path $mappingPath) { $request.MasterAccount=(Get-Content $mappingPath -Raw).Trim() }
     if($Mode -eq 'accounts') {
@@ -94,6 +118,11 @@ function Start-Worker14 {
 }
 function Poll-Worker14 {
     if(-not $script:Worker14) {
+        $manualPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-manual.json'
+        if(Test-Path $manualPath) {
+            try { Start-ManualSync15 } catch { $script:Sync14='Sync failed: '+$_.Exception.Message }
+            return
+        }
         $retryPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-pending.json'
         if([DateTime]::UtcNow -gt $script:RetryAfter14 -and (Test-Path $retryPath)) {
             $script:RetryAfter14=[DateTime]::UtcNow.AddSeconds(30)
