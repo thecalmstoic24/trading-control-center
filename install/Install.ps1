@@ -9,8 +9,14 @@ $source = Split-Path $PSScriptRoot -Parent
 
 function Protect-Directory([string]$Path) {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    # Load and persist ONLY the DACL. The PowerShell Set-Acl provider can attempt
+    # an audit/SACL write requiring SeSecurityPrivilege, especially on reinstall.
+    # Preserve the existing owner, group and audit policy.
+    $acl = [IO.Directory]::GetAccessControl($Path, [Security.AccessControl.AccessControlSections]::Access)
     $acl.SetAccessRuleProtection($true, $false)
+    foreach ($existing in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+        $acl.RemoveAccessRuleSpecific($existing)
+    }
     $rights = [Security.AccessControl.FileSystemRights]::FullControl
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,
@@ -20,7 +26,7 @@ function Protect-Directory([string]$Path) {
             [Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
         $acl.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    [IO.Directory]::SetAccessControl($Path, $acl)
 }
 function Add-DesktopShortcut([string]$Name,[string]$Script) {
     $shell = New-Object -ComObject WScript.Shell
@@ -32,7 +38,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Trading Control Center - Windows Setup'
+$form.Text = 'Trading Control Center - Windows Setup (permission fix 1)'
 $form.ClientSize = New-Object Drawing.Size(650,610)
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object Drawing.Font('Segoe UI',10)
