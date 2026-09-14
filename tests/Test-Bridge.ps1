@@ -67,3 +67,23 @@ try {
  Check $rejected 'Expired account list accepted'
  'V14 bridge: exact account membership, selected quantity, invalid quantity and stale list rejection passed.'
 } finally { Remove-Item $script:controlDirectory -Recurse -Force }
+# Discovery without any Airtable credentials must retain unmatched NinjaTrader accounts.
+$extensionAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../agent/ControlV15.ps1'),[ref]$tokens,[ref]$errors)
+$start=$extensionAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-Worker14'},$true)
+Invoke-Expression $start.Extent.Text
+$previousLocalAppData=$env:LOCALAPPDATA
+$testData=Join-Path ([IO.Path]::GetTempPath()) ('v15-discovery-'+[guid]::NewGuid().ToString('N'))
+try {
+ $env:LOCALAPPDATA=$testData
+ New-Item (Join-Path $testData 'TradingControlCenter/agent-data') -ItemType Directory -Force | Out-Null
+ Reset-Test
+ $script:ControlIdentity=@{Name='MFF-LOCDAO'}
+ $script:Worker14=$null
+ Start-Worker14 -Mode 'accounts'
+ Check ($script:Accounts14 -ccontains 'MFF-123') 'Missing Airtable login hid a NinjaTrader account'
+ Check ($script:MatchStatus15 -ceq 'unknown') 'Unavailable Airtable matching was reported as definitive'
+ Check ($null -eq $script:Worker14) 'Missing token unnecessarily launched a worker'
+ Invoke-ControlCommand (Pending 'post_trade' @{tradeId=('d'*32)}) | Out-Null
+ Check ($script:Sync14 -match 'no verified Airtable match') 'Unmatched account incorrectly started an upload'
+ 'V15: credential-free discovery retains all accounts; unmatched post-trade sync is explicit.'
+} finally { $env:LOCALAPPDATA=$previousLocalAppData; Remove-Item $testData -Recurse -Force }

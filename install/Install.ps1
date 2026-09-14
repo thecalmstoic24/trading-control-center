@@ -2,7 +2,7 @@
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '14.0-preview.1'
+$version = '15.0-dev.1'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
@@ -38,7 +38,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Trading Control Center - V14 Multiple Pair Setup'
+$form.Text = 'Trading Control Center - V15 Multiple Pair Setup'
 $form.ClientSize = New-Object Drawing.Size(650,740)
 $form.StartPosition = 'CenterScreen'
 $form.AutoScroll = $true
@@ -78,7 +78,7 @@ $status=LabelAt 'Ready. This installer will not submit any trade.' 650
 $role.Add_SelectedIndexChanged({
     $agent = $role.SelectedIndex -gt 0
     $hostBox.Enabled=$agent; $sourceBox.Enabled=$agent; $check.Enabled=$agent; $nameBox.Enabled=$agent; $peerBox.Enabled=$agent
-    $notice.Text = $(if($agent){'V14 supports selected accounts and quantities and uses TLS for selected peer connections. Previous releases are kept for rollback.'}else{'Install here on your Windows 11 third computer. The dashboard opens in your normal browser.'})
+    $notice.Text = $(if($agent){'V15 supports selected accounts and quantities and uses TLS for selected peer connections. Previous releases are kept for rollback.'}else{'Install here on your Windows 11 third computer. The dashboard opens in your normal browser.'})
 })
 $hostBox.Enabled=$false; $sourceBox.Enabled=$false; $check.Enabled=$false; $nameBox.Enabled=$false; $peerBox.Enabled=$false
 $identityFile=Join-Path $base 'agent-data\identity.clixml'
@@ -189,7 +189,7 @@ $install.Add_Click({
             $firewall=Join-Path $destination 'install\Allow-Control-Connection.ps1'
             $process=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$firewall+'" -SourceAddress '+((@($sourceAddress)+$peers | Select-Object -Unique) -join ','))
             if($process.ExitCode -ne 0){throw 'Firewall configuration failed. Installation files are present; rerun setup to finish.'}
-            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v14.ps1'
+            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v15.ps1'
             Add-DesktopShortcut ('Trading Agent - '+$name) $scriptFile
             Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Agent starts automatically. Copy its connection code into the VM registry on your third computer.'

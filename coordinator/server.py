@@ -23,7 +23,7 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '14.0-preview.1'
+VERSION = '15.0-dev.1'
 AGENT_VERSIONS = {VERSION}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
@@ -265,7 +265,7 @@ class Center:
             observation = dict(online=bool(valid), fresh=fresh, received=time.monotonic(),
                                ageMs=total_age if math.isfinite(total_age) else 999999,
                                rttMs=response.get('_rttMs'), state=state if valid else {},
-                               error='' if valid else 'Agent identity/version mismatch; install V14 on this VM before using multiple pairs.')
+                               error='' if valid else 'Agent identity/version mismatch; install V15 on this VM before using multiple pairs.')
         except Exception as exc:
             observation = dict(online=False, fresh=False, received=time.monotonic(), ageMs=999999,
                                state={}, rttMs=None, error=f'Connection unavailable ({type(exc).__name__}).')
@@ -317,7 +317,7 @@ class Center:
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
-                    accounts=s.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    accounts=s.get('accounts', ['Sim101']), matchedAccounts=s.get('matchedAccounts', []), matchStatus=s.get('matchStatus', 'unknown'), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
                     selectedAccount=s.get('selectedAccount', 'Sim101'), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -601,7 +601,7 @@ class Fleet:
                     pair.mark_active()
                 pair.save_fleet()
             self.save_index()
-        # A retained root marker protects a V12 rollback; V14 uses per-pair markers.
+        # A retained root marker protects a V12 rollback; V15 uses per-pair markers.
         self.catalog.pair = ()
         self.catalog.active = False
 

@@ -120,9 +120,10 @@ function render(s){
       const side=['left','right'][i], select=$(side+'-account');
       const wanted=restoringDraft?drafts[pair.id].values[fields.indexOf(side+'-account')]:initialized?select.value:(drafts[pair.id]?.values[fields.indexOf(side+'-account')]||pair.settings.accounts?.[a.id]||'Sim101');
       const values=[...new Set(['Sim101',...(a.accounts||[]),wanted])];
-      if(select.dataset?.key!==JSON.stringify(values)){
-        select.replaceChildren();for(const value of values){const o=document.createElement('option');o.value=value;o.textContent=value; o.disabled=value!=='Sim101'&&!(a.accounts||[]).includes(value);select.append(o);}
-        if(select.dataset)select.dataset.key=JSON.stringify(values);select.value=wanted;
+      const accountKey=JSON.stringify([values,a.matchedAccounts,a.matchStatus]);
+      if(select.dataset?.key!==accountKey){
+        select.replaceChildren();for(const value of values){const o=document.createElement('option');o.value=value;o.textContent=value+(value==='Sim101'?' — simulation':(a.matchedAccounts||[]).includes(value)?' — Airtable matched':a.matchStatus==='checked'?' — not matched':' — Airtable unknown'); o.disabled=value!=='Sim101'&&!(a.accounts||[]).includes(value);select.append(o);}
+        if(select.dataset)select.dataset.key=accountKey;select.value=wanted;
       }
       if(!initialized)$(side+'-quantity').value=pair.settings.quantities?.[a.id]||1;
       $(side+'-account-message').textContent=a.accountMessage||'Refresh accounts to read NinjaTrader and Airtable.';

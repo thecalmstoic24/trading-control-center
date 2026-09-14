@@ -13,10 +13,10 @@ assert source.count(anchor) == 1
 bridge = (ROOT / 'agent' / 'ControlBridge.ps1').read_text(encoding='utf-8-sig')
 from upgrade_v14 import upgrade
 source = upgrade(source)
-extension = (ROOT / 'agent' / 'ControlV14.ps1').read_text(encoding='utf-8-sig')
+extension = (ROOT / 'agent' / 'ControlV15.ps1').read_text(encoding='utf-8-sig')
 bridge = extension + '\n' + bridge
 output = source.replace(anchor, bridge + '\n' + anchor)
-target = ROOT / 'agent' / 'Control_VM_Agent_v14.ps1'
+target = ROOT / 'agent' / 'Control_VM_Agent_v15.ps1'
 target.write_text(output, encoding='utf-8-sig')  # Windows PowerShell 5.1 needs BOM for Unicode.
 assert output.replace(bridge + '\n' + anchor, anchor) == source
 
@@ -36,7 +36,7 @@ with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
 payload = archive.getvalue()
 sha = hashlib.sha256(payload).hexdigest()
 b64 = base64.b64encode(payload).decode()
-wrapper = '''# Trading Control Center v14 preview - self-contained Windows setup
+wrapper = '''# Trading Control Center v15 development - self-contained Windows setup
 $ErrorActionPreference = 'Stop'
 try {
     $bytes = [Convert]::FromBase64String('__PAYLOAD__')
@@ -59,7 +59,7 @@ try {
 '''.replace('__PAYLOAD__', b64).replace('__SHA__', sha)
 release = ROOT / 'release'
 release.mkdir(exist_ok=True)
-installer = release / 'Setup_Trading_Control_Center_v14.ps1'
+installer = release / 'Setup_Trading_Control_Center_v15.ps1'
 installer.write_text(wrapper, encoding='utf-8-sig')
 print('Payload SHA256:', sha)
 print('Installer SHA256:', hashlib.sha256(installer.read_bytes()).hexdigest())

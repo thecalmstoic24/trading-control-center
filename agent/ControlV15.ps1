@@ -2,7 +2,9 @@
 $script:PeerAccount14 = 'Sim101'
 $script:PeerQuantity14 = 1
 $script:Accounts14 = @('Sim101')
-$script:AccountMessage14 = 'Refresh accounts to discover NinjaTrader / Airtable matches.'
+$script:AccountMessage14 = 'Refresh accounts to read the NinjaTrader dropdown.'
+$script:MatchedAccounts15=@()
+$script:MatchStatus15='unknown'
 $script:Sync14 = 'Post-trade sync ready'
 $script:Worker14 = $null
 $script:WorkerMode14 = ''
@@ -74,8 +76,20 @@ function Start-Worker14 {
     if(Test-Path $mappingPath) { $request.MasterAccount=(Get-Content $mappingPath -Raw).Trim() }
     if($Mode -eq 'accounts') {
         $script:Accounts14=@('Sim101');$script:AccountStamp14=[DateTime]::MinValue
-        $request.Accounts=@(Get-Accounts14)
-        $script:AccountMessage14='Reading current Airtable account matches...'
+        $script:MatchedAccounts15=@();$script:MatchStatus15='unknown'
+        try { $request.Accounts=@(Get-Accounts14) } catch {
+            $script:AccountMessage14='NinjaTrader discovery failed: '+$_.Exception.Message
+            throw
+        }
+        $script:Accounts14=@($request.Accounts)
+        $script:AccountStamp14=[DateTime]::UtcNow
+        $script:AccountMessage14=([string]$script:Accounts14.Count)+' NinjaTrader accounts found. Checking optional Airtable matches...'
+        # No Airtable login is needed to use a discovered NinjaTrader account.
+        $loginPath=Join-Path $env:LOCALAPPDATA 'NT-Airtable\token.dat'
+        if(-not (Test-Path $loginPath)) {
+            $script:AccountMessage14=([string]$script:Accounts14.Count)+' NinjaTrader accounts available. Airtable not configured; trading selection is available.'
+            return
+        }
     }
     $requestPath=Join-Path $directory 'worker-request.json'
     $script:WorkerResult14=Join-Path $directory 'worker-result.json'
@@ -114,11 +128,11 @@ function Poll-Worker14 {
         $result=Get-Content $script:WorkerResult14 -Raw | ConvertFrom-Json
         if(-not $result.ok) { throw [string]$result.error }
         if($mode -eq 'accounts') {
-            $script:Accounts14=@('Sim101')+@($result.accounts | Where-Object { $_ -cne 'Sim101' })
-            $script:AccountStamp14=[DateTime]::UtcNow
-            $script:AccountMessage14=[string]$result.message
+            $script:MatchedAccounts15=@($result.accounts)
+            $script:MatchStatus15='checked'
+            $script:AccountMessage14=([string]$script:Accounts14.Count)+' NinjaTrader accounts available. '+[string]$result.message
         } else { $script:Sync14=[string]$result.message }
     } catch {
-        if($mode -eq 'accounts') { $script:AccountMessage14=$_.Exception.Message } else { $script:Sync14='Sync failed: '+$_.Exception.Message }
+        if($mode -eq 'accounts') { $script:AccountMessage14='NinjaTrader accounts remain selectable. Airtable match check failed: '+$_.Exception.Message } else { $script:Sync14='Sync failed: '+$_.Exception.Message }
     }
 }

@@ -4,12 +4,12 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '14.0-preview.1'
+$script:ControlVersion = '15.0-dev.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
 $agentNameInput.Text = $script:ControlIdentity.Name
-$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V14 account selection"
+$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V15 account selection"
 $heading.Text = "Trading Agent - $($script:ControlIdentity.Name)"
 $portInput.Value = 8789
 $peerPortInput.Value = 8789
@@ -69,6 +69,8 @@ function Get-ControlStatus {
     $state['pairActive'] = $script:PairCoordinatorActive
     $state['busy'] = $script:Busy -or ($null -ne $script:Worker14)
     $state['accounts'] = @($script:Accounts14)
+    $state['matchedAccounts'] = @($script:MatchedAccounts15)
+    $state['matchStatus'] = $script:MatchStatus15
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
     $state['selectedAccount'] = $script:LockedAccount
@@ -101,6 +103,10 @@ function Invoke-ControlCommand {
     if ($Pending.Command -eq 'accounts') { Start-Worker14 -Mode 'accounts'; return @{ok=$true;message='Reading account list.'} }
     if ($Pending.Command -eq 'post_trade') {
         if([string]$request.tradeId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid trade ID.' }
+        if($script:MatchStatus15 -cne 'checked' -or $script:MatchedAccounts15 -cnotcontains $script:LockedAccount) {
+            $script:Sync14='Not synced: selected account has no verified Airtable match.'
+            return @{ok=$true;message=$script:Sync14}
+        }
         $script:RetryTrade14=[string]$request.tradeId
         Start-Worker14 -Mode 'export' -TradeId $script:RetryTrade14
         return @{ok=$true;message='Export started.'}
@@ -174,7 +180,7 @@ function Invoke-ControlCommand {
         $qty14=0
         if(-not [int]::TryParse([string]$request.quantity,[ref]$qty14) -or $qty14 -lt 1 -or $qty14 -gt 1000) { throw 'Quantity must be a whole number from 1 to 1000.' }
         if($account14 -cne 'Sim101') {
-            if(([DateTime]::UtcNow-$script:AccountStamp14).TotalMinutes -gt 5 -or $script:Accounts14 -cnotcontains $account14) { throw 'Refresh accounts first. Choose a current Airtable / NinjaTrader match.' }
+            if(([DateTime]::UtcNow-$script:AccountStamp14).TotalMinutes -gt 5 -or $script:Accounts14 -cnotcontains $account14) { throw 'Refresh accounts first. Choose an account from the current NinjaTrader dropdown.' }
         }
         $available14=@(Get-Accounts14)
         if($available14 -cnotcontains $account14) { throw 'Selected account is no longer in NinjaTrader.' }
@@ -296,7 +302,7 @@ $saveMaster14.Add_Click({
   $null=Assert-Idle14
   if([string]::IsNullOrWhiteSpace($master14.Text)) { throw 'Enter Airtable Master Account.' }
   $master14.Text.Trim() | Set-Content $masterPath14 -Encoding UTF8
-  $script:Accounts14=@('Sim101');$script:AccountStamp14=[DateTime]::MinValue
+  $script:MatchedAccounts15=@();$script:MatchStatus15='unknown'
   Invalidate-Preparation;$script:ControlPreparedId=''
   $connectionStatus.Text='Master Account saved. Refresh accounts in the browser.'
  } catch { Show-ErrorMessage $_.Exception.Message }
