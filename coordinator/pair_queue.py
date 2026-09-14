@@ -152,13 +152,19 @@ class PairQueue:
 
     def add(self, body):
         with self.io:
+            draft_key = body.get('draftKey')
+            if draft_key is not None:
+                if not isinstance(draft_key,str) or not re.fullmatch('[a-f0-9]{32}',draft_key):
+                    raise ValueError('Invalid draft identity.')
+                existing = next((r for r in self.rows if r['key']==draft_key),None)
+                if existing: return existing['id']
             spec = self.validate(body)
             remote = self.store.records(PAIR_TABLE)
             maximum = max([int(r.get('fields', {}).get('Pair ID', '')[5:]) for r in remote
                            if re.fullmatch(r'PAIR-\d+', r.get('fields', {}).get('Pair ID', ''))] or [0])
             with self.lock:
                 number = max(self.next_id, maximum + 1); self.next_id = number + 1
-                row = dict(id=f'PAIR-{number:04d}', key=uuid.uuid4().hex, spec=spec, status='Queued',
+                row = dict(id=f'PAIR-{number:04d}', key=draft_key or uuid.uuid4().hex, spec=spec, status='Queued',
                            message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
                 self.rows.append(row); self.save()
             try: self.sync(row)

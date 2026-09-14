@@ -68,6 +68,18 @@ class QueueTests(unittest.TestCase):
     def flat(self,pair):
         for s in module.IDS:self.agent.states[s].update(position='Flat',pairActive=False,prepared=False)
         pair.refresh_both()
+    def test_repeated_draft_confirmation_creates_one_pair(self):
+        body={**self.body,'draftKey':'a'*32}
+        first=self.queue.add(body)
+        self.assertEqual(self.queue.add(body),first)
+        self.assertEqual(len(self.queue.rows),1)
+        self.assertEqual(len(self.store.rows),1)
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+
+    def test_invalid_draft_identity_rejected(self):
+        with self.assertRaises(ValueError): self.queue.add({**self.body,'draftKey':'invalid'})
+        self.assertEqual(self.queue.rows,[])
+
     def test_no_entry_until_start_and_four_digit_ids(self):
         self.assertEqual(self.queue.add(self.body),'PAIR-0001');self.queue.tick()
         self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))

@@ -23,7 +23,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));
  await page.locator('#tab-planning').click();
  await page.locator('#planning-table tbody tr').first().waitFor();
- const accounts=()=>page.locator('#planning-table tbody tr td:nth-child(2)').allTextContents();
+ const accounts=()=>page.locator('#planning-table tbody tr td:nth-child(4)').allTextContents();
  assert.deepEqual(await accounts(),['A','B']);
  await page.getByRole('button',{name:'Move row 1 down',exact:true}).click();
  assert.deepEqual(await accounts(),['B','A']);
@@ -35,14 +35,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.deepEqual(await accounts(),['B','A']);
  await page.locator('#planning-panel summary').click();
  await page.getByLabel('Balance',{exact:true}).uncheck();
- assert.equal(await page.locator('#planning-table th').count(),2);
+ assert.equal(await page.locator('#planning-table th').count(),4);
  await page.locator('#planning-refresh').click();
  await page.waitForFunction(()=>document.querySelectorAll('#planning-table tbody tr').length===3);
  assert.deepEqual(await accounts(),['B','A','C']);
  await page.reload();await page.locator('#tab-planning').click();
  await page.waitForFunction(()=>document.querySelectorAll('#planning-table tbody tr').length===3);
  assert.deepEqual(await accounts(),['B','A','C']);
- assert.equal(await page.locator('#planning-table th').count(),2);
+ assert.equal(await page.locator('#planning-table th').count(),4);
  await page.locator('#planning-table tbody tr').nth(2).dragTo(page.locator('#planning-table tbody tr').first());
  assert.deepEqual(await accounts(),['C','B','A']);
  await page.locator('#tab-trading').click();assert.equal(await page.locator('#trading-panel').isVisible(),true);

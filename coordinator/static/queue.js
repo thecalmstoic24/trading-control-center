@@ -30,7 +30,7 @@
     if(!data.rows.length){const tr=node('tr'),td=node('td','No planned pairs yet. Choose Plan a pair to add one.');td.colSpan=10;tr.append(td);body.append(tr);}
     table.append(body);
   }
-  async function poll(){if(busy)return;busy=true;try{data=await api('/api/queue');render();}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
+  async function poll(){if(busy)return;busy=true;try{data=await api('/api/queue');render();window.dispatchEvent(new CustomEvent('queue-updated',{detail:data}));}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
   function accounts(side){const vm=fleet.find(v=>v.id===el('queue-'+side).value),select=el('queue-'+side+'-account');select.replaceChildren();for(const a of vm?.accounts||['Sim101']){const o=node('option',a);o.value=a;select.append(o);}select.value='Sim101';}
   el('queue-add').onclick=async()=>{
     try{fleet=(await api('/api/state')).fleet;for(const side of ['left','right']){const select=el('queue-'+side);select.replaceChildren();for(const vm of fleet){const o=node('option',vm.name);o.value=vm.id;select.append(o);}if(side==='right'&&fleet[1])select.value=fleet[1].id;accounts(side);}el('queue-form-status').textContent='';el('queue-dialog').showModal();}catch(e){el('queue-status').textContent=e.message;}
@@ -47,5 +47,5 @@
     try{await api('/api/queue/add',body);el('queue-dialog').close();await poll();}catch(err){el('queue-form-status').textContent=err.message;}finally{el('queue-save').disabled=false;}
   };
   el('queue-start').onclick=()=>action('start');el('queue-pause').onclick=()=>action('pause');el('queue-retry').onclick=()=>action('retry');
-  setInterval(poll,3000);poll();
+  window.addEventListener('queue-refresh',poll);setInterval(poll,3000);poll();
 })();

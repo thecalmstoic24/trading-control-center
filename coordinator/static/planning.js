@@ -26,6 +26,16 @@
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
   if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile};return;}
   const el=id=>document.getElementById(id);
+  const selected=new Set();let usage={};
+  window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();renderTable();}};
+  window.addEventListener('account-usage',e=>{usage=e.detail;decorate();});
+  function decorate(){
+    for(const tr of el('planning-table').querySelectorAll('tbody tr[data-record]')){
+      const u=usage[tr.dataset.account]||{};tr.classList.toggle('account-used',!!u.used);
+      const td=tr.querySelector('.usage-cell');td.replaceChildren();
+      if(u.status){const badge=document.createElement('span');badge.className='account-badge '+u.status.toLowerCase();badge.textContent=u.status;td.append(badge);}
+    }
+  }
   let layout={hidden:[],order:[],sort:null};
   try{
     const saved=JSON.parse(localStorage.getItem(key));
@@ -43,15 +53,15 @@
   function renderColumns(){
     const container=el('planning-columns');container.replaceChildren();
     for(const column of data.columns){
-      const label=node('label'),box=node('input');box.type='checkbox';box.checked=!layout.hidden.includes(column.name);
+      const label=node('label'),box=node('input');box.type='checkbox';box.checked=column.name==='id'||!layout.hidden.includes(column.name);box.disabled=column.name==='id';
       box.onchange=()=>{layout.hidden=layout.hidden.filter(n=>n!==column.name);if(!box.checked)layout.hidden.push(column.name);save();renderTable();};
       label.append(box,document.createTextNode(' '+column.name));container.append(label);
     }
   }
   function renderTable(){
     const table=el('planning-table');table.replaceChildren();
-    const cols=data.columns.filter(c=>!layout.hidden.includes(c.name));
-    const head=node('thead'),hr=node('tr');hr.append(node('th','Order'));
+    const cols=data.columns.filter(c=>c.name==='id'||!layout.hidden.includes(c.name)).sort((a,b)=>(a.name==='id'?-1:b.name==='id'?1:0));
+    const head=node('thead'),hr=node('tr');hr.append(node('th','Select'),node('th','Order'),node('th','Pair status'));
     for(const c of cols){
       const th=node('th'),active=layout.sort?.name===c.name;
       th.setAttribute('aria-sort',active?(layout.sort.direction===1?'ascending':'descending'):'none');
@@ -61,7 +71,9 @@
     head.append(hr);table.append(head);const body=node('tbody');
     const rows=ordered(data.rows,layout,data.columns);
     rows.forEach((row,i)=>{
-      const tr=node('tr');tr.draggable=!layout.sort;
+      const tr=node('tr');tr.draggable=!layout.sort;tr.dataset.record=row.id;tr.dataset.account=display(row.fields.id);
+      const select=node('td'),box=node('input');box.type='checkbox';box.checked=selected.has(row.id);box.setAttribute('aria-label','Select '+display(row.fields.id));
+      box.onchange=()=>{if(box.checked)selected.add(row.id);else selected.delete(row.id);};select.className='account-select';select.append(box);tr.append(select);
       tr.ondragstart=e=>{dragId=row.id;e.dataTransfer.setData('text/plain',row.id);e.dataTransfer.effectAllowed='move';};
       tr.ondragover=e=>{if(!layout.sort)e.preventDefault();};
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
@@ -70,10 +82,10 @@
         const b=node('button',label);b.className='quiet';b.disabled=!!layout.sort||!rows[i+delta];b.setAttribute('aria-label',`Move row ${i+1} ${delta<0?'up':'down'}`);
         b.onclick=()=>{move(row.id,rows[i+delta].id);const buttons=table.querySelectorAll('tbody tr');buttons[i+delta]?.querySelector('button')?.focus();};order.append(b);
       }
-      tr.append(order);for(const c of cols)tr.append(node('td',display(row.fields[c.name])));body.append(tr);
+      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order,usageCell);for(const c of cols)tr.append(node('td',display(row.fields[c.name])));body.append(tr);
     });
-    if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+1;tr.append(td);body.append(tr);}
-    table.append(body);el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
+    if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
+    table.append(body);decorate();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
   }
   async function poll(){
     if(polling)return;polling=true;
@@ -91,6 +103,7 @@
   }
   for(const tab of ['trading','planning'])el('tab-'+tab).onclick=()=>{
     for(const name of ['trading','planning']){el(name+'-panel').hidden=name!==tab;el('tab-'+name).setAttribute('aria-selected',String(name===tab));}
+    document.querySelector('main').classList.toggle('planning-wide',tab==='planning');
     if(tab==='planning')poll();
   };
   el('planning-refresh').onclick=()=>refresh();

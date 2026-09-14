@@ -1,0 +1,57 @@
+const {chromium}=require('playwright');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.TCC_BROWSER_PATH,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],writes=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ const rows=['MFF-A','LCD-B','MFF-C','LCD-E'].map((a,i)=>({id:'rec'+i,fields:{id:a,'Master Account':a.startsWith('MFF')?'MFF-LOCDAO':'LCD-LOCDAO',CurrentBalance:50000,'Realized PnL':0}}));
+ const fleet=['mff','lcd'].map((id,i)=>({id,name:id.toUpperCase()+'-LOCDAO',accounts:['Sim101',...rows.filter(r=>r.fields.id.startsWith(id.toUpperCase())).map(r=>r.fields.id)],fresh:true,position:'Flat',lastKnown:{position:'Flat'},configured:true}));
+ const state={fleet,pairs:[],events:[]},queue={rows:[],running:false,message:'Queue paused.'};
+ let fail=false;
+ await page.route('http://127.0.0.1:8788/**',async route=>{
+  const req=route.request(),url=new URL(req.url());let result;
+  if(req.method()==='POST'){
+   const b=req.postDataJSON();writes.push({path:url.pathname,body:b});
+   if(url.pathname==='/api/queue/add'){
+    if(fail)return route.fulfill({status:400,json:{error:'Connection unavailable. Retry.'}});
+    queue.rows.push({id:'PAIR-0001',key:b.draftKey,status:'Queued',message:'Waiting',spec:{...b,masters:{mff:'MFF-LOCDAO',lcd:'LCD-LOCDAO'}}});
+   }result={ok:true};
+  }else if(url.pathname==='/api/state')result=state;
+  else if(url.pathname==='/api/queue')result=queue;
+  else if(url.pathname==='/api/planning')result={rows,columns:Object.keys(rows[0].fields).map(name=>({name})),updatedAt:1,error:'',busy:false};
+  if(result)return route.fulfill({json:result});
+  const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
+  await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+ });
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-planning').click();
+ await page.getByRole('checkbox',{name:'Select MFF-A',exact:true}).check();await page.locator('#draft-left').click();
+ await page.getByRole('checkbox',{name:'Select LCD-B',exact:true}).check();await page.locator('#draft-right').click();
+ await page.getByRole('checkbox',{name:'Select MFF-C',exact:true}).check();await page.locator('#draft-left').click();
+ await page.getByRole('checkbox',{name:'Select LCD-E',exact:true}).check();await page.locator('#draft-right').click();
+ assert.equal(await page.locator('.draft-card').count(),2);assert.equal(await page.locator('#planning-table tr.account-used').count(),4);
+ assert.equal(writes.filter(w=>w.path==='/api/queue/add').length,0);
+ const first=page.locator('.draft-card').first();await first.locator('[data-field=stopLoss]').fill('900');await first.locator('[data-field=profit]').fill('1200');await first.locator('[data-field=leftQuantity]').fill('3');
+ // Drafts and settings survive a browser reload.
+ await page.reload();await page.locator('#tab-planning').click();await page.locator('.draft-card').first().waitFor();
+ assert.equal(await page.locator('.draft-card').count(),2);assert.equal(await first.locator('[data-field=stopLoss]').inputValue(),'900');
+ fail=true;await first.getByRole('button',{name:'Confirm pair',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('.draft-error').textContent.includes('Connection unavailable'));
+ assert.equal(await page.locator('.draft-card').count(),2);
+ fail=false;await first.getByRole('button',{name:'Confirm pair',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===1);
+ assert.ok((await page.locator('.draft-card').textContent()).includes('MFF-C'));assert.ok((await page.locator('.draft-card').textContent()).includes('LCD-E'));
+ await page.waitForFunction(()=>document.querySelectorAll('.account-badge.queue').length===2);
+ const sent=writes.filter(w=>w.path==='/api/queue/add');assert.equal(sent[0].body.draftKey,sent[1].body.draftKey);assert.equal(sent[1].body.quantities.mff,3);
+ // Active status wins over Queue, then returns to Queue, then clears on completion.
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fleet-updated',{detail:{fleet:[],pairs:[{active:true,settings:{accounts:{left:'MFF-A',right:'LCD-B'}}}]}})));
+ assert.equal(await page.locator('.account-badge.pairing').count(),2);
+ assert.equal(await page.locator('.account-badge.pairing').first().evaluate(e=>getComputedStyle(e).color),'rgb(255, 255, 255)');
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fleet-updated',{detail:{fleet:[],pairs:[]}})));
+ assert.equal(await page.locator('.account-badge.queue').count(),2);
+ const left=await page.locator('.planning-accounts').boundingBox(),right=await page.locator('.draft-panel').boundingBox();
+ assert.ok(left.width/right.width>2.9&&left.width/right.width<3.1);assert.ok(left.x<60);assert.ok(right.x>left.x+left.width);
+ await page.screenshot({path:'/tmp/planning-preview8.png',fullPage:true});
+ queue.rows[0].status='Complete';await page.evaluate(q=>window.dispatchEvent(new CustomEvent('queue-updated',{detail:q})),queue);
+ assert.equal(await page.locator('.account-badge').count(),0);assert.equal(await page.locator('#planning-table tr.account-used').count(),2);
+ assert.ok(!writes.some(w=>w.path==='/api/action'),'draft flow must never directly enter a trade');assert.deepEqual(errors,[]);
+ await browser.close();console.log('Draft planning browser passed: width, two drafts, highlights, persistence, retry, isolated confirm, badges and no trade commands.');
+})().catch(e=>{console.error(e);process.exit(1)});

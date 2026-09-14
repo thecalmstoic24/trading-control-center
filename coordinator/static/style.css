@@ -19,3 +19,19 @@
 @media(max-width:650px){.queue-inputs{grid-template-columns:1fr}}
 
 #queue-table td:first-child{white-space:nowrap}#queue-table th,#queue-table td{padding:10px;text-align:left}
+
+main.planning-wide{max-width:none;width:100%;padding:28px 24px}
+.planning-wide .intro{margin-bottom:18px}
+.planning-layout{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,1fr);gap:20px;align-items:start}
+.planning-accounts{min-width:0}.planning-accounts>h2{margin-top:0}
+.draft-panel{min-width:0;border:1px solid var(--line);border-radius:12px;padding:16px;background:#0d1721;max-height:80vh;overflow:auto;position:sticky;top:12px}
+.draft-panel h2{margin:0 0 8px;font-size:19px}.draft-add{display:flex;gap:8px;margin-top:12px}.draft-add button{flex:1;padding:12px 6px}
+#draft-message{font-size:12px;margin:12px 0}.draft-card{padding:14px 0;border-top:1px solid var(--line)}.draft-card h3{font-size:15px;margin:0 0 10px}
+.draft-card fieldset{border:0;padding:0;margin:0;min-width:0}.draft-account{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px}
+.draft-account p{overflow-wrap:anywhere;font-size:12px}.draft-card label{margin:9px 0}.draft-card input:not([type=checkbox]),.draft-card select{font-size:14px;padding:8px;width:100%;min-width:0}
+.draft-card button{padding:8px 12px;margin:6px 5px 0 0}.draft-card small{display:block;color:var(--muted);font-size:11px}.draft-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.draft-error{font-size:12px;color:#ff9b9b}
+#planning-table .account-select{min-width:50px;width:50px}#planning-table .account-select input{width:17px;height:17px;accent-color:#438ce5}
+#planning-table .usage-cell{min-width:95px}#planning-table tbody tr.account-used{background:#203b4d}#planning-table tbody tr.account-used:hover{background:#29495f}
+.account-badge{display:inline-block;border-radius:7px;padding:4px 10px;color:#fff;font-size:12px;font-weight:600;white-space:nowrap}.account-badge.pairing{background:#bd5100}.account-badge.queue{background:#2164ca}
+@media(max-width:1000px){.planning-layout{grid-template-columns:1fr}.draft-panel{position:static;max-height:none}main.planning-wide{padding:20px 12px}}
+.draft-card .draft-account{padding:8px;margin-bottom:0}.draft-card .draft-account button{font-size:11px;padding:4px 7px}.draft-card .draft-account select{font-size:12px}.draft-card .draft-account p{margin:4px 0;min-height:36px}.draft-card label{margin:6px 0}.draft-card .draft-error:empty{display:none}
