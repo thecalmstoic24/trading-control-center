@@ -43,7 +43,16 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.getByRole('button',{name:'Remove account MFF-A',exact:true}).click();
  assert.equal(await cards.nth(0).locator('[data-side=left].empty').count(),1);
  assert.equal(await cards.count(),2);
- await page.getByRole('checkbox',{name:'Select MFF-A',exact:true}).check();await page.locator('#draft-left').click();
+ await cards.nth(0).getByRole('button',{name:'+ Add selected account',exact:true}).click();
+ assert.match(await page.locator('#draft-message').textContent(),/exactly one/);
+ await page.getByRole('checkbox',{name:'Select MFF-A',exact:true}).check();
+ await cards.nth(0).getByRole('button',{name:'+ Add selected account',exact:true}).click();
+ assert.ok((await cards.nth(0).locator('[data-side=left]').textContent()).includes('MFF-A'));
+ assert.equal(await cards.count(),2);
+ await page.getByRole('button',{name:'Remove account LCD-E',exact:true}).click();
+ await page.getByRole('checkbox',{name:'Select LCD-E',exact:true}).check();
+ await cards.nth(1).locator('[data-side=right] strong').click();
+ assert.ok((await cards.nth(1).locator('[data-side=right]').textContent()).includes('LCD-E'));
  const beforeResize=await page.locator('.draft-panel').boundingBox();
  const divider=await page.locator('#planning-divider').boundingBox();
  await page.mouse.move(divider.x+4,divider.y+50);await page.mouse.down();await page.mouse.move(divider.x-180,divider.y+50);await page.mouse.up();

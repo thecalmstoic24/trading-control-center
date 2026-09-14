@@ -34,7 +34,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#planning-manual').click();
  assert.deepEqual(await accounts(),['B','A']);
  await page.locator('#planning-panel summary').click();
- await page.getByLabel('Balance',{exact:true}).uncheck();
+ await page.getByRole('checkbox',{name:'Balance',exact:true}).uncheck();
  assert.equal(await page.locator('#planning-table th').count(),4);
  await page.locator('#planning-refresh').click();
  await page.waitForFunction(()=>document.querySelectorAll('#planning-table tbody tr').length===3);
@@ -46,8 +46,13 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#planning-table tbody tr').nth(2).dragTo(page.locator('#planning-table tbody tr').first());
  assert.deepEqual(await accounts(),['C','B','A']);
  await page.locator('#planning-panel summary').click();
- await page.getByLabel('Balance',{exact:true}).check();
+ await page.getByRole('checkbox',{name:'Balance',exact:true}).check();
  await page.getByRole('columnheader',{name:'Balance',exact:true}).dragTo(page.getByRole('columnheader',{name:'id',exact:true}));
+ const balanceHeader=page.getByRole('columnheader',{name:'Balance',exact:true});
+ const originalWidth=(await balanceHeader.boundingBox()).width;
+ const handle=await page.getByRole('separator',{name:'Resize Balance',exact:true}).boundingBox();
+ await page.mouse.move(handle.x+4,handle.y+12);await page.mouse.down();await page.mouse.move(handle.x+104,handle.y+12);await page.mouse.up();
+ assert.ok((await balanceHeader.boundingBox()).width>=originalWidth+95);
  await page.locator('#planning-save-view').click();
  assert.equal(await page.locator('#view-save-status').textContent(),'View saved');
  assert.deepEqual(await page.locator('#planning-table thead th').allTextContents(),['Select','Order','Balance','Pair status','id']);
@@ -57,6 +62,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#tab-trading').click();assert.equal(await page.locator('#trading-panel').isVisible(),true);
  await page.locator('#tab-planning').click();
  await page.screenshot({path:'/tmp/planning-preview5.png',fullPage:true});
+ assert.ok((await page.getByRole('columnheader',{name:'Balance',exact:true}).boundingBox()).width>=originalWidth+95);
  assert.deepEqual(errors,[]);assert.deepEqual(writes,['/api/planning/refresh']);
  await browser.close();console.log('Planning browser: sort, hide, refresh, persistence, drag, tabs and trading-command isolation passed.');
 })().catch(e=>{console.error(e);process.exit(1)});

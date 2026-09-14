@@ -25,6 +25,14 @@
     }
     window.planningSelection.clear();el('draft-message').textContent='Accounts added to drafts.';save();render();usage();
   }
+  function fillSlot(d,side){
+    if(d[side]||inFlight.has(d.key))return;
+    const rows=window.planningSelection.rows();
+    if(rows.length!==1){el('draft-message').textContent='Select exactly one account in the table, then click the empty box.';return;}
+    const row=rows[0],account=String(row.fields.id||'');if(!account)return;
+    d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,vm:''};chooseVM(d[side]);
+    window.planningSelection.clear();el('draft-message').textContent='Selected account added to this slot.';save();render();usage();
+  }
   const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
   function problem(d){
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
@@ -89,6 +97,10 @@
           remove.onclick=()=>{delete d[side];save();render();usage();};block.append(remove);
           const choices=chooseVM(item);
           const note=make('small',!choices.length?'No registered VM lists this account yet. Refresh it in VMs.':!item.vm?'Multiple VMs match this account. Resolve its registration before confirming.':'');note.className='vm-match-note';block.append(note);
+        }
+        if(!item){
+          const add=make('button','+ Add selected account');add.type='button';add.className='empty-add';add.onclick=e=>{e.stopPropagation();fillSlot(d,side);};block.append(add);
+          block.onclick=e=>{if(e.target.closest('button'))return;fillSlot(d,side);};
         }
         const amounts=make('div');amounts.className='draft-amounts';
         input(amounts,d,side+'Quantity','Quantity','number');

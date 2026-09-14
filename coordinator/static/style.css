@@ -68,3 +68,9 @@ main.planning-wide{max-width:none;width:100%;padding:28px 24px}
 .vm-list-summary strong{font-size:22px}.vm-list-row details{margin-top:12px}.vm-list-row p{font-size:13px}.vm-list-row .linked-accounts{line-height:1.8;overflow-wrap:anywhere}
 #view-save-status{font-size:12px;color:var(--green)}
 @media(max-width:1000px){.planning-layout{grid-template-columns:1fr}#planning-divider{display:none}.vm-list-summary{grid-template-columns:1fr 1fr}}
+
+#planning-table{table-layout:fixed}#planning-table td,#planning-table th{min-width:0!important;max-width:none;box-sizing:border-box}
+#planning-table th{padding-right:18px;overflow:hidden}#planning-table th>button{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.column-resize{position:absolute;right:0;top:0;bottom:0;width:9px;cursor:col-resize;touch-action:none;border-right:2px solid #486174;z-index:3}
+.column-resize:hover,.column-resize:focus-visible{background:#6eafc8;outline:none}
+.draft-account.empty{cursor:pointer}.draft-card .empty-add{display:block;margin:14px auto 0;padding:8px;font-size:12px;max-width:100%}
