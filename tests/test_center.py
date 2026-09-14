@@ -28,7 +28,7 @@ class Fake:
         if command=='bind_peer':self.bindings[slot]=body['peer']['id']
         if command in ('invalidate','unbind_peer'):state.update(prepared=False,prepareId='')
         if command=='unbind_peer':self.bindings.pop(slot,None)
-        if command=='prepare':state.update(prepared=True,prepareId=body['prepareId'],ticker=body['ticker'],stopLoss=body['stopLoss'],profit=body['profit'])
+        if command=='prepare':state.update(prepared=True,prepareId=body['prepareId'],ticker=body['ticker'],account=body.get('account','Sim101'),quantity=str(body.get('quantity',1)),stopLoss=body['stopLoss'],profit=body['profit'])
         if command=='entry':
             self.states[slot].update(position='1 L',pairActive=True)
             self.states[self.bindings[slot]].update(position='1 S',pairActive=True)
@@ -71,10 +71,10 @@ class Tests(unittest.TestCase):
     def test_manual_working_order_confirmation_required(self):
         with self.assertRaises(ValueError):self.center.prepare(dict(ticker='MNQ',stopLoss=1,profit=2),0)
         self.assertFalse(any(c[1]=='prepare' for c in self.fake.calls))
-    def test_non_sim_account_blocks_preparation(self):
+    def test_default_preparation_selects_sim_from_another_flat_account(self):
         self.fake.states['vm-left']['account']='LiveAccount'
-        with self.assertRaises(ValueError):self.prepare()
-        self.assertFalse(any(c[1]=='prepare' for c in self.fake.calls))
+        self.prepare()
+        self.assertEqual(self.fake.states['vm-left']['account'],'Sim101')
     def test_configuration_change_blocks_entry(self):
         self.prepare();self.fake.states['vm-right']['prepareId']='changed'
         with self.assertRaises(ValueError):self.center.entry('sell',0)
@@ -144,8 +144,11 @@ class Tests(unittest.TestCase):
         self.assertEqual(state['closedSequence'],1)
         self.assertEqual(state['settings']['stopLoss'],123)
         self.assertFalse(Path(self.temp.name,'entry-unresolved.json').exists())
-        self.assertTrue(all(command=='status' for _,command,_ in self.fake.calls))
+        self.assertTrue(all(command in ('status','post_trade') for _,command,_ in self.fake.calls))
         self.center.refresh_both();self.assertEqual(self.center.state()['closedSequence'],1)
+        for _ in range(100):
+            if not self.center.sync_dispatch: break
+            threading.Event().wait(.01)
         self.center.prepare(dict(ticker='MNQ',stopLoss=123,profit=456,noWorkingOrders=True),self.center.generation)
         self.assertTrue(self.center.state()['canEnter'])
     def test_initial_flat_after_commit_is_not_a_completed_trade(self):
@@ -186,3 +189,22 @@ class Tests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class AccountSelectionTests(Tests):
+    def test_independent_targets_and_quantities(self):
+        self.center.prepare(dict(ticker='MNQ',stopLoss=10,profit=20,noWorkingOrders=True,
+            accounts={'vm-left':'MFF-123','vm-right':'FN-456'},quantities={'vm-left':2,'vm-right':3}),0)
+        self.assertTrue(self.center.state()['canEnter'])
+        self.assertEqual(self.fake.states['vm-left']['account'],'MFF-123')
+        self.assertEqual(self.fake.states['vm-right']['quantity'],'3')
+        right_bind=next(body for slot,cmd,body in self.fake.calls if slot=='vm-right' and cmd=='bind_peer')
+        self.assertEqual(right_bind['peerAccount'],'MFF-123')
+        self.assertEqual(right_bind['peerQuantity'],2)
+        self.fake.states['vm-right']['account']='WRONG'
+        with self.assertRaises(ValueError): self.center.entry('buy',0)
+        self.assertFalse(any(cmd=='entry' for _,cmd,_ in self.fake.calls))
+    def test_quantity_validation(self):
+        for qty in [0,-1,1.5,True,'2',1001]:
+            with self.assertRaises(ValueError):
+                self.center.prepare(dict(ticker='MNQ',stopLoss=10,profit=20,noWorkingOrders=True,quantities={'vm-left':qty}),0)
+        self.assertFalse(any(cmd=='prepare' for _,cmd,_ in self.fake.calls))

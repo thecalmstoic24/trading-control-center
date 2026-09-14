@@ -67,6 +67,9 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(self.fleet.pairs[self.a].closed_sequence,1)
         self.assertEqual(self.fleet.pairs[self.b].closed_sequence,0)
         self.assertTrue(self.fleet.pairs[self.b].active)
+        for _ in range(100):
+            if not self.fleet.pairs[self.a].sync_dispatch: break
+            threading.Event().wait(.01)
         self.prepare(self.a)
         self.assertTrue(self.fleet.pairs[self.a].state()['canEnter'])
     def test_shared_vm_reservation_is_rejected(self):

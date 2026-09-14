@@ -6,7 +6,7 @@ const token = sessionStorage.getItem('control-token') || '';
 let state, initialized = false, dirty = false, pending = false, lastEvent = '', lastJob = '', lost = true, closedSequence = null, pairKey = '', fleetKey = '', registeredId = '';
 let fleetState, selectedPairId=sessionStorage.getItem('selected-pair')||'';
 const drafts={}, pairJobs={};
-const fields = ['left-stop','left-profit','right-stop','right-profit','instrument'];
+const fields = ['left-stop','left-profit','right-stop','right-profit','instrument','left-account','right-account','left-quantity','right-quantity'];
 function alertText(text, error=false) { $('alert').textContent=text; $('alert').classList.toggle('error',error); }
 async function api(path, body) {
   const options = {headers:{'X-Control-Token':token},cache:'no-store'};
@@ -110,10 +110,23 @@ function render(s){
   const pair=s.pairs.find(p=>p.id===selectedPairId);
   $('pair-workspace').hidden=!pair;
   if(pair){
+    let restoringDraft=false;
     $('selected-pair-title').textContent=pair.name;
     if(!initialized){
       const draft=drafts[pair.id];dirty=draft?.dirty||false;lastJob=pairJobs[pair.id]||'';
-      if(draft){fields.forEach((id,index)=>$(id).value=draft.values[index]);initialized=true;}
+      if(draft){restoringDraft=true;fields.forEach((id,index)=>$(id).value=draft.values[index]);initialized=true;}
+    }
+    for(const [i,a] of pair.agents.entries()){
+      const side=['left','right'][i], select=$(side+'-account');
+      const wanted=restoringDraft?drafts[pair.id].values[fields.indexOf(side+'-account')]:initialized?select.value:(drafts[pair.id]?.values[fields.indexOf(side+'-account')]||pair.settings.accounts?.[a.id]||'Sim101');
+      const values=[...new Set(['Sim101',...(a.accounts||[]),wanted])];
+      if(select.dataset?.key!==JSON.stringify(values)){
+        select.replaceChildren();for(const value of values){const o=document.createElement('option');o.value=value;o.textContent=value; o.disabled=value!=='Sim101'&&!(a.accounts||[]).includes(value);select.append(o);}
+        if(select.dataset)select.dataset.key=JSON.stringify(values);select.value=wanted;
+      }
+      if(!initialized)$(side+'-quantity').value=pair.settings.quantities?.[a.id]||1;
+      $(side+'-account-message').textContent=a.accountMessage||'Refresh accounts to read NinjaTrader and Airtable.';
+      $(side+'-sync').textContent=a.sync||'';
     }
     renderPair(pair);
     pairJobs[pair.id]=lastJob;
@@ -126,7 +139,7 @@ async function action(command) {
   $('buy').disabled=true; $('sell').disabled=true;
   const actionPairId=selectedPairId;
   const body={pairId:actionPairId,command,noWorkingOrders:$('orders-checked').checked};
-  if(command==='prepare') Object.assign(body,{ticker:$('instrument').value,stopLoss:Number($('left-stop').value),profit:Number($('left-profit').value)});
+  if(command==='prepare') Object.assign(body,{ticker:$('instrument').value,stopLoss:Number($('left-stop').value),profit:Number($('left-profit').value),accounts:Object.fromEntries(state.agents.map((a,i)=>[a.id,$(['left-account','right-account'][i]).value])),quantities:Object.fromEntries(state.agents.map((a,i)=>[a.id,Number($(['left-quantity','right-quantity'][i]).value)]))});
   try {
     const result=await api('/api/action',body);pairJobs[actionPairId]=result.job;
     if(actionPairId===selectedPairId){lastJob=result.job;if(command==='prepare')dirty=false;}
@@ -136,6 +149,7 @@ async function action(command) {
   } catch(e) {alertText(e.message,true);} finally {pending=false;await poll();}
 }
 for(const command of ['prepare','buy','sell','close']) $(command).onclick=()=>action(command);
+$('refresh-accounts').onclick=()=>action('accounts');
 $('ack-flat').onclick=()=>action('ack_flat');
 function renderPair(s) {
   state=s; lost=false; $('server-dot').classList.add('connected'); $('server-state').textContent='Coordinator running';
@@ -165,6 +179,7 @@ function renderPair(s) {
   $('buy').disabled=$('sell').disabled=!ready;
   $('prepare').disabled=s.busy||s.active||pending||!s.agents.every(a=>a.fresh&&a.position==='Flat'&&!a.busy&&!a.scheduled&&!a.pending&&!a.pairActive&&!a.closing);
   $('orders-checked').disabled=s.busy||pending;
+  $('refresh-accounts').disabled=s.busy||s.active||pending;
 
   fields.forEach(id=>$(id).disabled=s.active||s.busy||pending);
   $('ack-flat').disabled=s.busy||pending;

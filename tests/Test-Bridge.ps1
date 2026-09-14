@@ -6,6 +6,7 @@ $function=$ast.Find({param($node) $node -is [Management.Automation.Language.Func
 Invoke-Expression $function.Extent.Text
 function Check($Condition,$Message){if(-not $Condition){throw $Message}}
 function Get-ChartSnapshot {return @{Position=$script:position}}
+function Assert-Idle14 { if($script:position -ne 'Flat'){throw 'Not flat'}; return @{Position=$script:position} }
 function Assert-V10Safety {param($Snapshot,$RequireFlat,$ExpectedTicker);if($RequireFlat -and $Snapshot.Position -ne 'Flat'){throw 'Not flat'}}
 function Invalidate-Preparation {$script:Prepared=$false}
 function Invoke-Close {$script:localCloses++}
@@ -39,3 +40,30 @@ $script:position='1 L';$rejected=$false
 try{Invoke-ControlCommand (Pending 'unbind_peer' @{})|Out-Null}catch{$rejected=$true}
 Check ($rejected -and $null -ne $script:BoundPeer) 'Release accepted an open position'
 'Bridge isolation: local-only coordinator close, stale-binding rejection, valid partner priority and flat-only unbind passed.'
+# V14: a selected account/quantity must be in the discovered set; reject stale membership.
+function Get-Accounts14 { return @('Sim101','MFF-123') }
+function Save-Target14 { $script:savedTarget=@($script:LockedAccount,$script:LockedQuantity) }
+function Process-AgentRequest { param($JsonLine); $script:Prepared=$true;return @{ok=$true} }
+$script:controlDirectory=Join-Path ([IO.Path]::GetTempPath()) ('v14-test-'+[guid]::NewGuid().ToString('N'))
+New-Item $script:controlDirectory -ItemType Directory | Out-Null
+try {
+ Reset-Test
+ $script:Accounts14=@('Sim101','MFF-123');$script:AccountStamp14=[DateTime]::UtcNow
+ $script:lockedValues=@{};$script:pairEnabled=@{}
+ $body=@{account='MFF-123';quantity=3;prepareId=('c'*32);stopLoss=100;profit=200;ticker='MNQ'}
+ Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null
+ Check ($script:LockedAccount -ceq 'MFF-123' -and $script:LockedQuantity -eq 3) 'Selected target was not locked'
+ Check ($script:ControlPreparedId -ceq ('c'*32)) 'Verified target not prepared'
+ foreach($quantity in @(0,-1,'2.5',1001)) {
+  $body.quantity=$quantity;$rejected=$false
+  try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
+  Check $rejected 'Invalid quantity accepted'
+ }
+ $body.quantity=2;$body.account='OTHER';$rejected=$false
+ try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
+ Check $rejected 'Unmatched account accepted'
+ $body.account='MFF-123';$script:AccountStamp14=[DateTime]::UtcNow.AddMinutes(-6);$rejected=$false
+ try { Invoke-ControlCommand (Pending 'prepare' $body) | Out-Null } catch { $rejected=$true }
+ Check $rejected 'Expired account list accepted'
+ 'V14 bridge: exact account membership, selected quantity, invalid quantity and stale list rejection passed.'
+} finally { Remove-Item $script:controlDirectory -Recurse -Force }

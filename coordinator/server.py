@@ -1,4 +1,4 @@
-"""Local Windows control center. Standard library only; never sends live-account orders."""
+"""Local Windows control center. Standard library only; verifies explicit account and quantity selections."""
 from __future__ import annotations
 import argparse
 import base64
@@ -23,7 +23,7 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '13.0-preview.1'
+VERSION = '14.0-preview.1'
 AGENT_VERSIONS = {VERSION}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
@@ -133,6 +133,7 @@ class Center:
         self.pair = IDS
         self.poll_threads = {}
         self.closed_sequence = 0
+        self.sync_dispatch = 0
         self.opened_ids = set()
         self.binding_id = None
         self.observations = {}
@@ -141,7 +142,7 @@ class Center:
         self.prepared = None
         self.active = False
         self.generation = 0
-        self.settings = dict(ticker='MNQ', stopLoss=100, profit=200)
+        self.settings = dict(ticker='MNQ', stopLoss=100, profit=200, accounts={}, quantities={})
         self.last_positions = {}
         self.logger = logging.getLogger('center-' + uuid.uuid4().hex)
         self.logger.setLevel(logging.INFO)
@@ -178,16 +179,31 @@ class Center:
     def reset_closed(self, message):
         self.active = False
         self.prepared = None
+        export_id = self.binding_id if self.opened_ids else None
         self.opened_ids.clear()
         self.closed_sequence += 1
+        if export_id:
+            self.sync_dispatch += len(self.pair)
+            for slot in self.pair:
+                self.pool.submit(self.post_trade, slot, export_id)
         (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
         self.event(message)
+
+    def post_trade(self, slot, trade_id):
+        try:
+            self.call(slot, 'post_trade', {'tradeId':trade_id}, 15)
+            self.observe(slot)
+            self.event(f'{self.name(slot)} post-trade export queued.')
+        except Exception:
+            self.event(f'{self.name(slot)} export could not start. Refresh sync on that VM.')
+        finally:
+            with self.lock: self.sync_dispatch -= 1
 
     def reconcile_closed(self):
         if (not self.active or self.operation.locked() or not set(self.pair).issubset(self.opened_ids)
                 or any(j['command']=='close' and j['status']=='running' for j in self.jobs)):
             return
-        if all(self.safe_flat(self.view_agent(slot)) for slot in self.pair):
+        if all(self.safe_flat(self.view_agent(slot)) and self.target_matches(self.view_agent(slot)) for slot in self.pair):
             self.reset_closed('Both positions verified Flat. Dashboard reset; check working orders and Prepare for the next trade.')
 
     def select_pair(self, left, right):
@@ -200,7 +216,7 @@ class Center:
                 if left == right or left not in self.config or right not in self.config:
                     raise ValueError('Choose two different registered VMs.')
                 if not all(self.safe_flat(self.view_agent(slot)) for slot in (left, right)):
-                    raise ValueError('Both selected VMs must be fresh, Sim101 / Qty 1 / Flat, and idle.')
+                    raise ValueError('Both selected VMs must be fresh, Flat, and idle.')
                 if not all(self.safe_flat(self.view_agent(slot)) for slot in self.pair if slot in self.config):
                     raise ValueError('Verify the previous pair is fresh, flat and idle before changing VMs.')
                 outgoing = tuple(slot for slot in self.pair if slot in self.config)
@@ -249,7 +265,7 @@ class Center:
             observation = dict(online=bool(valid), fresh=fresh, received=time.monotonic(),
                                ageMs=total_age if math.isfinite(total_age) else 999999,
                                rttMs=response.get('_rttMs'), state=state if valid else {},
-                               error='' if valid else 'Agent identity/version mismatch; install V13 on this VM before using multiple pairs.')
+                               error='' if valid else 'Agent identity/version mismatch; install V14 on this VM before using multiple pairs.')
         except Exception as exc:
             observation = dict(online=False, fresh=False, received=time.monotonic(), ageMs=999999,
                                state={}, rttMs=None, error=f'Connection unavailable ({type(exc).__name__}).')
@@ -300,21 +316,27 @@ class Center:
                     pairActive=bool(s.get('pairActive')), pending=bool(s.get('pendingVerification')), closing=bool(s.get('closing')),
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
-                    execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'))
+                    execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
+                    accounts=s.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    selectedAccount=s.get('selectedAccount', 'Sim101'), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
-        return (agent['fresh'] and agent['account'] == 'Sim101' and str(agent['quantity']) == '1'
+        return (agent['fresh'] and bool(agent['account'])
                 and agent['position'] == 'Flat' and not agent['scheduled'] and not agent['busy']
                 and not agent['pairActive'] and not agent['pending'] and not agent.get('closing'))
+
+    def target_matches(self, agent):
+        return (agent['account'] == self.settings.get('accounts', {}).get(agent['id'], 'Sim101')
+                and str(agent['quantity']) == str(self.settings.get('quantities', {}).get(agent['id'], 1)))
 
     def state(self):
         with self.lock:
             self.reconcile_closed()
             agents = [self.view_agent(slot) for slot in self.pair]
             ready = bool(self.prepared and not self.active and not self.operation.locked()
-                         and all(self.safe_flat(a) and a['prepared'] and a['prepareId'] == self.prepared for a in agents))
+                         and all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == self.prepared for a in agents))
             return dict(version=VERSION, agents=agents, settings=self.settings.copy(), canEnter=ready,
-                        prepared=bool(self.prepared), active=self.active, busy=self.operation.locked(),
+                        prepared=bool(self.prepared), active=self.active, busy=self.operation.locked() or self.sync_dispatch > 0,
                         events=list(self.events), jobs=list(self.jobs), serverTime=time.time(),
                         fleet=[self.view_agent(slot) for slot in self.config], pair=list(self.pair), closedSequence=self.closed_sequence)
 
@@ -363,7 +385,9 @@ class Center:
             f.result()
 
     def submit(self, command, body):
-        if command not in ('prepare', 'buy', 'sell', 'close', 'ack_flat'):
+        if self.sync_dispatch and command != 'close':
+            raise ValueError('Post-trade export is starting. Wait for its status.')
+        if command not in ('prepare', 'buy', 'sell', 'close', 'ack_flat', 'accounts'):
             raise ValueError('Unknown action.')
         if command != 'close' and not self.operation.acquire(blocking=False):
             raise ValueError('An operation is already running.')
@@ -384,7 +408,13 @@ class Center:
     def run_job(self, job, command, body, generation):
         try:
             self.event(f'{command.upper()} requested.')
-            if command == 'prepare':
+            if command == 'accounts':
+                self.prepared = None
+                if self.active: raise ValueError('Close and verify this pair before refreshing accounts.')
+                for slot in self.pair:
+                    self.call(slot, 'accounts', {}, 15)
+                self.event('Account refresh started on both VMs. Lists update when discovery finishes.')
+            elif command == 'prepare':
                 self.prepare(body, generation)
             elif command in ('buy', 'sell'):
                 self.entry(command, generation)
@@ -394,7 +424,7 @@ class Center:
                 if body.get('noWorkingOrders') is not True:
                     raise ValueError('Check both VMs for working orders first.')
                 self.refresh_both()
-                if not all(self.safe_flat(a) for a in self.state()['agents']):
+                if not all(self.safe_flat(a) and self.target_matches(a) for a in self.state()['agents']):
                     raise ValueError('Fresh Flat status has not been verified on both agents.')
                 with self.lock:
                     self.reset_closed('Both positions verified Flat; dashboard reset for the next preparation.')
@@ -416,28 +446,37 @@ class Center:
 
     def prepare(self, body, generation):
         if body.get('noWorkingOrders') is not True:
-            raise ValueError('Check both Sim101 accounts have no working orders before preparing.')
+            raise ValueError('Check both selected accounts have no working orders before preparing.')
         ticker = str(body.get('ticker', '')).strip().upper()
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker):
             raise ValueError('Enter the NinjaTrader instrument, for example MNQ 09-26.')
         stop, profit = float(body.get('stopLoss', 0)), float(body.get('profit', 0))
         if not all(math.isfinite(v) and 0 < v <= 100000 and round(v, 2) == v for v in (stop, profit)):
             raise ValueError('Stop loss and profit must be positive currency amounts with at most two decimals.')
+        accounts, quantities = {}, {}
+        for slot in self.pair:
+            account = body.get('accounts', {}).get(slot, 'Sim101')
+            quantity = body.get('quantities', {}).get(slot, 1)
+            if not isinstance(account, str) or not account or len(account) > 120:
+                raise ValueError('Select an available account for each VM.')
+            if type(quantity) is not int or not 1 <= quantity <= 1000:
+                raise ValueError('Quantity must be a whole number from 1 to 1000.')
+            accounts[slot], quantities[slot] = account, quantity
         with self.lock:
             if self.active:
                 raise ValueError('Verify Both Flat before preparing another pair.')
             self.prepared = None
-            self.settings = dict(ticker=ticker, stopLoss=stop, profit=profit)
+            self.settings = dict(ticker=ticker, stopLoss=stop, profit=profit, accounts=accounts, quantities=quantities)
         self.refresh_both()
         if not all(self.safe_flat(a) for a in self.state()['agents']):
-            raise ValueError('Both VMs must report fresh Sim101 / Qty 1 / Flat, with no pending action.')
+            raise ValueError('Both VMs must report fresh Flat, with no pending action.')
         self.assert_generation(generation)
         binding = uuid.uuid4().hex
         bindings = []
         for slot, peer in (self.pair, self.pair[::-1]):
             peer_config = self.config[peer].copy()
             peer_config['name'] = self.name(peer)
-            bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding}))
+            bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding, 'peerAccount':accounts[peer], 'peerQuantity':quantities[peer]}))
         errors = []
         for future in bindings:
             try: future.result()
@@ -448,7 +487,7 @@ class Center:
         self.save_fleet()
         prepare_id = uuid.uuid4().hex
         def one(slot, sl, pt):
-            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id))
+            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=accounts[slot], quantity=quantities[slot]))
         results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], profit, stop)]
         errors = []
         for slot, result in zip(self.pair, results):
@@ -466,7 +505,7 @@ class Center:
             self.assert_generation(generation)
             self.refresh_both()
             agents = self.state()['agents']
-            if all(self.safe_flat(a) and a['prepared'] and a['prepareId'] == prepare_id for a in agents):
+            if all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepare_id for a in agents):
                 if [(float(a['stopLoss']), float(a['profit'])) for a in agents] != [(stop, profit), (profit, stop)]:
                     raise ValueError('Mirrored stop-loss/profit readback does not match.')
                 with self.lock:
@@ -483,7 +522,7 @@ class Center:
             if not prepared or self.active:
                 raise ValueError('Prepare and verify both VMs before entry.')
         self.refresh_both()
-        if not all(self.safe_flat(a) and a['prepared'] and a['prepareId'] == prepared for a in self.state()['agents']):
+        if not all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepared for a in self.state()['agents']):
             raise ValueError('Readiness changed. Prepare both VMs again.')
         self.assert_generation(generation)
         with self.lock:
@@ -518,7 +557,7 @@ class Center:
         while time.monotonic() < deadline:
             self.refresh_both()
             agents = self.state()['agents']
-            if all(self.safe_flat(a) for a in agents):
+            if all(self.safe_flat(a) and self.target_matches(a) for a in agents):
                 with self.lock:
                     self.reset_closed('Both positions independently verified Flat. Dashboard reset; check working orders before preparing again.')
                 return
@@ -562,7 +601,7 @@ class Fleet:
                     pair.mark_active()
                 pair.save_fleet()
             self.save_index()
-        # A retained root marker protects a V12 rollback; V13 uses per-pair markers.
+        # A retained root marker protects a V12 rollback; V14 uses per-pair markers.
         self.catalog.pair = ()
         self.catalog.active = False
 
@@ -612,7 +651,7 @@ class Fleet:
             if left in self.owners or right in self.owners:
                 raise ValueError('A selected VM belongs to another pair. Close, verify and release that pair first.')
             if not all(self.catalog.safe_flat(self.view(slot)) for slot in (left, right)):
-                raise ValueError('New pair requires two fresh, idle Sim101 / Qty 1 / Flat agents.')
+                raise ValueError('New pair requires two fresh, idle Flat agents.')
             identity = uuid.uuid4().hex
             pair = self._load_pair(identity, (left, right))
             try:
@@ -636,7 +675,7 @@ class Fleet:
             generation = pair.generation
         try:
             with pair.lock:
-                if pair.active or any(j['status']=='running' for j in pair.jobs):
+                if pair.active or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
                     raise ValueError('Close and verify this pair before releasing its VMs.')
             pair.refresh_both()
             if not all(pair.safe_flat(a) for a in pair.state()['agents']):
