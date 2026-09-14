@@ -239,3 +239,18 @@ class MigrationTests(FleetTests):
         for slot in self.ids[:2]:self.fake.states[slot]['sampleAgeMs']=99999
         with self.assertRaises(ValueError):self.fleet.release_pair(self.a)
         self.assertIn(self.a,self.fleet.pairs)
+
+    def test_create_pair_refreshes_stale_snapshot(self):
+        self.fleet.release_pair(self.a)
+        for slot in self.ids[:2]:
+            self.fleet.catalog.observations[slot]['received']=time.monotonic()-60
+        self.fake.calls.clear()
+        identity=self.fleet.create_pair(*self.ids[:2])
+        self.assertIn(identity,self.fleet.pairs)
+        self.assertEqual({slot for slot,cmd,_ in self.fake.calls if cmd=='status'},set(self.ids[:2]))
+
+    def test_create_pair_rejects_newly_open_position(self):
+        self.fleet.release_pair(self.a)
+        self.fake.states[self.ids[0]]['position']='1 L'
+        with self.assertRaises(ValueError):self.fleet.create_pair(*self.ids[:2])
+        self.assertNotIn(self.ids[0],self.fleet.owners)

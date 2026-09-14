@@ -24,8 +24,8 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '16.0-preview.3'
-AGENT_VERSIONS = {VERSION, '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.4'
+AGENT_VERSIONS = {VERSION, '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -655,6 +655,19 @@ class Fleet:
         return result
 
     def create_pair(self, left, right):
+        # Network I/O stays outside the fleet lock so other pairs keep monitoring.
+        with self.lock:
+            if left == right or left not in self.catalog.config or right not in self.catalog.config:
+                raise ValueError('Choose two different registered VMs.')
+            for identity, pair in self.pairs.items():
+                if pair.pair == (left, right):
+                    return identity
+            if left in self.owners or right in self.owners:
+                raise ValueError('A selected VM belongs to another pair. Release that pair first.')
+        requests = [self.catalog.pool.submit(self.catalog.observe, slot) for slot in (left, right)]
+        for request in requests:
+            request.result()
+        # Recheck reservations after the requests: another browser may have paired a VM.
         with self.lock:
             if left == right or left not in self.catalog.config or right not in self.catalog.config:
                 raise ValueError('Choose two different registered VMs.')

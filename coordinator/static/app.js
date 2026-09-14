@@ -39,12 +39,14 @@ $('register-vm').onclick=async()=>{
 };
 $('select-pair').onclick=async()=>{
   if(pending)return; pending=true;
+  $('select-pair').disabled=true;
+  $('pair-result').textContent='Checking both VMs…';
   try {
     const result=await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
     saveDraft();selectedPairId=result.pairId;initialized=false;closedSequence=null;
      dirty=true; lastJob='';
     $('pair-result').textContent='Pair created. Prepare & Verify.';
-  } catch(e){alertText(e.message,true);} finally{pending=false;await poll();}
+  } catch(e){$('pair-result').textContent=e.message;alertText(e.message,true);} finally{pending=false;await poll();}
 };
 function saveDraft(){
   if(selectedPairId&&initialized)drafts[selectedPairId]={values:fields.map(id=>$(id).value),dirty};

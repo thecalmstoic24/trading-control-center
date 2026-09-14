@@ -47,5 +47,8 @@ pb.active=false;
   await vm.runInContext("action('prepare')",context);
   assert.equal(calls[0][1].pairId,'b');assert.equal(calls[0][1].stopLoss,777);
   assert.equal(get('pair-list').children.length,2);
+  context.fetch=async(path)=>path==='/api/pair'?{ok:false,json:async()=>({error:'New pair requires two fresh, idle Flat agents.'})}:{ok:true,json:async()=>({fleet:[],pairs:[],events:[]})};
+  await get('select-pair').onclick();
+  assert.match(get('pair-result').textContent,/New pair requires/,'pair failure must survive automatic polling');
   console.log('Dashboard: independent pair switching, explicit command routing, draft isolation and scoped reset passed.');
 })().catch(e=>{console.error(e);process.exitCode=1});
