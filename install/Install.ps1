@@ -2,10 +2,11 @@
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '14.0-preview.2'
+$version = '15.0-preview.1'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Private-Network.ps1')
 
 function Protect-Directory([string]$Path) {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
@@ -38,7 +39,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Trading Control Center - V14 Multiple Pair Setup'
+$form.Text = 'Trading Control Center - V15 Private Network Setup'
 $form.ClientSize = New-Object Drawing.Size(650,740)
 $form.StartPosition = 'CenterScreen'
 $form.AutoScroll = $true
@@ -49,7 +50,7 @@ function LabelAt([string]$Text,[int]$Y) {
     $item.Text=$Text; $item.Location=New-Object Drawing.Point(24,$Y); $item.Size=New-Object Drawing.Size(600,44)
     $form.Controls.Add($item); return $item
 }
-LabelAt 'Choose what to install on THIS computer. Simulation test release only.' 20 | Out-Null
+LabelAt 'Choose what to install. Use the same Tailscale network on every computer.' 20 | Out-Null
 $role = New-Object Windows.Forms.ComboBox
 $role.DropDownStyle='DropDownList'; $role.Location=New-Object Drawing.Point(24,70); $role.Size=New-Object Drawing.Size(600,30)
 @('Control center - my third computer','Named VM - NinjaTrader agent') | ForEach-Object { [void]$role.Items.Add($_) }
@@ -59,15 +60,27 @@ $nameBox=New-Object Windows.Forms.ComboBox
 $nameBox.Location=New-Object Drawing.Point(24,145);$nameBox.Size=New-Object Drawing.Size(600,30)
 @('MFFLocDao','LCDLocDao','FNThu','FNSean') | ForEach-Object {[void]$nameBox.Items.Add($_)}
 $form.Controls.Add($nameBox)
-$hostLabel = LabelAt 'VM public IPv4 address (only needed when installing an agent)' 190
-$hostBox = New-Object Windows.Forms.TextBox
-$hostBox.Location=New-Object Drawing.Point(24,225); $hostBox.Size=New-Object Drawing.Size(600,30); $form.Controls.Add($hostBox)
-$sourceLabel = LabelAt 'Third computer public IPv4 address (limits access to its encrypted connection)' 270
-$sourceBox = New-Object Windows.Forms.TextBox
-$sourceBox.Location=New-Object Drawing.Point(24,305); $sourceBox.Size=New-Object Drawing.Size(600,30); $form.Controls.Add($sourceBox)
-$peerLabel=LabelAt 'Other trading VMs public IPv4 addresses (comma separated; permits TLS pairing)' 350
-$peerBox=New-Object Windows.Forms.TextBox
-$peerBox.Location=New-Object Drawing.Point(24,385);$peerBox.Size=New-Object Drawing.Size(600,30);$form.Controls.Add($peerBox)
+$networkLabel=LabelAt 'Private network: not checked' 190
+$networkLabel.Height=65
+$connectNetwork=New-Object Windows.Forms.Button
+$connectNetwork.Text='SET UP PRIVATE NETWORK (TAILSCALE)'
+$connectNetwork.Location=New-Object Drawing.Point(24,275);$connectNetwork.Size=New-Object Drawing.Size(600,40)
+$form.Controls.Add($connectNetwork)
+$connectNetwork.Add_Click({
+    try { Open-PrivateNetworkSetup15; $status.Text='Finish signing in to Tailscale, then click CHECK CONNECTION.' }
+    catch { $status.Text=$_.Exception.Message }
+})
+$detect=New-Object Windows.Forms.Button
+$detect.Text='CHECK CONNECTION'
+$detect.Location=New-Object Drawing.Point(24,335);$detect.Size=New-Object Drawing.Size(600,40)
+$form.Controls.Add($detect)
+function Detect-PrivateNetwork {
+    $script:PrivateAddress15=Get-PrivateAddress15
+    $networkLabel.Text='Private network connected. Address detected automatically.'
+    $status.Text='Ready to install. No public or peer IP addresses are needed.'
+}
+$detect.Add_Click({try { Detect-PrivateNetwork } catch { $networkLabel.Text=$_.Exception.Message }})
+$form.Add_Shown({try { Detect-PrivateNetwork } catch { $networkLabel.Text=$_.Exception.Message }})
 $notice=LabelAt 'Control center installs its own Python runtime. No GitHub login or manual Python installation is needed.' 440
 $check=New-Object Windows.Forms.CheckBox
 $check.Text='For agent installation: All accounts are flat, no working orders, and the old agent is closed.'
@@ -76,54 +89,24 @@ $install=New-Object Windows.Forms.Button
 $install.Text='INSTALL'; $install.Location=New-Object Drawing.Point(24,580); $install.Size=New-Object Drawing.Size(600,45); $form.Controls.Add($install)
 $status=LabelAt 'Ready. This installer will not submit any trade.' 650
 $role.Add_SelectedIndexChanged({
-    $agent = $role.SelectedIndex -gt 0
-    $hostBox.Enabled=$agent; $sourceBox.Enabled=$agent; $check.Enabled=$agent; $nameBox.Enabled=$agent; $peerBox.Enabled=$agent
-    $notice.Text = $(if($agent){'V14 supports selected accounts and quantities and uses TLS for selected peer connections. Previous releases are kept for rollback.'}else{'Install here on your Windows 11 third computer. The dashboard opens in your normal browser.'})
+    $agent=$role.SelectedIndex -gt 0
+    $check.Enabled=$agent;$nameBox.Enabled=$agent
+    $notice.Text='V15 uses your private network. Paired agents retain direct encrypted connections. Your third computer remains the coordinator.'
 })
-$hostBox.Enabled=$false; $sourceBox.Enabled=$false; $check.Enabled=$false; $nameBox.Enabled=$false; $peerBox.Enabled=$false
+$check.Enabled=$false;$nameBox.Enabled=$false
 $identityFile=Join-Path $base 'agent-data\identity.clixml'
-if(Test-Path -LiteralPath $identityFile){
+if(Test-Path -LiteralPath $identityFile) {
     $existingIdentity=Import-Clixml -LiteralPath $identityFile
-    $role.SelectedIndex=1
-    $nameBox.Text=switch($existingIdentity.Id){'vm-left' {'MFFLocDao'} 'vm-right' {'LCDLocDao'} default {$existingIdentity.Name}}
-    $hostBox.Text=$existingIdentity.HostAddress
-    $networkConfig=Join-Path $base 'agent-data\network.json'
-    if(Test-Path -LiteralPath $networkConfig){$savedNetwork=Get-Content -LiteralPath $networkConfig -Raw|ConvertFrom-Json;$sourceBox.Text=$savedNetwork.controller;$peerBox.Text=$savedNetwork.peers -join ','}
+    $role.SelectedIndex=1;$nameBox.Text=$existingIdentity.Name
 }
-# Detect the address on the computer running setup; never use its private LAN IP.
-$detect=New-Object Windows.Forms.Button
-$detect.Text='DETECT THIS COMPUTER PUBLIC IP'
-$detect.Location=New-Object Drawing.Point(24,412)
-$detect.Size=New-Object Drawing.Size(600,28)
-$form.Controls.Add($detect)
-function Detect-PublicAddress {
-    $detected=(Invoke-WebRequest -UseBasicParsing -Uri 'https://api.ipify.org' -TimeoutSec 5).Content.Trim()
-    $address=[Net.IPAddress]::Parse($detected)
-    if($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){throw 'Public IPv4 detection unavailable. Enter the public IPv4 manually.'}
-    if($role.SelectedIndex -gt 0){$hostBox.Text=$address.ToString();$status.Text='This VM public IP detected. Saved controller and peer addresses are retained.'}
-    else{$status.Text='This computer public IPv4: '+$address.ToString()}
-}
-$detect.Add_Click({try{Detect-PublicAddress}catch{$status.Text='IP detection failed. Existing values retained; you can enter the address manually.'}})
-$form.Add_Shown({try{Detect-PublicAddress}catch{$status.Text='Public IP detection unavailable. Existing values retained; manual entry is available.'}})
-$role.Add_SelectedIndexChanged({if($role.SelectedIndex -gt 0 -and -not $hostBox.Text){try{Detect-PublicAddress}catch{}}})
 $install.Add_Click({
     $install.Enabled=$false
     try {
         $agent=$role.SelectedIndex -gt 0
         if($agent -and -not $check.Checked){throw 'Confirm the agent-installation checkbox first.'}
-        $hostAddress=''; $sourceAddress=''; $peers=@(); $name=$nameBox.Text.Trim()
-        if($agent){
-            if($name -notmatch '^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}$'){throw 'Enter a unique VM name, up to 40 characters.'}
-            $hostAddress=([Net.IPAddress]::Parse($hostBox.Text.Trim())).ToString()
-            $sourceAddress=([Net.IPAddress]::Parse($sourceBox.Text.Trim())).ToString()
-            $peers=@($peerBox.Text -split ',' | Where-Object { $_.Trim() } | ForEach-Object { ([Net.IPAddress]::Parse($_.Trim())).ToString() } | Select-Object -Unique)
-            if($peers.Count -eq 0){throw 'Enter the public IPv4 addresses of the other VMs you want to pair with.'}
-            foreach($address in @($hostAddress,$sourceAddress)+$peers) {
-                if(([Net.IPAddress]::Parse($address)).AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){throw 'This preview installer requires IPv4 addresses.'}
-                $octets=$address.Split('.')
-                if($octets[0] -in @('0','10','127') -or ([int]$octets[0] -ge 224) -or ($octets[0] -eq '192' -and $octets[1] -eq '168') -or ($octets[0] -eq '172' -and [int]$octets[1] -ge 16 -and [int]$octets[1] -le 31) -or ($octets[0] -eq '169' -and $octets[1] -eq '254')){throw ('Use a PUBLIC IPv4 address, not '+$address+'. Your third computer public IP is in Control-Computer-Network.txt.')}
-            }
-        }
+        $hostAddress=Get-PrivateAddress15
+        $name=$nameBox.Text.Trim()
+        if($agent -and $name -notmatch '^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}$') { throw 'Enter a unique VM name, up to 40 characters.' }
         $running = Get-CimInstance Win32_Process | Where-Object {
             $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf((Join-Path $base 'releases'),[StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             ($_.Name -match '^(python|pythonw|powershell|pwsh)\.exe$')
@@ -154,17 +137,8 @@ $install.Add_Click({
             $data=Join-Path $base 'coordinator-data'; Protect-Directory $data
             $scriptFile=Join-Path $destination 'install\Start-Control-Center.ps1'
             Add-DesktopShortcut 'Trading Control Center' $scriptFile
-            $networkFile=Join-Path ([Environment]::GetFolderPath('Desktop')) 'Control-Computer-Network.txt'
-            $publicIp='Unable to detect automatically. Look up this computer public IPv4 address.'
-            try {
-                $detected=(Invoke-WebRequest -UseBasicParsing -Uri 'https://api.ipify.org' -TimeoutSec 8).Content.Trim()
-                if(([Net.IPAddress]::Parse($detected)).AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork){$publicIp=$detected}
-            }catch{}
-            @("Third computer public IPv4 address: $publicIp",'', 'Enter this address in the agent installer on each VM.',
-              'If your home public IP changes, rerun the agent installer to update its scoped firewall rule.',
-              'Each VM also needs TCP 8789 from the public IPs of the other VMs it will pair with.') | Set-Content -LiteralPath $networkFile -Encoding UTF8
             Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
-            $status.Text='Installed. Dashboard is opening. Network details are on your desktop.'
+            $status.Text='Installed. Dashboard is opening on your third computer.'
         }else{
             $id=($name.ToLowerInvariant() -replace '[^a-z0-9]+','-').Trim('-')
             $data=Join-Path $base 'agent-data'; Protect-Directory $data
@@ -184,12 +158,14 @@ $install.Add_Click({
                 $identity=[pscustomobject]@{Id=$id;Name=$name;HostAddress=$hostAddress;Thumbprint=$cert.Thumbprint;Pin=$pin;Token=(ConvertTo-SecureString $token -AsPlainText -Force)}
             }
             $identity | Export-Clixml -LiteralPath $identityPath
-            @{controller=$sourceAddress;peers=$peers} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $data 'network.json') -Encoding UTF8
-            $status.Text='Allowing encrypted access from your third computer and selected peer IPs. Windows will request administrator access.';$form.Refresh()
+            $networkFile=Join-Path $data 'network.json'
+            if((Test-Path $networkFile) -and -not (Test-Path ($networkFile+'.v14-backup'))) { Copy-Item $networkFile ($networkFile+'.v14-backup') }
+            @{mode='tailscale';address=$hostAddress} | ConvertTo-Json | Set-Content $networkFile -Encoding UTF8
+            $status.Text='Configuring the private network interface. Windows will request administrator access.';$form.Refresh()
             $firewall=Join-Path $destination 'install\Allow-Control-Connection.ps1'
-            $process=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$firewall+'" -SourceAddress '+((@($sourceAddress)+$peers | Select-Object -Unique) -join ','))
+            $process=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$firewall+'" -LocalAddress '+$hostAddress)
             if($process.ExitCode -ne 0){throw 'Firewall configuration failed. Installation files are present; rerun setup to finish.'}
-            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v14.ps1'
+            $scriptFile=Join-Path $destination 'agent\Control_VM_Agent_v15.ps1'
             Add-DesktopShortcut ('Trading Agent - '+$name) $scriptFile
             Start-Process powershell.exe -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$scriptFile+'"')
             $status.Text='Installed. Agent starts automatically. Copy its connection code into the VM registry on your third computer.'

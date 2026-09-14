@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Private-Network.ps1')
+try { $null=Get-PrivateAddress15 } catch { Write-Host $_.Exception.Message;Read-Host 'Press Enter to close';exit 1 }
 $data = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\coordinator-data'
 $launch = Join-Path $data 'launch.json'
 if (Test-Path -LiteralPath $launch) {

@@ -153,3 +153,23 @@ class FleetTests(unittest.TestCase):
             finally:migrated.shutdown()
 
 if __name__=='__main__':unittest.main()
+
+class MigrationTests(FleetTests):
+    def private_code(self, slot):
+        import base64, json
+        value=self.fleet.catalog.config[slot].copy()
+        value['host']='100.77.1.2'
+        return base64.b64encode(json.dumps(value).encode()).decode()
+    def test_idle_same_identity_migrates_without_releasing_pair(self):
+        slot=self.ids[0]
+        self.fleet.enroll(slot,self.private_code(slot))
+        self.assertEqual(self.fleet.catalog.config[slot]['host'],'100.77.1.2')
+        self.assertEqual(self.fleet.pairs[self.a].config[slot]['host'],'100.77.1.2')
+        self.assertEqual(self.fleet.owners[slot],self.a)
+        self.assertFalse(any(command=='entry' for _,command,_ in self.fake.calls))
+    def test_active_pair_cannot_migrate(self):
+        self.prepare(self.a);self.enter(self.a)
+        with self.assertRaises(ValueError):self.fleet.enroll(self.ids[0],self.private_code(self.ids[0]))
+    def test_stale_new_endpoint_cannot_migrate(self):
+        self.fake.states[self.ids[0]]['sampleAgeMs']=99999
+        with self.assertRaises(ValueError):self.fleet.enroll(self.ids[0],self.private_code(self.ids[0]))

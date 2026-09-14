@@ -85,7 +85,7 @@ function renderRegistry(s) {
   $('select-pair').disabled=pending||s.fleet.filter(a=>!a.pairId).length<2;
   $('connections').disabled=false;
   const imported=s.fleet.find(a=>a.id===registeredId);
-  if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check the agent and port 8789 firewall scope.');
+  if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check that the agent is running and both computers are connected to the same Tailscale network.');
   $('pair-list').replaceChildren();
   for(const pair of s.pairs){
     const row=document.createElement('div');row.className='pair-summary'+(pair.id===selectedPairId?' selected':'')+(pair.active?' active':'');

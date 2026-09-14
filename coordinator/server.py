@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import hashlib
 import hmac
+import ipaddress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -23,7 +24,7 @@ import time
 import uuid
 import webbrowser
 
-VERSION = '14.0-preview.2'
+VERSION = '15.0-preview.1'
 AGENT_VERSIONS = {VERSION}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
@@ -265,7 +266,7 @@ class Center:
             observation = dict(online=bool(valid), fresh=fresh, received=time.monotonic(),
                                ageMs=total_age if math.isfinite(total_age) else 999999,
                                rttMs=response.get('_rttMs'), state=state if valid else {},
-                               error='' if valid else 'Agent identity/version mismatch; install V14 on this VM before using multiple pairs.')
+                               error='' if valid else 'Agent identity/version mismatch; install V15 on this VM before using multiple pairs.')
         except Exception as exc:
             observation = dict(online=False, fresh=False, received=time.monotonic(), ageMs=999999,
                                state={}, rttMs=None, error=f'Connection unavailable ({type(exc).__name__}).')
@@ -605,7 +606,7 @@ class Fleet:
                     pair.mark_active()
                 pair.save_fleet()
             self.save_index()
-        # A retained root marker protects a V12 rollback; V14 uses per-pair markers.
+        # A retained root marker protects a V12 rollback; V15 uses per-pair markers.
         self.catalog.pair = ()
         self.catalog.active = False
 
@@ -715,7 +716,40 @@ class Fleet:
         with self.lock:
             owner = self.owners.get(value['id'])
             if owner:
-                raise ValueError('Release this VM from its pair before changing its registration. Other pairs may keep running.')
+                # V15 network migration may update only the address of the same idle, authenticated VM.
+                pair = self.get_pair(owner)
+                old = self.catalog.config.get(value['id'], {})
+                same_identity = all(old.get(k) == value.get(k) for k in ('id','name','pin','token','port'))
+                try: private = ipaddress.ip_address(value['host']) in ipaddress.ip_network('100.64.0.0/10')
+                except ValueError: private = False
+                if not same_identity or not private or not pair.operation.acquire(blocking=False):
+                    raise ValueError('Release this VM from its pair before changing its identity. Network migration requires the same VM credentials.')
+                try:
+                    with pair.lock:
+                        if pair.active or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
+                            raise ValueError('Close and verify this pair before updating its network registration.')
+                    response = self.transport(value, 'status', timeout=5)
+                    state = response.get('state', {})
+                    age = float(response.get('cacheAgeMs',999999)) + float(state.get('sampleAgeMs',999999)) + float(response.get('_rttMs',0))
+                    if not (response.get('ok') and state.get('ok') and state.get('id') == value['id']
+                            and state.get('controlVersion') == VERSION and 0 <= age < MAX_AGE_MS
+                            and state.get('position') == 'Flat' and state.get('account')
+                            and not any(state.get(k) for k in ('busy','scheduled','pairActive','pendingVerification','closing'))):
+                        raise ValueError('The new private endpoint must report fresh, idle Flat status before registration changes.')
+                    with pair.lock:
+                        if pair.active: raise ValueError('Pair became active; network registration was not changed.')
+                        updated = dict(self.catalog.config);updated[value['id']] = value
+                        if self.persist:
+                            atomic_write(self.directory / 'connections.dpapi', protect(json.dumps(updated).encode()))
+                        self.catalog.config[value['id']] = value
+                        pair.config[value['id']] = value
+                        pair.prepared = None;pair.generation += 1
+                        pair.observations.pop(value['id'], None)
+                        self.catalog.observations.pop(value['id'], None)
+                        pair.event('Private network address updated for '+value['name']+'. Prepare again before entry.')
+                    return
+                finally:
+                    pair.operation.release()
             # Center.enroll persists credentials. Fleet supplies its own pollers.
             old_persist = self.catalog.persist
             self.catalog.persist = False

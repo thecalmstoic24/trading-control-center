@@ -38,7 +38,14 @@ public sealed class ControlGateway11 : IDisposable {
     private int clients;
     public ControlGateway11(int port, X509Certificate2 cert, string credential) {
         certificate=cert; token=credential;
-        listener=new TcpListener(IPAddress.Any, port);
+        listener=new TcpListener(IPAddress.Loopback, port);
+    }
+    public ControlGateway11(int port, X509Certificate2 cert, string credential, string localAddress) {
+        IPAddress address=IPAddress.Parse(localAddress);
+        byte[] bytes=address.GetAddressBytes();
+        if(bytes.Length!=4 || bytes[0]!=100 || bytes[1]<64 || bytes[1]>127) throw new ArgumentException("Private network address required");
+        certificate=cert;token=credential;
+        listener=new TcpListener(address,port);
     }
     public void Start() { listener.Start(16); running=true; new Thread(Accept){IsBackground=true}.Start(); }
     public void Publish(string json) { lock(gate) { cached=json; cachedAt=Stopwatch.GetTimestamp(); } }

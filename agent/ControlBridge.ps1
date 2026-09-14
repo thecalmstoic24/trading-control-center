@@ -4,12 +4,12 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '14.0-preview.2'
+$script:ControlVersion = '15.0-preview.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
 $agentNameInput.Text = $script:ControlIdentity.Name
-$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V14 account selection"
+$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V15 account selection"
 $heading.Text = "Trading Agent - $($script:ControlIdentity.Name)"
 $portInput.Value = 8789
 $peerPortInput.Value = 8789
@@ -114,6 +114,7 @@ function Invoke-ControlCommand {
         if ([string]$request.bindingId -notmatch '^[a-f0-9]{32}$' -or [string]$peer.id -ceq $script:ControlIdentity.Id -or
             [string]$peer.token -notmatch '^[a-f0-9]{64}$' -or [string]$peer.pin -notmatch '^[a-f0-9]{64}$') { throw 'Invalid peer registration.' }
         $address = [Net.IPAddress]::Parse([string]$peer.host)
+        if(-not (Test-PrivateAddress15 $address.ToString())) { throw 'Peer is not on the V15 private network. Update and register this VM again.' }
         if ([int]$peer.port -ne 8789) { throw 'Peer TLS port must be 8789.' }
         if([string]::IsNullOrWhiteSpace([string]$request.peerAccount) -or [int]$request.peerQuantity -lt 1 -or [int]$request.peerQuantity -gt 1000) { throw 'Invalid peer account or quantity.' }
         $script:PeerAccount14=[string]$request.peerAccount
@@ -264,7 +265,10 @@ $form.Add_Shown({
     try {
         $certificate = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $script:ControlIdentity.Thumbprint)
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password
-        $script:ControlGateway = [ControlGateway11]::new(8789, $certificate, $credential)
+        . (Join-Path $PSScriptRoot '..\install\Private-Network.ps1')
+        $privateAddress15=Get-PrivateAddress15
+        if($privateAddress15 -cne $script:ControlIdentity.HostAddress) { throw 'Private network address changed. Rerun the installer and re-import this VM connection code.' }
+        $script:ControlGateway = [ControlGateway11]::new(8789, $certificate, $credential, $privateAddress15)
         $script:ControlGateway.Start()
         Start-AgentListener
         $controlTimer.Start()
