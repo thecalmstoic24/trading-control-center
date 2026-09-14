@@ -24,15 +24,18 @@ import time
 import uuid
 import webbrowser
 
+# Embedded Windows Python omits the script directory, including at import time.
+import sys
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
 
-VERSION = '16.0-preview.9'
-AGENT_VERSIONS = {VERSION, '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.10'
+AGENT_VERSIONS = {VERSION, '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
 MAX_PAIRS = 20
-ROOT = Path(__file__).resolve().parent
 MAX_AGE_MS = 4000
 
 
@@ -1026,9 +1029,6 @@ def main():
     parser.add_argument('--data-dir', type=Path, required=True)
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
-    # The Windows embedded runtime excludes the script directory from sys.path.
-    import sys
-    sys.path.insert(0, str(ROOT))
     from planning import Planning
     from pair_queue import PairQueue
     center = Fleet(args.data_dir)
