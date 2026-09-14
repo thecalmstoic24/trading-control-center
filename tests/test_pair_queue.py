@@ -58,6 +58,13 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.agent.states['vm-right']['profit'],1500)
         self.assertEqual(self.agent.states['vm-right']['stopLoss'],1200)
         self.assertEqual(self.agent.states['vm-right']['quantity'],'15')
+    def test_same_fund_rejected_on_server(self):
+        for slot,account in [('vm-left','A'),('vm-right','B')]:
+            self.agent.states[slot]['accounts']=[account]
+            self.fleet.observe(slot)
+            self.body['accounts'][slot]=account
+        self.store.records=lambda table:[{'id':'rec'+a,'fields':{'id':a,'Master Account':m,'CurrentBalance':50000}} for a,m in [('A','MFF-A'),('B','MFF-B')]]
+        with self.assertRaisesRegex(ValueError,'Same fund'): self.queue.add(self.body)
     def tick_until(self,status,limit=200):
         for _ in range(limit):
             self.queue.tick()

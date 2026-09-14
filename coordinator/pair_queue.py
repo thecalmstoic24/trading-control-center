@@ -202,6 +202,12 @@ class PairQueue:
             if len(matches) != 1: raise ValueError('Account must have one exact Airtable match.')
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
             balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
+        if all(accounts[s]!='Sim101' for s in (left,right)):
+            funds=[]
+            for slot in (left,right):
+                name=masters[slot].strip().upper(); prefix=re.match(r'^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)',name)
+                funds.append(prefix.group(0) if prefix else re.split(r'[-_\s]+',name)[0])
+            if funds[0] and funds[0]==funds[1]: raise ValueError('Same fund: choose accounts from different funds.')
         if accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
         validate_quantities(dict(body, quantities=quantities), left, right)
         return dict(**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,

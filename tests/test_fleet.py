@@ -20,6 +20,18 @@ class FleetTests(unittest.TestCase):
             self.fleet.observe(slot)
         self.a=self.fleet.create_pair(*self.ids[:2])
         self.b=self.fleet.create_pair(*self.ids[2:])
+    def test_vm_refresh_updates_owned_shared_account_list(self):
+        self.fake.states['vm-left']['accounts']=['Sim101','MFF-NEW']
+        self.fleet.refresh_vm('vm-left')
+        deadline=time.time()+4
+        while self.fleet.vm_refresh['vm-left']['status']=='running' and time.time()<deadline: time.sleep(.02)
+        self.assertEqual(self.fleet.vm_refresh['vm-left']['status'],'complete')
+        self.assertIn('MFF-NEW',self.fleet.view('vm-left')['accounts'])
+        self.assertIn('MFF-NEW',self.fleet.get_pair(self.a).view_agent('vm-left')['accounts'])
+    def test_vm_refresh_does_not_touch_active_pair(self):
+        self.fleet.get_pair(self.a).active=True
+        with self.assertRaises(ValueError): self.fleet.refresh_vm('vm-left')
+        self.assertFalse(any(c[1]=='accounts' for c in self.fake.calls))
     def tearDown(self):
         self.fleet.shutdown()
         for center in [self.fleet.catalog,*self.fleet.pairs.values(),*self.fleet.retired]:

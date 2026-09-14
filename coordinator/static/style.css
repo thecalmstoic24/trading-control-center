@@ -56,3 +56,15 @@ main.planning-wide{max-width:none;width:100%;padding:28px 24px}
 .draft-card .draft-center select{padding:5px 1px;font-size:12px;margin-top:3px}
 .draft-notice{color:#a7d9f3;font-size:12px}.draft-notice:empty{display:none}
 .draft-card .draft-account .draft-balance{font-size:12px;white-space:nowrap;overflow-wrap:normal}
+
+.planning-layout{grid-template-columns:minmax(0,var(--planning-split,65%)) 10px minmax(0,1fr);gap:8px}
+#planning-divider{align-self:stretch;cursor:col-resize;touch-action:none;border-radius:5px;background:#2b4354;min-height:450px}
+#planning-divider:hover,#planning-divider:focus-visible{background:#71bddc;outline:2px solid #a2dff5}
+.draft-card .draft-account{position:relative}.draft-card .draft-account.empty{background:#101a24;border-style:dashed}
+.draft-account[draggable=true]{cursor:grab}.draft-card .account-remove{position:absolute;top:0;right:0;margin:0;padding:1px 5px;font-size:15px}
+.draft-account strong{padding-right:12px}.draft-account.drop-target{outline:2px solid #91dbff}
+#vms-panel{padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.vm-list-row{padding:18px 0;border-top:1px solid var(--line)}.vm-list-summary{display:grid;grid-template-columns:minmax(180px,2fr) repeat(3,minmax(95px,1fr)) auto;gap:14px;align-items:center}
+.vm-list-summary strong{font-size:22px}.vm-list-row details{margin-top:12px}.vm-list-row p{font-size:13px}.vm-list-row .linked-accounts{line-height:1.8;overflow-wrap:anywhere}
+#view-save-status{font-size:12px;color:var(--green)}
+@media(max-width:1000px){.planning-layout{grid-template-columns:1fr}#planning-divider{display:none}.vm-list-summary{grid-template-columns:1fr 1fr}}

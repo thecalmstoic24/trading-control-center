@@ -30,8 +30,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
 
-VERSION = '16.0-preview.10'
-AGENT_VERSIONS = {VERSION, '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.11'
+AGENT_VERSIONS = {VERSION, '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -629,6 +629,7 @@ class Fleet:
         self.threads = {}
         self.retired = []
         self.releasing = set()
+        self.vm_refresh = {}
         self.persist = persist
         self.transport = transport
         self.started = False
@@ -688,11 +689,14 @@ class Fleet:
         with center.lock:
             result = center.view_agent(slot)
         result['pairId'] = owner
+        result['refresh'] = self.vm_refresh.get(slot, {}).copy()
         return result
 
     def create_pair(self, left, right):
         # Network I/O stays outside the fleet lock so other pairs keep monitoring.
         with self.lock:
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in (left,right)):
+                raise ValueError('VM account refresh is running. Wait for it to finish.')
             if left == right or left not in self.catalog.config or right not in self.catalog.config:
                 raise ValueError('Choose two different registered VMs.')
             for identity, pair in self.pairs.items():
@@ -705,6 +709,8 @@ class Fleet:
             request.result()
         # Recheck reservations after the requests: another browser may have paired a VM.
         with self.lock:
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in (left,right)):
+                raise ValueError('VM account refresh is running. Wait for it to finish.')
             if left == right or left not in self.catalog.config or right not in self.catalog.config:
                 raise ValueError('Choose two different registered VMs.')
             for identity,pair in self.pairs.items():
@@ -882,6 +888,44 @@ class Fleet:
             center = self.pairs[owner] if owner else self.catalog
         center.observe(slot)
 
+    def refresh_vm(self, slot):
+        with self.lock:
+            if slot not in self.catalog.config: raise ValueError('Choose a registered VM.')
+            if self.vm_refresh.get(slot,{}).get('status')=='running': return
+            owner=self.owners.get(slot)
+            center=self.pairs[owner] if owner else self.catalog
+            locked=False
+            if owner:
+                if not center.operation.acquire(blocking=False): raise ValueError('A pair operation is running. Try refresh after it finishes.')
+                locked=True
+                if center.active or center.prepared or center.sync_dispatch:
+                    center.operation.release()
+                    raise ValueError('This pair is prepared, trading or syncing. Finish it before refreshing accounts.')
+            self.vm_refresh[slot]={'status':'running','message':'Checking connection and refreshing accounts…'}
+        def work():
+            try:
+                center.observe(slot)
+                with center.lock:
+                    if not center.safe_flat(center.view_agent(slot)):
+                        raise ValueError('VM must report fresh, idle Flat before account discovery.')
+                    center.discovery_until=time.monotonic()+130
+                center.call(slot,'accounts',{},15)
+                # The worker publishes its account list asynchronously.
+                center.stop.wait(1)
+                center.wait_refresh_idle(slot)
+                with center.lock:
+                    view=center.view_agent(slot)
+                    if not view.get('accounts'): raise ValueError('No account list returned. Check Airtable setup on this VM.')
+                    message=view.get('accountMessage','')
+                    if any(word in message.lower() for word in ('error','failed','unable')):
+                        raise ValueError(message)
+                with self.lock: self.vm_refresh[slot]={'status':'complete','message':'Accounts refreshed. '+message,'time':time.time()}
+            except Exception as exc:
+                with self.lock: self.vm_refresh[slot]={'status':'error','message':str(exc)[:350]}
+            finally:
+                if locked: center.operation.release()
+        threading.Thread(target=work,daemon=True).start()
+
     def idle_snapshot_held(self, slot):
         with self.lock:
             owner = self.owners.get(slot)
@@ -964,7 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/ratio.js': 'ratio.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
@@ -992,6 +1036,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.server.queue.command(self.path.rsplit('/',1)[1], body))
             elif self.path == '/api/planning/refresh':
                 self.server.planning.refresh(body.get('token'))
+                self.reply(202, {'ok':True})
+            elif self.path == '/api/vm-refresh':
+                self.server.center.refresh_vm(body.get('id'))
                 self.reply(202, {'ok':True})
             elif self.path == '/api/enroll':
                 slot = body.get('id')

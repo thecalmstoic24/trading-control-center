@@ -25,7 +25,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#planning-table tbody tr').first().waitFor();
  const accounts=()=>page.locator('#planning-table tbody tr td:nth-child(4)').allTextContents();
  assert.deepEqual(await accounts(),['A','B']);
- await page.getByRole('button',{name:'Move row 1 down',exact:true}).click();
+ await page.locator('#planning-table tbody tr').first().dragTo(page.locator('#planning-table tbody tr').nth(1));
  assert.deepEqual(await accounts(),['B','A']);
  await page.getByRole('button',{name:'Balance',exact:true}).click();
  assert.deepEqual(await accounts(),['B','A']);
@@ -47,7 +47,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.deepEqual(await accounts(),['C','B','A']);
  await page.locator('#planning-panel summary').click();
  await page.getByLabel('Balance',{exact:true}).check();
- await page.getByRole('button',{name:'Move Balance column earlier',exact:true}).click();
+ await page.getByRole('columnheader',{name:'Balance',exact:true}).dragTo(page.getByRole('columnheader',{name:'id',exact:true}));
+ await page.locator('#planning-save-view').click();
+ assert.equal(await page.locator('#view-save-status').textContent(),'View saved');
  assert.deepEqual(await page.locator('#planning-table thead th').allTextContents(),['Select','Order','Balance','Pair status','id']);
  await page.reload();await page.locator('#tab-planning').click();
  await page.waitForFunction(()=>document.querySelectorAll('#planning-table tbody tr').length===3);

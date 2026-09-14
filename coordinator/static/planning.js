@@ -36,10 +36,10 @@
       if(u.status){const badge=document.createElement('span');badge.className='account-badge '+u.status.toLowerCase();badge.textContent=u.status;td.append(badge);}
     }
   }
-  let layout={hidden:[],order:[],columns:[],sort:null};
+  let layout={hidden:[],order:[],columns:[],split:65,sort:null};
   try{
     const saved=JSON.parse(localStorage.getItem(key));
-    if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))layout={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],sort:saved.sort||null};
+    if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))layout={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],split:Number(saved.split)||65,sort:saved.sort||null};
   }catch(_){}
   let data={rows:[],columns:[]},lastUpdate=null,dragId='',polling=false,signature=null,eventTimer=null;
   function save(){try{localStorage.setItem(key,JSON.stringify(layout));}catch(_){el('planning-status').textContent='Browser storage is unavailable; layout will last for this session.';}}
@@ -65,11 +65,7 @@
       const label=node('label'),box=node('input');box.type='checkbox';box.checked=column.name==='id'||!layout.hidden.includes(column.name);box.disabled=column.name==='id';
       box.onchange=()=>{layout.hidden=layout.hidden.filter(n=>n!==column.name);if(!box.checked)layout.hidden.push(column.name);save();renderTable();};
       label.append(box,document.createTextNode(' '+column.name));container.append(label);
-      const names=columnOrder().map(c=>c.name),i=names.indexOf(column.name);
-      for(const [text,delta] of [['←',-1],['→',1]]){
-        const move=node('button',text);move.className='quiet';move.disabled=!names[i+delta];move.setAttribute('aria-label','Move '+column.name+' column '+(delta<0?'earlier':'later'));
-        move.onclick=()=>moveColumn(column.name,names[i+delta]);container.append(move);
-      }
+
     }
   }
   function renderTable(){
@@ -96,10 +92,7 @@
       tr.ondragover=e=>{if(!layout.sort)e.preventDefault();};
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
       const order=node('td');order.className='row-order';order.append(node('span',String(i+1)));
-      for(const [label,delta] of [['↑',-1],['↓',1]]){
-        const b=node('button',label);b.className='quiet';b.disabled=!!layout.sort||!rows[i+delta];b.setAttribute('aria-label',`Move row ${i+1} ${delta<0?'up':'down'}`);
-        b.onclick=()=>{move(row.id,rows[i+delta].id);const buttons=table.querySelectorAll('tbody tr');buttons[i+delta]?.querySelector('button')?.focus();};order.append(b);
-      }
+
       const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);tr.append(node('td',display(row.fields[c.name])));}body.append(tr);
     });
     if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
@@ -120,11 +113,20 @@
     el('planning-refresh').disabled=true;el('planning-status').textContent='Requesting latest Airtable data…';
     try{await api('/api/planning/refresh',body);await poll();}catch(e){el('planning-status').textContent=e.message;el('planning-setup-status').textContent=e.message;el('planning-refresh').disabled=false;}
   }
-  for(const tab of ['trading','planning'])el('tab-'+tab).onclick=()=>{
-    for(const name of ['trading','planning']){el(name+'-panel').hidden=name!==tab;el('tab-'+name).setAttribute('aria-selected',String(name===tab));}
+  for(const tab of ['vms','planning','trading'])el('tab-'+tab).onclick=()=>{
+    for(const name of ['vms','planning','trading']){el(name+'-panel').hidden=name!==tab;el('tab-'+name).setAttribute('aria-selected',String(name===tab));}
     document.querySelector('main').classList.toggle('planning-wide',tab==='planning');
     if(tab==='planning')poll();
   };
+  const split=el('planning-divider'),layoutBox=document.querySelector('.planning-layout');
+  function resize(value){layout.split=Math.max(30,Math.min(78,value));layoutBox.style.setProperty('--planning-split',layout.split+'%');split.setAttribute('aria-valuenow',Math.round(layout.split));}
+  resize(layout.split||65);
+  split.onpointerdown=e=>{split.setPointerCapture(e.pointerId);split.dataset.dragging='true';e.preventDefault();};
+  split.onpointermove=e=>{if(split.dataset.dragging!=='true')return;const box=layoutBox.getBoundingClientRect();resize((e.clientX-box.left)/box.width*100);};
+  split.onpointerup=()=>{delete split.dataset.dragging;save();};
+  split.onpointercancel=()=>{delete split.dataset.dragging;};
+  split.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();resize(layout.split+(e.key==='ArrowLeft'?-2:2));save();}};
+  el('planning-save-view').onclick=()=>{try{localStorage.setItem(key,JSON.stringify(layout));el('view-save-status').textContent='View saved';}catch(_){el('view-save-status').textContent='Unable to save view: browser storage is unavailable.';}};
   el('planning-refresh').onclick=()=>refresh();
   el('planning-manual').onclick=()=>{layout.sort=null;save();renderTable();};
   el('planning-setup').onclick=()=>el('planning-dialog').showModal();

@@ -25,6 +25,21 @@
     }
     window.planningSelection.clear();el('draft-message').textContent='Accounts added to drafts.';save();render();usage();
   }
+  const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
+  function problem(d){
+    if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
+    const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
+    if(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a)return 'Invalid quantity';
+    return '';
+  }
+  function validateCard(card,d){
+    const error=problem(d),button=card.querySelector('button[type=submit]');
+    if(!button)return;
+    button.disabled=!!error||!d.left||!d.right||inFlight.has(d.key);
+    button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':'Confirm pair';
+    card.querySelector('.draft-notice').textContent=error==='Invalid quantity'?'Invalid quantity: whole contracts only. Adjust quantity or use MNQ.':d.notice||'';
+  }
+  let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
     const l=make('label',label),n=make('input');n.type=type;n.value=d[key];n.required=true;n.dataset.field=alias;n.dataset.valueKey=key;
     if(type==='number'){n.min=key.includes('Quantity')?'1':'0.01';n.max=key.includes('Quantity')?'1000':'100000';n.step=key.includes('Quantity')?'1':'0.01';}
@@ -34,7 +49,7 @@
         if(other!==n||d.ticker==='MNQ SEP26')other.value=d[other.dataset.valueKey];
       }
       const card=form.closest('form');card.querySelector('[data-field=ticker]').value=d.ticker;card.querySelector('.draft-notice').textContent=d.notice||'';
-      save();
+      validateCard(card,d);save();
     };l.append(n);form.append(l);
   }
   function render(){
@@ -53,15 +68,27 @@
           for(const value of PairRatio.options){const opt=make('option',value);opt.value=value;select.append(opt);}select.value=d.ratio;
           select.onchange=()=>{d.ratio=select.value;PairRatio.amounts(d);PairRatio.quantities(d);save();render();};label.append(select);center.append(label);accountsGrid.append(center);
         }
-        const item=d[side],block=make('div');block.className='draft-account';block.dataset.side=side;
+        const item=d[side],block=make('div');block.className='draft-account';block.dataset.side=side;block.classList.toggle('empty',!item);block.draggable=!!item&&!inFlight.has(d.key);
+        block.ondragstart=e=>{dragged={key:d.key,side};e.dataTransfer.setData('application/x-pair-account',JSON.stringify(dragged));e.dataTransfer.effectAllowed='move';};
+        block.ondragend=()=>{dragged=null;document.querySelectorAll('.drop-target').forEach(n=>n.classList.remove('drop-target'));};
+        block.ondragover=e=>{if(dragged&&!inFlight.has(d.key)){e.preventDefault();block.classList.add('drop-target');}};
+        block.ondragleave=()=>block.classList.remove('drop-target');
+        block.ondrop=e=>{
+          e.preventDefault();block.classList.remove('drop-target');if(!dragged||inFlight.has(d.key))return;
+          const source=drafts.find(x=>x.key===dragged.key),from=dragged.side;dragged=null;
+          if(!source||inFlight.has(source.key)||!source[from]||(source===d&&from===side))return;
+          const previous=d[side];d[side]=source[from];if(previous)source[from]=previous;else delete source[from];
+          save();render();usage();
+        };
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
         const balance=make('p',item?.balance!=null&&Number.isFinite(Number(item.balance))?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(item.balance)):'Balance unavailable');balance.className='draft-balance';block.append(balance);
         const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
+          const remove=make('button','×');remove.type='button';remove.className='quiet account-remove';remove.setAttribute('aria-label','Remove account '+item.account);
+          remove.onclick=()=>{delete d[side];save();render();usage();};block.append(remove);
           const choices=chooseVM(item);
-          if(!choices.length)block.append(make('small','No registered VM lists this account yet. Refresh accounts in Trading.'));
-          else if(!item.vm)block.append(make('small','Multiple VMs match this account. Resolve its VM registration before confirming.'));
+          const note=make('small',!choices.length?'No registered VM lists this account yet. Refresh it in VMs.':!item.vm?'Multiple VMs match this account. Resolve its registration before confirming.':'');note.className='vm-match-note';block.append(note);
         }
         const amounts=make('div');amounts.className='draft-amounts';
         input(amounts,d,side+'Quantity','Quantity','number');
@@ -82,8 +109,9 @@
       const remove=make('button','Remove');remove.className='quiet';remove.type='button';remove.onclick=()=>{drafts=drafts.filter(x=>x!==d);save();render();usage();};footer.append(remove);
       const notice=make('p',d.notice||'');notice.className='draft-notice';notice.setAttribute('role','status');disabled.append(notice);
       const message=make('p',d.error||'');message.className='draft-error';message.setAttribute('role','status');disabled.append(message);
+      validateCard(card,d);
       card.onsubmit=async e=>{
-        e.preventDefault();if(inFlight.has(d.key))return;
+        e.preventDefault();if(inFlight.has(d.key)||problem(d))return;
         if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
         const left=d.left?.vm,right=d.right?.vm;
         if(!left||!right||left===right){message.textContent='Both accounts need an unambiguous match on two different registered VMs.';return;}
@@ -110,7 +138,11 @@
     save();
   });
   el('draft-left').onclick=()=>add('left');el('draft-right').onclick=()=>add('right');
-  window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];pairs=e.detail.pairs||[];usage();});
+  window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];pairs=e.detail.pairs||[];
+    for(const d of drafts)for(const side of ['left','right'])if(d[side]){
+      const choices=chooseVM(d[side]),note=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .vm-match-note`);
+      if(note)note.textContent=!choices.length?'No registered VM lists this account yet. Refresh it in VMs.':!d[side].vm?'Multiple VMs match this account. Resolve its registration before confirming.':'';
+    }usage();});
   window.addEventListener('queue-updated',e=>{
     queued=e.detail.rows||[];const keys=new Set(queued.map(r=>r.key));const old=drafts.length;drafts=drafts.filter(d=>!keys.has(d.key));
     if(old!==drafts.length){save();render();}usage();

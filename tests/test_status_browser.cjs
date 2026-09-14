@@ -18,7 +18,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
- await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-trading').click();
  await page.waitForFunction(()=>document.querySelector('#vm-left .position').textContent==='Pairing');
  assert.equal(await page.locator('#vm-right .position').textContent(),'Pairing');
  assert.equal(await page.locator('#left-quantity').inputValue(),'3');

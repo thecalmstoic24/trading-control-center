@@ -5,13 +5,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],writes=[];
  page.on('pageerror',e=>errors.push(e.message));
  const rows=['MFF-A','LCD-B','MFF-C','LCD-E'].map((a,i)=>({id:'rec'+i,fields:{id:a,'Master Account':a.startsWith('MFF')?'MFF-LOCDAO':'LCD-LOCDAO',CurrentBalance:50000,'Realized PnL':0}}));
- const fleet=['mff','lcd'].map((id,i)=>({id,name:id.toUpperCase()+'-LOCDAO',accounts:['Sim101',...rows.filter(r=>r.fields.id.startsWith(id.toUpperCase())).map(r=>r.fields.id)],fresh:true,position:'Flat',lastKnown:{position:'Flat'},configured:true}));
+ const fleet=['mff','lcd'].map((id,i)=>({id,name:id.toUpperCase()+'-LOCDAO',accounts:['Sim101',...rows.filter(r=>r.fields.id.startsWith(id.toUpperCase())).map(r=>r.fields.id)],online:true,fresh:true,position:'Flat',lastKnown:{position:'Flat'},configured:true}));
  const state={fleet,pairs:[],events:[]},queue={rows:[],running:false,message:'Queue paused.'};
  let fail=false;
  await page.route('http://127.0.0.1:8788/**',async route=>{
   const req=route.request(),url=new URL(req.url());let result;
   if(req.method()==='POST'){
    const b=req.postDataJSON();writes.push({path:url.pathname,body:b});
+   if(url.pathname==='/api/vm-refresh'){state.fleet.find(v=>v.id===b.id).accounts.push('MFF-NEW');}
    if(url.pathname==='/api/queue/add'){
     if(fail)return route.fulfill({status:400,json:{error:'Connection unavailable. Retry.'}});
     queue.rows.push({id:'PAIR-0001',key:b.draftKey,status:'Queued',message:'Waiting',spec:{...b,masters:{mff:'MFF-LOCDAO',lcd:'LCD-LOCDAO'}}});
@@ -23,13 +24,31 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
- await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-planning').click();
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));assert.equal(await page.locator('#vms-panel').isVisible(),true);
+ await page.locator('[data-vm=mff]').getByRole('button',{name:'Refresh',exact:true}).click();
+ await page.locator('[data-vm=mff] summary').click();
+ assert.ok((await page.locator('[data-vm=mff] .linked-accounts').textContent()).includes('MFF-NEW'));
+ await page.locator('#tab-planning').click();
  await page.getByRole('checkbox',{name:'Select MFF-A',exact:true}).check();await page.locator('#draft-left').click();
  await page.getByRole('checkbox',{name:'Select LCD-B',exact:true}).check();await page.locator('#draft-right').click();
  await page.getByRole('checkbox',{name:'Select MFF-C',exact:true}).check();await page.locator('#draft-left').click();
  await page.getByRole('checkbox',{name:'Select LCD-E',exact:true}).check();await page.locator('#draft-right').click();
  assert.equal(await page.locator('.draft-card').count(),2);assert.equal(await page.locator('#planning-table tr.account-used').count(),4);
  assert.equal(writes.filter(w=>w.path==='/api/queue/add').length,0);
+ const cards=page.locator('.draft-card');
+ await cards.nth(0).locator('[data-side=right]').dragTo(cards.nth(1).locator('[data-side=left]'));
+ assert.equal(await page.getByRole('button',{name:'Same fund',exact:true}).count(),2);
+ assert.equal(await page.getByRole('button',{name:'Same fund',exact:true}).first().isDisabled(),true);
+ await cards.nth(0).locator('[data-side=right]').dragTo(cards.nth(1).locator('[data-side=left]'));
+ await page.getByRole('button',{name:'Remove account MFF-A',exact:true}).click();
+ assert.equal(await cards.nth(0).locator('[data-side=left].empty').count(),1);
+ assert.equal(await cards.count(),2);
+ await page.getByRole('checkbox',{name:'Select MFF-A',exact:true}).check();await page.locator('#draft-left').click();
+ const beforeResize=await page.locator('.draft-panel').boundingBox();
+ const divider=await page.locator('#planning-divider').boundingBox();
+ await page.mouse.move(divider.x+4,divider.y+50);await page.mouse.down();await page.mouse.move(divider.x-180,divider.y+50);await page.mouse.up();
+ assert.ok((await page.locator('.draft-panel').boundingBox()).width>beforeResize.width+100);
+ await page.locator('#planning-save-view').click();
  const first=page.locator('.draft-card').first();await first.locator('[data-field=stopLoss]').fill('900');await first.locator('[data-field=profit]').fill('1200');await first.locator('[data-field=leftQuantity]').fill('3');
  assert.equal(await first.locator('select').count(),2);
  assert.equal(await first.locator('.draft-balance').first().textContent(),'$50,000.00');
@@ -56,6 +75,11 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await first.locator('[data-field=ratio]').inputValue(),'3:2');
  assert.equal(await first.locator('[data-field=stopLoss]').inputValue(),'1800');
  await first.getByRole('button',{name:'Swap accounts and their settings',exact:true}).click();
+ await first.locator('[data-field=ratio]').selectOption('3:4');
+ await first.locator('[data-field=leftQuantity]').fill('1');
+ assert.equal(await first.getByRole('button',{name:'Confirm pair',exact:true}).isDisabled(),true);
+ assert.match(await first.locator('.draft-notice').textContent(),/whole contracts/);
+ await first.locator('[data-field=leftQuantity]').fill('30');
  await first.locator('[data-field=ratio]').selectOption('1:1');
  await first.locator('[data-field=ticker]').selectOption('NQ SEP26');
  await first.locator('[data-field=leftQuantity]').fill('3');
@@ -78,7 +102,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fleet-updated',{detail:{fleet:[],pairs:[]}})));
  assert.equal(await page.locator('.account-badge.queue').count(),2);
  const left=await page.locator('.planning-accounts').boundingBox(),right=await page.locator('.draft-panel').boundingBox();
- assert.ok(left.width/right.width>2.9&&left.width/right.width<3.1);assert.ok(left.x<60);assert.ok(right.x>left.x+left.width);
+ assert.ok(left.width/right.width>1&&left.width/right.width<1.5);assert.ok(left.x<60);assert.ok(right.x>left.x+left.width);
  await page.screenshot({path:'/tmp/planning-builder.png',fullPage:true});
  queue.rows[0].status='Complete';await page.evaluate(q=>window.dispatchEvent(new CustomEvent('queue-updated',{detail:q})),queue);
  assert.equal(await page.locator('.account-badge').count(),0);assert.equal(await page.locator('#planning-table tr.account-used').count(),2);
