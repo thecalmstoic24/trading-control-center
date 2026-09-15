@@ -11,7 +11,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   if(req.method()==='POST'){
    const body=req.postDataJSON();writes.push({path:url.pathname,body});
    if(url.pathname==='/api/queue/start'){queue.running=true;queue.rows.filter(r=>r.status==='Queued').forEach(r=>r.dispatched=true);}
-   if(url.pathname==='/api/queue/duplicate'){const source=queue.rows.find(r=>r.id===body.id);queue.rows.splice(queue.rows.indexOf(source)+1,0,{id:'PAIR-0088',key:body.draftKey,duplicateOf:'source',spec:source.spec,status:'Queued',message:'Copied configuration.'});}
+   if(url.pathname==='/api/queue/duplicate'){const source=[...queue.rows,...queue.history].find(r=>r.id===body.id);queue.rows.splice(queue.rows.indexOf(source)+1,0,{id:'PAIR-0088',key:body.draftKey,duplicateOf:'source',spec:source.spec,status:'Queued',message:'Copied configuration.'});}
    if(url.pathname==='/api/queue/pause')queue.running=false;
    if(url.pathname==='/api/queue/remove-selected'){
     queue.history.push(...queue.rows.filter(r=>body.ids.includes(r.id)).map(r=>({...r,status:'Cancelled',message:'Removed from Airtable.'})));
@@ -59,7 +59,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('#compact-pair input,#compact-pair select').count(),0);
  assert.equal(await page.getByRole('button',{name:'View trade',exact:true}).count(),0);
  assert.ok((await page.locator('#compact-pair').textContent()).includes('Account-left'));
- await page.screenshot({path:'/tmp/compact-preview21.png',fullPage:true});
+ await page.locator('#trading-queue-table [data-pair="PAIR-0003"] .duplicate-button').click();
+ assert.ok(writes.some(w=>w.path==='/api/queue/duplicate'&&w.body.id==='PAIR-0003'));
+ await page.screenshot({path:'/tmp/compact-preview22.png',fullPage:true});
  await page.locator('#trading-refresh').click();
  await page.waitForFunction(()=>!document.querySelector('#trading-queue-table [data-pair="PAIR-0001"]'));
  assert.ok(writes.some(w=>w.path==='/api/queue/refresh'));

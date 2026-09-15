@@ -121,7 +121,7 @@ class PairStore:
                     f[title + ' Realized PnL ' + phase.title()] = snap['pnl']
                     f[title + ' Current Balance'] = snap['balance']
             if slot in row.get('results', {}): f[title + ' Trade P&L'] = row['results'][slot]
-        if row.get('results'): f['Combined Result'] = round(sum(row['results'].values()), 2)
+        if len(row.get('results',{})) == 2: f['Combined Result'] = round(sum(row['results'].values()), 2)
         for src, dst in [('started', 'Started At'), ('closed', 'Closed At'), ('synced', 'Results Synced At')]:
             if row.get(src): f[dst] = row[src]
         return f
@@ -142,12 +142,14 @@ class PairQueue:
                     row['status'] = 'Error'; row['message'] = 'Coordinator restarted. No entry will be retried. Review the pair in Trading.'
                     row['dirty'] = True
             self.message = 'Restored queue, paused. Review any interrupted pair before starting.'
+        self.result_thread = threading.Thread(target=self.result_loop, daemon=True, name='queue-results')
         self.thread = threading.Thread(target=self.loop, daemon=True, name='planning-queue')
 
     def save(self):
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows, 'history': self.history}, allow_nan=False))
-        os.replace(tmp, self.path)
+        with self.lock:
+            tmp = self.path.with_suffix('.tmp')
+            tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows, 'history': self.history}, allow_nan=False))
+            os.replace(tmp, self.path)
 
     def snapshot(self):
         with self.lock: return copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history})
@@ -229,8 +231,8 @@ class PairQueue:
         if action == 'add': return {'id': self.add(body)}
         if action == 'duplicate':
             with self.lock:
-                source=next((r for r in self.rows if r['id']==body.get('id') and r['status']=='Complete'),None)
-                if not source: raise ValueError('Only completed pairs can be duplicated.')
+                source=next((r for r in self.rows+self.history if r['id']==body.get('id') and r['status'] in {'Complete','Cancelled'}),None)
+                if not source: raise ValueError('Only completed or canceled pairs can be duplicated.')
                 spec=copy.deepcopy(source['spec'])
                 source_key=source['key']
             spec['draftKey']=body.get('draftKey')
@@ -262,12 +264,14 @@ class PairQueue:
             if action in ('start','resume'):
                 # Failed rows retain their VM reservations, but do not stop unrelated rows.
                 for row in self.rows:
-                    if action=='start' and row['status'] in PENDING: row['dispatched']=True
+                    if action=='start' and row['status'] in PENDING:
+                        row['dispatched']=True
+                        row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in (row['spec']['left'],row['spec']['right']))
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
             elif action == 'start-one':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or row['status'] not in PENDING: raise ValueError('Select a waiting pair.')
-                row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
+                row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in (row['spec']['left'],row['spec']['right']));row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
             elif action == 'refresh':
                 self.refresh_remote()
             elif action == 'retry':
@@ -392,7 +396,7 @@ class PairQueue:
                 if row['status']=='Removing':
                     self.remove(row)
                     continue
-                if row.get('dirty'):
+                if row.get('dirty') and not row.get('fast22'):
                     self.sync(row)
             # Advance every active pair, then reserve any eligible pending pairs.
             # Fleet ownership is checked under its lock before each reservation.
@@ -417,22 +421,36 @@ class PairQueue:
                         a != 'Sim101' and a in p.settings.get('accounts', {}).values()
                         for a in spec['accounts'].values() for p in self.fleet.pairs.values()):
                     self.set_status(row,'Waiting','A VM or account is assigned to another pair. Release it in Trading when finished.'); return
-            for s in slots: self.fleet.observe(s)
+            if not row.get('checked22'):
+                for s in slots: self.fleet.observe(s)
             with self.fleet.lock:
                 agents=[self.fleet.view(s) for s in slots]
                 if any(a.get('calibrationRequired') for a in agents):
                     raise ValueError('Calibration required. Click Calibrate Chart 1 on the affected agent, then Retry preparation.')
-                if not all(self.fleet.catalog.safe_flat(a) for a in agents):
+                if not row.get('checked22') and not all(self.fleet.catalog.safe_flat(a) for a in agents):
                     self.set_status(row,'Waiting','Waiting for both VMs to report fresh, idle Flat.'); return
                 if not all(a.get('queueReceipts') for a in agents):
                     raise ValueError('Update both selected VM agents to preview.7 for verified queue results.')
                 if not all(a.get('queueAccountRefresh') for a in agents):
                     raise ValueError('Update both VM agents to Preview 18 for automatic verified account refresh.')
                 if not self.running: return
+                if row.get('fast22'): row['checked22']=True
                 pair_id=self.fleet.create_pair(*slots)
                 row['pairId']=pair_id
                 pair=self.fleet.get_pair(pair_id)
                 pair.settings.update({k:spec[k] for k in ('ticker','stopLoss','profit','accounts','quantities','ratio') if k in spec})
+                if row.get('fast22'):
+                    row['before']={}
+                    for agent in agents:
+                        receipt=agent.get('syncReceipt') or {}
+                        matches=[a for a in receipt.get('accounts',[]) if a.get('Account')==spec['accounts'][agent['id']]]
+                        if len(matches)==1:
+                            try:
+                                row['before'][agent['id']]={'pnl':money(matches[0].get('Realized PnL')),'balance':money(matches[0].get('CurrentBalance')),'time':receipt['completedUtc']}
+                            except (ValueError,KeyError): pass
+                    row['phase']='prepare';row['deadline']=time.time()+300
+                    self.set_status(row,'Preparing','Using cached accounts. Preparing calibrated charts; no starting Airtable sync.')
+                    row['job']=pair.submit('prepare',spec);self.save();return
                 row['refreshId']=uuid.uuid4().hex; row['phase']='accounts'; row['requested']=[]; row['deadline']=time.time()+150
                 self.set_status(row,'Preparing','Refreshing both agents’ account lists before preparation.'); return
         pair=self.fleet.get_pair(row['pairId'])
@@ -474,7 +492,8 @@ class PairQueue:
             if time.time() > row['deadline']: raise ValueError('Starting balance snapshot expired. No entry sent; add a new pair after review.')
             # Persist the one-way entry transition before sending anything to the agent.
             row['started']=now(); row['closedSequence']=pair.closed_sequence; row['afterId']=pair.binding_id
-            self.set_status(row,'Trading','Entry requested; awaiting actual positions.'); self.sync(row)
+            self.set_status(row,'Trading','Entry requested; awaiting actual positions.')
+            if not row.get('fast22'): self.sync(row)
             with self.lock:
                 if not self.running:
                     row['phase']='prepare'; self.set_status(row,'Preparing','Paused before entry.'); return
@@ -484,13 +503,28 @@ class PairQueue:
             job=next((j for j in pair.jobs if j['id']==row.get('job')),None)
             if job and job['status']=='error': raise ValueError(job['message'])
             if pair.closed_sequence <= row['closedSequence']: return
-            row['closed']=now(); row['deadline']=time.time()+300
+            row['closed']=now(); row['deadline']=time.time()+(30 if row.get('fast22') else 300)
             self.set_status(row,'Awaiting results','Waiting for confirmed post-trade exports.'); return
         if status=='Awaiting results':
-            if time.time()>row['deadline']: raise ValueError('Post-trade result export timed out. Pair retained for review; no next entry.')
+            if time.time()>row['deadline']:
+                if row.get('fast22'):
+                    self.set_status(row,'Awaiting results','CSV capture still pending. These VMs remain reserved until both snapshots are saved; other pairs continue.')
+                else: raise ValueError('Post-trade result export timed out. Pair retained for review; no next entry.')
             for slot in slots: pair.observe(slot)
             snaps={s:self.receipt(pair,s,row['afterId']) for s in slots}
             if not all(snaps.values()) or pair.sync_dispatch: return
+            if row.get('fast22'):
+                row['after']=snaps;row['results']={}
+                for slot,snap in snaps.items():
+                    baseline=row.get('before',{}).get(slot)
+                    if baseline and baseline['time'][:10]==snap['time'][:10]:
+                        row['results'][slot]=trade_result(baseline['pnl'],snap['pnl'])
+                # Freeze receipts locally before ownership changes; upload cannot block release.
+                row['synced']=now();self.save()
+                self.fleet.release_pair(row['pairId'])
+                row['released22']=True
+                self.set_status(row,'Complete','CSVs saved; VMs released. Airtable upload runs in background.' if len(row['results'])==2 else 'CSVs saved; VMs released. P&L unavailable where a same-day baseline is missing.')
+                return
             # Midnight/session rollover can invalidate subtraction; never silently call it a loss.
             if any(row['before'][s]['time'][:10] != snaps[s]['time'][:10] for s in slots):
                 raise ValueError('Result crossed a UTC date boundary. Review PnL reset before recording a result.')
@@ -502,12 +536,29 @@ class PairQueue:
                 self.fail(row,'Results saved, but VM release failed: '+str(exc)); return
             self.planning.refresh(); self.message='Pair complete. Ready for the next queued pair.'
 
+    def result_loop(self):
+        # Airtable latency must never occupy the scheduler or a released VM.
+        while not self.stop.is_set():
+            with self.lock:
+                pending=[copy.deepcopy(r) for r in self.rows if r.get('fast22') and r.get('released22') and r.get('dirty') and not r.get('remoteDeleted')]
+            for snapshot in pending:
+                try:
+                    self.store.push(snapshot)
+                    with self.lock:
+                        row=next((r for r in self.rows if r['key']==snapshot['key']),None)
+                        if row == snapshot:
+                            row['dirty']=False;row['message']='Results saved to Airtable.';self.save()
+                    self.planning.refresh()
+                except Exception as exc:
+                    with self.lock: self.message='Background result upload pending: '+str(exc)
+            self.stop.wait(5)
+
     def loop(self):
         while not self.stop.is_set():
             try: self.tick()
             except Exception as exc:
                 with self.lock: self.running=False; self.message=str(exc)
-            self.stop.wait(2)
+            self.stop.wait(.25 if any(r.get('fast22') and r['status'] not in TERMINAL | {'Error'} for r in self.rows) else 2)
 
-    def start(self): self.thread.start()
+    def start(self): self.result_thread.start(); self.thread.start()
     def close(self): self.running=False; self.stop.set()

@@ -54,6 +54,61 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def enable_fast22(self):
+        for slot,state in self.agent.states.items():
+            state.update(backgroundExports=True,syncReceipt={'id':'baseline','completedUtc':'2026-09-14T11:00:00Z',
+                'accounts':[{'Account':'Sim101','CurrentBalance':100000,'Realized PnL':0}]})
+            self.fleet.observe(slot)
+
+    def test_fast_start_has_no_account_or_export_requests(self):
+        self.enable_fast22();self.entered()
+        self.assertTrue(self.queue.rows[0]['fast22'])
+        self.assertFalse(any(c[1] in ('accounts','post_trade') for c in self.agent.calls))
+
+    def test_fast_release_starts_next_pair_while_airtable_offline(self):
+        self.enable_fast22();pair=self.entered()
+        self.queue.add(self.body);self.queue.command('start',{})
+        self.store.fail=True
+        self.agent.pnls.update({'vm-left':125,'vm-right':-90});self.flat(pair)
+        self.tick_until('Complete')
+        row=self.queue.rows[0]
+        self.assertTrue(row['released22']);self.assertTrue(row['dirty'])
+        self.assertEqual(row['results'],{'vm-left':125,'vm-right':-90})
+        self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+        self.assertFalse(any(c[1]=='accounts' for c in self.agent.calls))
+        self.agent.pnls['vm-left']=999
+        self.assertEqual(row['after']['vm-left']['pnl'],125)
+
+    def test_background_upload_does_not_lock_scheduler(self):
+        self.enable_fast22();pair=self.entered();self.flat(pair);self.tick_until('Complete')
+        started=threading.Event();finish=threading.Event()
+        def slow_upload(row): started.set();finish.wait(3)
+        self.store.push=slow_upload
+        self.queue.result_thread.start()
+        try:
+            self.assertTrue(started.wait(1))
+            start=time.monotonic();self.queue.tick()
+            self.assertLess(time.monotonic()-start,.5)
+        finally:
+            self.queue.close();finish.set();self.queue.result_thread.join(2)
+
+    def test_fast_missing_csv_after_30_seconds_retains_vms(self):
+        self.enable_fast22();pair=self.entered();self.agent.skip_receipt=True
+        self.flat(pair);self.tick_until('Awaiting results')
+        row=self.queue.rows[0];row['deadline']=time.time()-1;self.queue.tick()
+        self.assertEqual(row['status'],'Awaiting results')
+        self.assertIn(row['pairId'],self.fleet.pairs)
+        self.assertIn('CSV capture still pending',row['message'])
+
+    def test_duplicate_canceled_history_has_new_identity_and_no_entry(self):
+        self.queue.add(self.body);source=copy.deepcopy(self.queue.rows[0])
+        self.queue.command('cancel',{'id':source['id']})
+        identity=self.queue.command('duplicate',{'id':source['id'],'draftKey':'e'*32})['id']
+        row=self.queue.rows[0]
+        self.assertNotEqual(identity,source['id']);self.assertEqual(row['spec'],source['spec'])
+        self.assertFalse(row.get('dispatched'));self.assertNotIn('results',row)
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+
     def test_refresh_removes_deleted_history_without_recreating(self):
         self.queue.add(self.body)
         row=self.queue.rows[0]

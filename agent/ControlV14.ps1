@@ -90,14 +90,14 @@ function Start-ManualSync15 {
     Remove-Item $path -ErrorAction SilentlyContinue
 }
 function Start-Worker14 {
-    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport,[string]$RefreshId='')
+    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport,[string]$RefreshId='',[switch]$CaptureOnly)
     if($Mode -in @('export','startup')) {
         if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
     } else { $null=Assert-Idle14 }
     Invalidate-Preparation
     $script:ControlPreparedId=''
     $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
-    $request=@{RefreshId=$RefreshId;Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
+    $request=@{CaptureOnly=[bool]$CaptureOnly;RefreshId=$RefreshId;Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
     $mappingPath=Join-Path $directory 'airtable-master.txt'
     if(Test-Path $mappingPath) { $request.MasterAccount=(Get-Content $mappingPath -Raw).Trim() }
     if($Mode -eq 'accounts') {
@@ -122,6 +122,7 @@ function Start-Worker14 {
     } catch { $script:Busy=$false;Set-ControlsForBusyState -Busy $false;$refreshTimer.Start();throw }
 }
 function Poll-Worker14 {
+    Poll-Upload22
     if(-not $script:Worker14) {
         $manualPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-manual.json'
         if(Test-Path $manualPath) {
@@ -131,7 +132,7 @@ function Poll-Worker14 {
         $retryPath=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-pending.json'
         if([DateTime]::UtcNow -gt $script:RetryAfter14 -and (Test-Path $retryPath)) {
             $script:RetryAfter14=[DateTime]::UtcNow.AddSeconds(30)
-            try { $item=Get-Content $retryPath -Raw | ConvertFrom-Json; Start-Worker14 -Mode 'export' -TradeId $item.tradeId } catch { }
+            try { $item=Get-Content $retryPath -Raw | ConvertFrom-Json; Start-Worker14 -Mode 'export' -TradeId $item.tradeId -CaptureOnly:([bool]$item.captureOnly) } catch { }
         }
         return
     }
@@ -159,4 +160,28 @@ function Poll-Worker14 {
     } catch {
         if($mode -eq 'accounts') { $script:AccountMessage14=$_.Exception.Message } else { $script:Sync14='Sync failed: '+$_.Exception.Message }
     }
+}
+
+# Upload immutable CSVs in capture order without owning the NinjaTrader desktop.
+$script:Upload22=$null
+$script:UploadRetry22=[DateTime]::MinValue
+function Poll-Upload22 {
+    $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\outbox22'
+    if($script:Upload22) {
+        if(-not $script:Upload22.HasExited){return}
+        $script:Upload22.Dispose();$script:Upload22=$null
+        try {
+            $result=Get-Content ($script:UploadJob22+'.result') -Raw | ConvertFrom-Json
+            if(-not $result.ok){throw $result.error}
+            Remove-Item -LiteralPath $script:UploadJob22 -Force
+        } catch { $script:Sync14='Background upload pending: '+$_.Exception.Message }
+        $script:UploadRetry22=[DateTime]::UtcNow.AddSeconds(30)
+    }
+    if([DateTime]::UtcNow -lt $script:UploadRetry22){return}
+    $job=Get-ChildItem -LiteralPath $directory -Filter '*.json' -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -First 1
+    if(-not $job){return}
+    $script:UploadJob22=$job.FullName
+    Remove-Item ($job.FullName+'.result') -ErrorAction SilentlyContinue
+    $worker=Join-Path $PSScriptRoot 'AirtableWorker.ps1'
+    $script:Upload22=Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',('"'+$worker+'"'),'-RequestPath',('"'+$job.FullName+'"'),'-ResultPath',('"'+$job.FullName+'.result"'))
 }

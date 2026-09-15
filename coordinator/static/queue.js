@@ -65,7 +65,7 @@
       const b=node('button','Close Pair');b.className='close';b.disabled=mutating;
       b.onclick=async()=>{try{await api('/api/action',{command:'close',pairId:r.pairId});await poll();}catch(e){el('trading-queue-status').textContent=e.message;}};target.append(b);
     }
-    if(r.status==='Complete'){
+    if(['Complete','Cancelled'].includes(r.status)){
       const b=node('button','Duplicate');b.className='duplicate-button';b.disabled=mutating;
       b.onclick=async()=>{if(!duplicateKeys.has(r.id))duplicateKeys.set(r.id,crypto.randomUUID().replaceAll('-',''));const key=duplicateKeys.get(r.id);await action('duplicate',{id:r.id,draftKey:key});if(data.rows.some(x=>x.key===key)){detailId=data.rows.find(x=>x.key===key).id;duplicateKeys.delete(r.id);renderDetail();}};target.append(b);
     }

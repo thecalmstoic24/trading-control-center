@@ -22,6 +22,15 @@ $Setup=$false; $Preview=$false; $ExportOnly=$false; $Diagnose=$false; $CsvPath=$
 $request14=Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
 $queue14=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-pending.json'
 $done14=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-done.json'
+$upload22=$request14.Mode -eq 'upload'
+$capture22=[bool]$request14.CaptureOnly
+if($upload22) {
+ $CsvPath=[string]$request14.CsvPath
+ $request14 | Add-Member -NotePropertyName FreshExport -NotePropertyValue $true -Force
+ $queue14=$RequestPath+'.pending';$done14=$RequestPath+'.done'
+ if(-not $CsvPath -or -not (Test-Path -LiteralPath $CsvPath)) { throw 'Saved upload CSV is missing. No desktop export will be attempted.' }
+ $request14.Mode='export'
+}
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Windows.Forms
@@ -111,7 +120,7 @@ $tokenFile = Join-Path $state 'token.dat'
 $script:sent = 0
 $script:stage = 'Starting'
 $exportFolder = Join-Path $env:USERPROFILE 'NT-Airtable\Exports'
-$mutex = New-Object System.Threading.Mutex($false, 'Local\NT-Airtable-ManualSync')
+$mutex = New-Object System.Threading.Mutex($false, $(if($upload22){'Local\NT-Airtable-Upload22'}else{'Local\NT-Airtable-ManualSync'}))
 $locked = $false
 $script:headers = $null
 $endpoint = 'https://api.airtable.com/v0/appzvICrv7LLlZdxm/tbl1u1mKMpVLmTqQP'
@@ -440,10 +449,10 @@ try {
 
  } else {
   if($request14.Mode -eq 'export' -and -not (Test-Path $queue14)) {
-   @{tradeId=$request14.TradeId;csvPath=$null} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
+   @{tradeId=$request14.TradeId;csvPath=$null;captureOnly=$capture22} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
    Move-Item ($queue14+'.tmp') $queue14 -Force
   }
-  Initialize-Airtable
+  if(-not $capture22) { Initialize-Airtable }
   if($request14.Mode -in @('setup','startup')) { @{ok=$true;message='Airtable login verified.'} | ConvertTo-Json | Set-Content $ResultPath -Encoding UTF8; exit 0 }
   if($request14.Mode -eq 'accounts') {
    $records14=@();$offset14=''
@@ -473,11 +482,11 @@ try {
    if(-not $request14.FreshExport) { $CsvPath=$pending14.csvPath }
   }
   if(-not $CsvPath) {
-   @{tradeId=$request14.TradeId;csvPath=$null} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
+   @{tradeId=$request14.TradeId;csvPath=$null;captureOnly=$capture22} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
    Move-Item ($queue14+'.tmp') $queue14 -Force
    $cfg=[pscustomobject]@{Left=954; Top=6; Width=964; Height=1148; X=466; Y=820}
    $CsvPath=ExportAccounts $cfg
-   @{tradeId=$request14.TradeId;csvPath=$CsvPath} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
+   @{tradeId=$request14.TradeId;csvPath=$CsvPath;captureOnly=$capture22} | ConvertTo-Json | Set-Content ($queue14+'.tmp') -Encoding UTF8
    Move-Item ($queue14+'.tmp') $queue14 -Force
   }
   $script:stage='Read and validate CSV'
@@ -510,6 +519,22 @@ try {
    if($ResultPath) { @{ok=$true; csvPath=$CsvPath; count=$data.Count}|ConvertTo-Json|Set-Content -LiteralPath $ResultPath -Encoding UTF8 }
    Log "EXPORT TEST PASSED: $($data.Count) non-simulation connected accounts parsed. No Airtable requests made. File: $CsvPath"; exit 0 }
   if($data.Count -eq 0) { throw 'No eligible connected accounts to sync. Nothing uploaded.' }
+  if($capture22) {
+   # Preserve the export before releasing the desktop; subsequent exports may reuse NinjaTrader's filename.
+   $outbox22=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\outbox22'
+   [void](New-Item $outbox22 -ItemType Directory -Force)
+   $frozen22=Join-Path $outbox22 ($stamp+'-'+$request14.TradeId+'.csv')
+   Copy-Item -LiteralPath $CsvPath -Destination $frozen22 -ErrorAction Stop
+   $receipt22=@{id=$request14.TradeId;completedUtc=[DateTime]::UtcNow.ToString('o');captured=$true;accounts=@($data | ForEach-Object { @{Account=$_.Account;CurrentBalance=$_.Fields['CurrentBalance'];'Realized PnL'=$_.Fields['Realized PnL']} })}
+   $job22=[IO.Path]::ChangeExtension($frozen22,'.json')
+   @{Mode='upload';TradeId=$request14.TradeId;CsvPath=$frozen22} | ConvertTo-Json | Set-Content ($job22+'.tmp') -Encoding UTF8
+   Move-Item ($job22+'.tmp') $job22 -Force
+   @{tradeId=$request14.TradeId;csvPath=$frozen22;receipt=$receipt22} | ConvertTo-Json -Depth 8 | Set-Content ($done14+'.tmp') -Encoding UTF8
+   Move-Item ($done14+'.tmp') $done14 -Force
+   Remove-Item $queue14 -ErrorAction SilentlyContinue
+   @{ok=$true;receipt=$receipt22;message='CSV captured. Airtable upload continues in background.'} | ConvertTo-Json -Depth 8 | Set-Content $ResultPath -Encoding UTF8
+   exit 0
+  }
   $script:stage='Read Airtable records'
   Log 'Connecting to Airtable for account matching.'
   $index=@{}; $offset=''

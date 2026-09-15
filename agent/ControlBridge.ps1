@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.20'
+$script:ControlVersion = '16.0-preview.22'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -73,6 +73,7 @@ function Get-ControlStatus {
     $state['accounts'] = @($script:Accounts14)
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
+    $state['backgroundExports'] = $true
     $state['syncReceipt'] = $script:SyncReceipt17
     $state['calibrationRequired'] = [bool]$script:CalibrationRequired20
     $state['queueReceipts'] = $true
@@ -109,7 +110,7 @@ function Invoke-ControlCommand {
     if ($Pending.Command -eq 'post_trade') {
         if([string]$request.tradeId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid trade ID.' }
         $script:RetryTrade14=[string]$request.tradeId
-        Start-Worker14 -Mode 'export' -TradeId $script:RetryTrade14
+        Start-Worker14 -Mode 'export' -TradeId $script:RetryTrade14 -CaptureOnly:([bool]$request.captureOnly)
         return @{ok=$true;message='Export started.'}
     }
     if ($Pending.Command -eq 'bind_peer') {
