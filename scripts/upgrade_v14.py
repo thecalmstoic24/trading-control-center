@@ -19,4 +19,14 @@ def upgrade(source):
     source=source.replace('        $peerCommit = Send-PeerRequest', "        $script:EntryStage19='peer commit'\n        $peerCommit = Send-PeerRequest")
     source=source.replace('        Commit-LocalAction -PairId $pairId', "        $script:EntryStage19='local commit'\n        Commit-LocalAction -PairId $pairId")
     source=source.replace('Entry handshake failed: $failure', 'Entry handshake failed at $script:EntryStage19 : $failure')
+    start=source.index('    $matchingWindows =',source.index('function Get-ChartSnapshot'))
+    end=source.index('    $root =',start)
+    source=source[:start]+"    $handle = Get-CalibratedChart20\n"+source[end:]
+    start=source.index('    $matchingWindows =',source.index('function Get-PositionOnly'))
+    end=source.index('    return Get-UiaText',start)
+    source=source[:start]+"    try {$handle=Get-CalibratedChart20;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)} catch {return $null}\n"+source[end:]
+    start=source.index('    $matchingWindows =',source.index('function Prepare-Trade'))
+    end=source.index('    [PairedVmAgentNativeV10]::SetForegroundWindow',start)
+    source=source[:start]+"    $chartHandle = Get-CalibratedChart20\n"+source[end:]
+    source=source.replace('    [PairedVmAgentNativeV10]::ShowWindow($Snapshot.Handle, 9) | Out-Null', '    $null=Get-CalibratedChart20')
     return source

@@ -245,6 +245,21 @@ class PairQueue:
                     if row['status']=='Error' and row.get('closed') and row.get('afterId') and row.get('pairId') in self.fleet.pairs:
                         row.update(status='Awaiting results', deadline=time.time()+300, message='Retrying result verification only; no entry retry.')
                 self.message='Saved pair records will be synced again. No trade entry is retried.'
+            elif action == 'retry-prepare':
+                row=next((r for r in self.rows if r['id']==body.get('id')),None)
+                if not row or row['status']!='Error' or row.get('started'):
+                    raise ValueError('Retry preparation is only available before any entry was requested.')
+                identity=row.get('pairId')
+                if identity in self.fleet.pairs:
+                    pair=self.fleet.get_pair(identity)
+                    if pair.active or pair.operation.locked() or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
+                        raise ValueError('Wait for the existing operation and verify positions before retrying.')
+                    self.fleet.release_pair(identity)
+                for key in ('pairId','phase','job','before','beforeId','afterId','requested','deadline','refreshId'):
+                    row.pop(key,None)
+                row.update(status='Queued',dispatched=True,dirty=True,message='Preparation retry requested after calibration. Settings retained.')
+                self.running=True
+                self.message='Retrying preparation. No previous entry is retried.'
             elif action == 'resolve':
                 row = next((r for r in self.rows if r['id']==body.get('id')), None)
                 if not row or row['status'] != 'Error': raise ValueError('Select an interrupted pair.')
@@ -374,6 +389,8 @@ class PairQueue:
             for s in slots: self.fleet.observe(s)
             with self.fleet.lock:
                 agents=[self.fleet.view(s) for s in slots]
+                if any(a.get('calibrationRequired') for a in agents):
+                    raise ValueError('Calibration required. Click Calibrate Chart 1 on the affected agent, then Retry preparation.')
                 if not all(self.fleet.catalog.safe_flat(a) for a in agents):
                     self.set_status(row,'Waiting','Waiting for both VMs to report fresh, idle Flat.'); return
                 if not all(a.get('queueReceipts') for a in agents):

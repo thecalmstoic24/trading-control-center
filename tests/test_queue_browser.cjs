@@ -56,6 +56,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#trading-refresh').click();
  await page.waitForFunction(()=>!document.querySelector('#trading-queue-table [data-pair="PAIR-0001"]'));
  assert.ok(writes.some(w=>w.path==='/api/queue/refresh'));
+ queue.rows.push({id:'PAIR-0099',spec,status:'Error',message:'Calibration required.'});
+ await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));
+ await page.locator('#trading-queue-table [data-pair="PAIR-0099"] button').filter({hasText:'Retry preparation'}).waitFor();
  await page.screenshot({path:'/tmp/queue-preview17.png',fullPage:true});
  assert.deepEqual(errors,[]);await browser.close();console.log('Queue browser: batch transfer, new plans isolated, completion/canceled history, bulk removal and active protection passed.');
 })().catch(e=>{console.error(e);process.exit(1)});

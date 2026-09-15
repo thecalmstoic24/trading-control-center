@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.19'
+$script:ControlVersion = '16.0-preview.20'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -74,6 +74,7 @@ function Get-ControlStatus {
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
     $state['syncReceipt'] = $script:SyncReceipt17
+    $state['calibrationRequired'] = [bool]$script:CalibrationRequired20
     $state['queueReceipts'] = $true
     $state['queueAccountRefresh'] = $true
     $state['accountRefreshId'] = $script:AccountRefreshId18

@@ -352,11 +352,7 @@ function Wait-ForParametersWindow {
 }
 
 function Get-ChartSnapshot {
-    $matchingWindows = [PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
-    if ($matchingWindows.Count -eq 0) { throw "No visible NinjaTrader window beginning with '$WindowTitlePrefix' was found." }
-    if ($matchingWindows.Count -gt 1) { throw "More than one visible NinjaTrader window begins with '$WindowTitlePrefix'. Close the extra matching window first." }
-
-    $handle = $matchingWindows[0]
+    $handle = Get-CalibratedChart20
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
     $atmElement = Find-UiaById -Root $root -AutomationId 'ChartTraderControlATMStrategySelector'
     $atmEnabled = $false
@@ -378,9 +374,7 @@ function Get-ChartSnapshot {
 }
 
 function Get-PositionOnly {
-    $matchingWindows = [PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
-    if ($matchingWindows.Count -ne 1) { return $null }
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($matchingWindows[0])
+    try {$handle=Get-CalibratedChart20;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)} catch {return $null}
     return Get-UiaText -Element (Find-UiaById -Root $root -AutomationId 'ChartTraderControlPositionQuantityText')
 }
 
@@ -416,17 +410,7 @@ function Prepare-Trade {
         [decimal]$Profit
     )
 
-    $matchingWindows = [PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
-    if ($matchingWindows.Count -eq 0) { throw "No visible NinjaTrader window beginning with '$WindowTitlePrefix' was found." }
-    if ($matchingWindows.Count -gt 1) { throw "More than one visible NinjaTrader window begins with '$WindowTitlePrefix'. Close the extra matching window first." }
-
-    $chartHandle = $matchingWindows[0]
-    [PairedVmAgentNativeV10]::ShowWindow($chartHandle, 9) | Out-Null
-    $positioned = [PairedVmAgentNativeV10]::SetWindowPos(
-        $chartHandle, [IntPtr]::Zero, $WindowX, $WindowY, $WindowWidth, $WindowHeight, 0x0040
-    )
-    if (-not $positioned) { throw 'Windows could not resize the NinjaTrader window.' }
-
+    $chartHandle = Get-CalibratedChart20
     [PairedVmAgentNativeV10]::SetForegroundWindow($chartHandle) | Out-Null
     Start-Sleep -Milliseconds 300
     $chartRoot = [System.Windows.Automation.AutomationElement]::FromHandle($chartHandle)
@@ -534,7 +518,7 @@ function Arm-ChartTraderButton {
         [string]$ExpectedName
     )
     # Prepare focus, live bounds, and cursor position before the shared execution time.
-    [PairedVmAgentNativeV10]::ShowWindow($Snapshot.Handle, 9) | Out-Null
+    $null=Get-CalibratedChart20
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         [PairedVmAgentNativeV10]::SetForegroundWindow($Snapshot.Handle) | Out-Null
         Start-Sleep -Milliseconds 100
@@ -2232,7 +2216,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.19'
+$script:ControlVersion = '16.0-preview.20'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2300,6 +2284,7 @@ function Get-ControlStatus {
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
     $state['syncReceipt'] = $script:SyncReceipt17
+    $state['calibrationRequired'] = [bool]$script:CalibrationRequired20
     $state['queueReceipts'] = $true
     $state['queueAccountRefresh'] = $true
     $state['accountRefreshId'] = $script:AccountRefreshId18
@@ -2666,6 +2651,46 @@ $maintenanceTimer16.Add_Tick({
 })
 $form.Add_Shown({$maintenanceTimer16.Start()})
 $form.Add_FormClosed({$maintenanceTimer16.Stop();$clipboardTimer16.Stop();$script:ClipboardText16=$null})
+
+# Calibrate only at startup or by explicit operator request.
+$script:CalibratedChart20=[IntPtr]::Zero
+$script:CalibratedBounds20=$null
+$script:CalibrationRequired20=$true
+function Get-CalibratedChart20 {
+ if($script:CalibratedChart20 -eq [IntPtr]::Zero){throw 'Calibration required. Click Calibrate Chart 1 in the Trading Agent, then Retry preparation.'}
+ try {
+  $h=$script:CalibratedChart20
+  if(-not [PairedVmAgentNativeV10]::GetTitle($h).StartsWith($WindowTitlePrefix)){throw 'Chart changed.'}
+  $rect=[PairedVmAgentNativeV10]::ReadWindowRect($h)
+  if(($rect -join ',') -cne ($script:CalibratedBounds20 -join ',')){throw 'Chart moved or resized.'}
+  return $h
+ } catch {$script:CalibrationRequired20=$true;throw 'Calibration required. Chart changed or is unavailable. Click Calibrate Chart 1, then Retry preparation.'}
+}
+function Calibrate-Chart20 {
+ if($script:Busy -or $script:Worker14 -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:PendingVerification -or $script:CloseCheck){throw 'Wait until this agent is idle before calibration.'}
+ $windows=[PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
+ if($windows.Count -ne 1){throw 'Open exactly one Chart 1 window, then click Calibrate Chart 1.'}
+ $h=$windows[0]
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($h)
+ $position=Get-UiaText -Element (Find-UiaById -Root $root -AutomationId 'ChartTraderControlPositionQuantityText')
+ if($position -cne 'Flat'){throw 'The displayed chart must be Flat before calibration.'}
+ [void][PairedVmAgentNativeV10]::ShowWindow($h,9)
+ if(-not [PairedVmAgentNativeV10]::SetWindowPos($h,[IntPtr]::Zero,$WindowX,$WindowY,$WindowWidth,$WindowHeight,0x0040)){throw 'Chart calibration could not resize the window.'}
+ $script:CalibratedChart20=$h
+ $script:CalibratedBounds20=[PairedVmAgentNativeV10]::ReadWindowRect($h)
+ Invalidate-Preparation
+ $script:ControlPreparedId=''
+ $script:CalibrationRequired20=$false
+ $calibrationStatus20.Text='Chart 1 calibrated.'
+}
+$form.ClientSize=New-Object Drawing.Size(460,348)
+$calibrate20=New-Object Windows.Forms.Button
+$calibrate20.Text='Calibrate Chart 1';$calibrate20.Location=New-Object Drawing.Point(22,282);$calibrate20.Size=New-Object Drawing.Size(205,28)
+$calibrationStatus20=New-Object Windows.Forms.Label
+$calibrationStatus20.Location=New-Object Drawing.Point(22,314);$calibrationStatus20.Size=New-Object Drawing.Size(416,30)
+$form.Controls.Add($calibrate20);$form.Controls.Add($calibrationStatus20)
+$calibrate20.Add_Click({try{Calibrate-Chart20}catch{$calibrationStatus20.Text=$_.Exception.Message}})
+$form.Add_Shown({try{Calibrate-Chart20}catch{$calibrationStatus20.Text=$_.Exception.Message}})
 
 [void]$form.ShowDialog()
 exit 0

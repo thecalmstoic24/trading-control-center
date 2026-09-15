@@ -50,7 +50,7 @@
       const button=(label,name,extra={})=>{const b=node('button',label);b.className='quiet';b.disabled=mutating;b.onclick=()=>action(name,{id:r.id,...extra});actions.append(b);};
       if(pending(r)){button('↑','move',{delta:-1});button('↓','move',{delta:1});button('Remove','cancel');}
       if(r.status==='Removing')button('Retry Remove','cancel');
-      if(r.status==='Error')button('Resolve after closing','resolve');
+      if(r.status==='Error'){if(!r.started)button('Retry preparation','retry-prepare');button('Resolve after closing','resolve');}
       if(r.pairId&&!['Complete','Cancelled'].includes(r.status)){const b=node('button','View trade');b.className='quiet';b.onclick=()=>{selectView(r.pairId);el('tab-trading').click();};actions.append(b);}
       tr.append(actions);body.append(tr);
     }

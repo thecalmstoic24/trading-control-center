@@ -158,6 +158,31 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.queue.rows[1]['status'],'Waiting')
         self.assertEqual(len(self.fleet.pairs),2)
 
+    def test_retry_preparation_keeps_identity_settings_and_releases_old_reservation(self):
+        self.add_start();self.queue.tick()
+        row=self.queue.rows[0];key=row['key'];spec=copy.deepcopy(row['spec'])
+        self.queue.fail(row,'Calibration required')
+        self.queue.command('retry-prepare',{'id':row['id']})
+        self.assertEqual(row['key'],key);self.assertEqual(row['spec'],spec)
+        self.assertEqual(row['status'],'Queued');self.assertNotIn('pairId',row)
+        self.assertEqual(len(self.fleet.pairs),0)
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+        self.tick_until('Trading')
+
+    def test_retry_preparation_rejects_any_prior_entry(self):
+        self.add_start();row=self.queue.rows[0]
+        row.update(status='Error',started='2026-09-15T01:00:00Z')
+        with self.assertRaisesRegex(ValueError,'before any entry'):
+            self.queue.command('retry-prepare',{'id':row['id']})
+        self.assertEqual(row['status'],'Error')
+
+    def test_calibration_required_has_actionable_error_before_reservation(self):
+        self.add_start();self.agent.states['vm-left']['calibrationRequired']=True
+        self.queue.tick()
+        self.assertEqual(self.queue.rows[0]['status'],'Error')
+        self.assertIn('Calibrate Chart 1',self.queue.rows[0]['message'])
+        self.assertEqual(len(self.fleet.pairs),0)
+
     def test_ratio_survives_queue_and_reaches_agents(self):
         self.body.update(ratio='2:3',quantities={'vm-left':10,'vm-right':15},stopLoss=1000,profit=800,ticker='MNQ SEP26')
         self.queue.add(self.body)

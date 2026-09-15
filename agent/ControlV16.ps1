@@ -85,3 +85,43 @@ $maintenanceTimer16.Add_Tick({
 })
 $form.Add_Shown({$maintenanceTimer16.Start()})
 $form.Add_FormClosed({$maintenanceTimer16.Stop();$clipboardTimer16.Stop();$script:ClipboardText16=$null})
+
+# Calibrate only at startup or by explicit operator request.
+$script:CalibratedChart20=[IntPtr]::Zero
+$script:CalibratedBounds20=$null
+$script:CalibrationRequired20=$true
+function Get-CalibratedChart20 {
+ if($script:CalibratedChart20 -eq [IntPtr]::Zero){throw 'Calibration required. Click Calibrate Chart 1 in the Trading Agent, then Retry preparation.'}
+ try {
+  $h=$script:CalibratedChart20
+  if(-not [PairedVmAgentNativeV10]::GetTitle($h).StartsWith($WindowTitlePrefix)){throw 'Chart changed.'}
+  $rect=[PairedVmAgentNativeV10]::ReadWindowRect($h)
+  if(($rect -join ',') -cne ($script:CalibratedBounds20 -join ',')){throw 'Chart moved or resized.'}
+  return $h
+ } catch {$script:CalibrationRequired20=$true;throw 'Calibration required. Chart changed or is unavailable. Click Calibrate Chart 1, then Retry preparation.'}
+}
+function Calibrate-Chart20 {
+ if($script:Busy -or $script:Worker14 -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:PendingVerification -or $script:CloseCheck){throw 'Wait until this agent is idle before calibration.'}
+ $windows=[PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
+ if($windows.Count -ne 1){throw 'Open exactly one Chart 1 window, then click Calibrate Chart 1.'}
+ $h=$windows[0]
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($h)
+ $position=Get-UiaText -Element (Find-UiaById -Root $root -AutomationId 'ChartTraderControlPositionQuantityText')
+ if($position -cne 'Flat'){throw 'The displayed chart must be Flat before calibration.'}
+ [void][PairedVmAgentNativeV10]::ShowWindow($h,9)
+ if(-not [PairedVmAgentNativeV10]::SetWindowPos($h,[IntPtr]::Zero,$WindowX,$WindowY,$WindowWidth,$WindowHeight,0x0040)){throw 'Chart calibration could not resize the window.'}
+ $script:CalibratedChart20=$h
+ $script:CalibratedBounds20=[PairedVmAgentNativeV10]::ReadWindowRect($h)
+ Invalidate-Preparation
+ $script:ControlPreparedId=''
+ $script:CalibrationRequired20=$false
+ $calibrationStatus20.Text='Chart 1 calibrated.'
+}
+$form.ClientSize=New-Object Drawing.Size(460,348)
+$calibrate20=New-Object Windows.Forms.Button
+$calibrate20.Text='Calibrate Chart 1';$calibrate20.Location=New-Object Drawing.Point(22,282);$calibrate20.Size=New-Object Drawing.Size(205,28)
+$calibrationStatus20=New-Object Windows.Forms.Label
+$calibrationStatus20.Location=New-Object Drawing.Point(22,314);$calibrationStatus20.Size=New-Object Drawing.Size(416,30)
+$form.Controls.Add($calibrate20);$form.Controls.Add($calibrationStatus20)
+$calibrate20.Add_Click({try{Calibrate-Chart20}catch{$calibrationStatus20.Text=$_.Exception.Message}})
+$form.Add_Shown({try{Calibrate-Chart20}catch{$calibrationStatus20.Text=$_.Exception.Message}})
