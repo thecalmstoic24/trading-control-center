@@ -5,8 +5,7 @@ set "TCC_LAUNCHER=%~f0"
 echo Checking the latest Trading Control Center installer...
 powershell.exe -NoLogo -NoProfile -Command "$text=[IO.File]::ReadAllText($env:TCC_LAUNCHER); & ([scriptblock]::Create(($text -split '(?m)^# POWERSHELL_PAYLOAD\r?$',2)[1]))"
 set "TCC_RESULT=%ERRORLEVEL%"
-echo.
-pause
+if not "%TCC_RESULT%"=="0" pause
 exit /b %TCC_RESULT%
 # POWERSHELL_PAYLOAD
 $ErrorActionPreference='Stop'

@@ -59,7 +59,7 @@ public sealed class ControlGateway11 : IDisposable {
             using(TcpClient c=new TcpClient()) {
                 var connect=c.BeginConnect(host,port,null,null);
                 using(WaitHandle ready=connect.AsyncWaitHandle) {
-                    if(!ready.WaitOne(2500)) throw new IOException("TLS peer connection timed out");
+                    if(!ready.WaitOne(command=="peer_ping" ? 5000 : 2500)) throw new IOException("Peer TCP connection timed out before this request was sent (port 8789)");
                     c.EndConnect(connect);
                 }
                 c.ReceiveTimeout=timeout; c.SendTimeout=timeout;
@@ -138,7 +138,7 @@ public sealed class ControlGateway11 : IDisposable {
                     }
                     return;
                 }
-                if(command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close" && command!="accounts" && command!="post_trade") { writer.WriteLine("{\"ok\":false,\"message\":\"Unsupported command. Update this VM agent.\"}"); return; }
+                if(command!="peer_check" && command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close" && command!="accounts" && command!="post_trade") { writer.WriteLine("{\"ok\":false,\"message\":\"Unsupported command. Update this VM agent.\"}"); return; }
                 ControlRequest11 request;
                 lock(gate) {
                     if(seen.ContainsKey(id)) {

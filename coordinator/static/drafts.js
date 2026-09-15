@@ -2,10 +2,10 @@
 (() => {
   const el=id=>document.getElementById(id), make=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const storage='planning-draft-pairs-v1';let drafts=[],fleet=[],pairs=[],queued=[];
-  try{const value=JSON.parse(localStorage.getItem(storage));if(Array.isArray(value))drafts=value.filter(d=>/^[a-f0-9]{32}$/.test(d.key));}catch(_){}
+  try{const value=JSON.parse(localStorage.getItem(storage));if(Array.isArray(value))drafts=value.filter(d=>/^[a-f0-9]{32}$/.test(d.key)&&(d.left||d.right));}catch(_){}
   for(const d of drafts){d.ratio=d.ratio||'1:1';PairRatio.amounts(d);}
   const inFlight=new Set();
-  function save(){try{localStorage.setItem(storage,JSON.stringify(drafts));}catch(_){el('draft-message').textContent='Drafts cannot be saved in this browser. Keep this page open.';}}
+  function save(){drafts=drafts.filter(d=>d.left||d.right);try{localStorage.setItem(storage,JSON.stringify(drafts));}catch(_){el('draft-message').textContent='Drafts cannot be saved in this browser. Keep this page open.';}}
   function usage(){
     const map={};const mark=(account,status)=>{if(!account)return;const u=map[account]||(map[account]={used:true,status:''});if(status==='Pairing'||!u.status)u.status=status;};
     for(const d of drafts)for(const side of ['left','right'])mark(d[side]?.account,'');

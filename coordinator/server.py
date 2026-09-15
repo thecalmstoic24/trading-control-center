@@ -31,8 +31,8 @@ sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.18'
-AGENT_VERSIONS = {'16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.19'
+AGENT_VERSIONS = {'16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -575,6 +575,15 @@ class Center:
             prepared = self.prepared
             if not prepared or self.active:
                 raise ValueError('Prepare and verify both VMs before entry.')
+        # Read-only authenticated checks in both directions, before marking entry active.
+        checks={slot:self.pool.submit(self.call,slot,'peer_check',{'prepareId':prepared},35) for slot in self.pair}
+        errors=[]
+        for slot,future in checks.items():
+            try: future.result()
+            except Exception as exc: errors.append(self.name(slot)+': '+str(exc))
+        if errors:
+            raise ValueError('Peer connection check failed; no entry sent. Update both agents to Preview 19 and verify their direct connection. '+'; '.join(errors))
+        self.event('Direct peer connection verified in both directions. Rechecking readiness before entry.')
         self.refresh_both()
         if not all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepared for a in self.state()['agents']):
             raise ValueError('Readiness changed. Prepare both VMs again.')

@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.18'
+$script:ControlVersion = '16.0-preview.19'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -203,6 +203,19 @@ function Invoke-ControlCommand {
         $script:ControlPreparedId = $prepareId
         return @{ok=$true; message='Prepared and verified locally.'}
     }
+    if ($Pending.Command -eq 'peer_check') {
+        if (-not $script:BoundPeer -or [string]::IsNullOrWhiteSpace($script:ControlPreparedId) -or [string]$request.prepareId -cne $script:ControlPreparedId) { throw 'Prepare this pair before checking its peer connection.' }
+        $last19=''
+        for($attempt19=1;$attempt19 -le 3;$attempt19++) {
+            try {
+                $reply19=Send-PeerRequest -Payload ([ordered]@{command='ping'}) -TimeoutMilliseconds 3000
+                if(-not $reply19.ok) { throw 'Peer rejected the authenticated connection check.' }
+                return @{ok=$true;message='Direct peer connection verified. No trade command sent.'}
+            } catch { $last19=$_.Exception.Message }
+            if($attempt19 -lt 3) { Start-Sleep -Milliseconds 250 }
+        }
+        throw ('Direct peer connection failed after 3 checks: '+$last19+'. No trade command sent.')
+    }
     if ($Pending.Command -eq 'entry') {
         if (-not $script:BoundPeer) { throw 'Prepare this selected pair first.' }
         if ([string]::IsNullOrWhiteSpace($script:ControlPreparedId) -or
@@ -212,7 +225,7 @@ function Invoke-ControlCommand {
         if (-not $pairEnabled.Checked) { throw 'PAIR MODE is required.' }
         # No replacement trading protocol: invoke the tested V10.4 paired entry function.
         $script:RemoteCommandActive = $true
-        try { Invoke-PairedEntry -LocalSide $side } finally { $script:RemoteCommandActive = $false }
+        try { Invoke-PairedEntry -LocalSide $side } catch { throw ('Entry stage '+$script:EntryStage19+': '+$_.Exception.Message) } finally { $script:RemoteCommandActive = $false }
         $script:ControlPreparedId = ''
         return @{ok=$true; message='Pair entry accepted; monitor actual positions.'}
     }

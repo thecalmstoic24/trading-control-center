@@ -51,6 +51,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.ok((await page.locator('#queue-activity').textContent()).includes('Removed from Airtable.'));
  assert.deepEqual(writes.filter(w=>w.path==='/api/queue/remove-selected').map(w=>w.body.ids),[['PAIR-0003'],['PAIR-0004']]);
  assert.ok(!writes.some(w=>w.path==='/api/action'));
+ assert.equal(await page.locator('#pair-workspace').isVisible(),false);
+ assert.equal(await page.locator('#queue-activity').isVisible(),true);
  await page.locator('#trading-refresh').click();
  await page.waitForFunction(()=>!document.querySelector('#trading-queue-table [data-pair="PAIR-0001"]'));
  assert.ok(writes.some(w=>w.path==='/api/queue/refresh'));

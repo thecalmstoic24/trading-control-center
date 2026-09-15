@@ -105,3 +105,8 @@ button:hover{filter:brightness(.96)}
 @media(max-height:650px){#vms-panel{height:350px}}
 
 main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direction:column;padding:18px 32px}.vm-view .intro{flex-shrink:0;margin-bottom:14px}.vm-view h1{font-size:24px}.vm-view .intro p{font-size:13px}.vm-view .tabs{flex-shrink:0;margin-bottom:14px}.vm-view .tabs button{font-size:13px;padding:9px 16px}.vm-view #vms-panel{height:auto;min-height:0;flex:1}
+
+/* Queue messages have no timestamp column; use the full activity width. */
+#queue-activity .event{display:block;padding:12px 14px;line-height:1.6}
+#queue-activity .event span{display:block;white-space:normal;overflow-wrap:anywhere}
+#queue-activity{height:auto;max-height:280px;scrollbar-gutter:stable}

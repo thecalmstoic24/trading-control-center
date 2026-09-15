@@ -68,6 +68,21 @@ class Tests(unittest.TestCase):
                 self.center.prepare(dict(ticker='NQ SEP26',stopLoss=100,profit=200,accounts={'vm-left':clean}),0)
         self.assertFalse(any(c[1] in ('prepare','bind_peer') for c in self.fake.calls))
 
+    def test_peer_preflight_failure_sends_no_entry_or_close(self):
+        self.prepare();self.fake.fail.add(('vm-right','peer_check'))
+        with self.assertRaisesRegex(ValueError,'no entry sent'):
+            self.center.entry('buy',0)
+        self.assertFalse(self.center.active)
+        self.assertFalse(any(c[1] in ('entry','close') for c in self.fake.calls))
+        self.assertEqual({c[0] for c in self.fake.calls if c[1]=='peer_check'},set(self.center.pair))
+
+    def test_both_peer_checks_precede_single_entry(self):
+        self.prepare();self.center.entry('buy',0)
+        commands=[c[1] for c in self.fake.calls]
+        self.assertEqual(commands.count('peer_check'),2)
+        self.assertLess(max(i for i,c in enumerate(commands) if c=='peer_check'),commands.index('entry'))
+        self.assertEqual(commands.count('entry'),1)
+
     def test_mirrored_readback_and_only_one_paired_entry(self):
         self.prepare()
         self.assertTrue(self.center.state()['canEnter'])
