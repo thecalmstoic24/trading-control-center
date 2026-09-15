@@ -7,6 +7,18 @@
     if(typeof value==='object')return value.name || value.filename || value.url || JSON.stringify(value);
     return String(value);
   }
+  function monetary(column){
+    const name=column.name.replace(/[^a-z]/gi,'').toLowerCase();
+    if(column.type==='percent'||/percent|percentage|ratio|days|date|time|count/.test(name))return false;
+    return column.type==='currency'||/balance|pnl|profit|drawdown|payout|target|currency|amount/.test(name)||['stop','stoploss','stock'].includes(name);
+  }
+  function cellDisplay(value,column){
+    if(monetary(column)&&value!==null&&value!==undefined&&value!==''&&['number','string'].includes(typeof value)){
+      const numeric=typeof value==='number'?value:Number(value.replace(/[$,]/g,''));
+      if(Number.isFinite(numeric))return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(numeric);
+    }
+    return display(value);
+  }
   function ordered(rows,layout,columns){
     const ranks=new Map(layout.order.map((id,i)=>[id,i]));
     const result=rows.slice().sort((a,b)=>(ranks.get(a.id)??Infinity)-(ranks.get(b.id)??Infinity));
@@ -24,7 +36,7 @@
     });
   }
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
-  if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile};return;}
+  if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay};return;}
   const el=id=>document.getElementById(id);
   const selected=new Set();let usage={};
   window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();renderTable();}};
@@ -93,7 +105,7 @@
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
       const order=node('td');order.className='row-order';order.append(node('span',String(i+1)));
 
-      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',display(value));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
+      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',cellDisplay(value,c));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
     });
     if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
     table.append(body);resizeColumns(table,cols);decorate();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';

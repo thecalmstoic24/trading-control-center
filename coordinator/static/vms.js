@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const el=id=>document.getElementById(id),node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
- let fleet=[];const open=new Set(),pending=new Set();
+ let fleet=[];const open=new Set(),pending=new Set(),selected=new Set();
  async function refresh(id){
    if(pending.has(id))return;pending.add(id);render();
    try{await api('/api/vm-refresh',{id});await poll();}
@@ -12,7 +12,7 @@
    const list=el('vms-list');list.replaceChildren();
    for(const vm of fleet){
      const row=node('section');row.className='vm-list-row';row.dataset.vm=vm.id;
-     const line=node('div');line.className='vm-list-summary';line.append(node('strong',vm.name));
+     const line=node('div');line.className='vm-list-summary';const box=node('input');box.type='checkbox';box.checked=selected.has(vm.id);box.setAttribute('aria-label','Select VM '+vm.name);box.onchange=()=>{box.checked?selected.add(vm.id):selected.delete(vm.id);el('vms-refresh-selected').disabled=!selected.size;};line.append(box,node('strong',vm.name));
      const connection=node('span',vm.online?'Connected':'Disconnected');connection.className=vm.online?'complete':'idle';line.append(connection);
      line.append(node('span',vm.fresh?vm.position:(vm.lastKnown?.position?vm.lastKnown.position+' (last known)':'Unknown')));
      const busy=pending.has(vm.id)||vm.refresh?.status==='running';
@@ -25,6 +25,7 @@
    }
    if(!fleet.length)list.append(node('p','No registered VMs yet. Choose Register VM to add one.'));
  }
+ el('vms-refresh-selected').onclick=async()=>{const ids=fleet.filter(vm=>selected.has(vm.id)).map(vm=>vm.id);for(const id of ids)await refresh(id);};
  el('vms-register').onclick=()=>el('connect-dialog').showModal();
  el('vms-refresh-all').onclick=async()=>{for(const vm of fleet)await refresh(vm.id);};
  window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];render();});

@@ -177,6 +177,36 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(calls,[(PAIR_TABLE,'DELETE',{'records[]':'recOwn'})])
         self.assertEqual(records[0]['id'],'recOther')
 
+    def test_start_dispatches_batch_new_plans_wait_for_next_start(self):
+        self.queue.add(self.body);self.queue.add(self.body)
+        self.queue.command('start',{})
+        self.assertTrue(all(r['dispatched'] for r in self.queue.rows))
+        self.queue.add(self.body)
+        self.assertFalse(self.queue.rows[-1].get('dispatched',False))
+        self.queue.command('pause',{});self.queue.command('resume',{})
+        self.assertFalse(self.queue.rows[-1].get('dispatched',False))
+        for row in self.queue.rows[:2]:row['status']='Complete'
+        self.queue.tick()
+        self.assertFalse(self.queue.running)
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+        self.queue.command('start',{})
+        self.assertTrue(self.queue.rows[-1]['dispatched'])
+    def test_bulk_remove_keeps_local_cancel_history_without_recreating_airtable(self):
+        ids=[self.queue.add(self.body),self.queue.add(self.body)]
+        self.queue.command('remove-selected',{'ids':ids})
+        self.assertEqual(self.queue.rows,[]);self.assertEqual(self.store.rows,{})
+        restored=PairQueue(self.fleet,Planning(),self.store)
+        self.assertEqual(len(restored.snapshot()['history']),2)
+        self.assertTrue(all(r['status']=='Cancelled' for r in restored.history))
+        restored.command('retry',{});restored.tick()
+        self.assertEqual(self.store.rows,{})
+    def test_bulk_remove_rejects_entire_selection_if_one_started(self):
+        ids=[self.queue.add(self.body),self.queue.add(self.body)]
+        self.queue.rows[1]['status']='Trading'
+        with self.assertRaisesRegex(ValueError,'Only waiting'):
+            self.queue.command('remove-selected',{'ids':ids})
+        self.assertEqual(len(self.queue.rows),2);self.assertEqual(len(self.store.rows),2)
+
     def test_invalid_amounts_accounts_and_quantities(self):
         for values in ({'stopLoss':0},{'profit':float('nan')},{'quantities':{'vm-left':0}},{'accounts':{'vm-left':'random'}}):
             with self.assertRaises(ValueError):self.queue.add({**self.body,**values})

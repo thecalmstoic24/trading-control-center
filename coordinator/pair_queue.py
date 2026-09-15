@@ -133,9 +133,9 @@ class PairQueue:
         self.path = fleet.directory / 'planning-queue.json'
         self.lock = threading.RLock(); self.io = threading.Lock(); self.stop = threading.Event()
         self.running = False; self.message = 'Queue paused. Add pairs, then Start Queue.'
-        self.rows = []; self.next_id = 1
+        self.rows = []; self.history = []; self.next_id = 1
         if self.path.exists():
-            saved = json.loads(self.path.read_text()); self.rows = saved['rows']; self.next_id = saved['nextId']
+            saved = json.loads(self.path.read_text()); self.rows = saved['rows']; self.next_id = saved['nextId']; self.history = saved.get('history', [])
             # A restart never resumes entry, even if a previous command response was lost.
             for row in self.rows:
                 if row['status'] not in PENDING | TERMINAL:
@@ -146,11 +146,11 @@ class PairQueue:
 
     def save(self):
         tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows}, allow_nan=False))
+        tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows, 'history': self.history}, allow_nan=False))
         os.replace(tmp, self.path)
 
     def snapshot(self):
-        with self.lock: return copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows})
+        with self.lock: return copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history})
 
     def set_status(self, row, status, message):
         with self.lock:
@@ -168,7 +168,7 @@ class PairQueue:
             if draft_key is not None:
                 if not isinstance(draft_key,str) or not re.fullmatch('[a-f0-9]{32}',draft_key):
                     raise ValueError('Invalid draft identity.')
-                existing = next((r for r in self.rows if r['key']==draft_key),None)
+                existing = next((r for r in self.rows + self.history if r['key']==draft_key),None)
                 if existing: return existing['id']
             spec = self.validate(body)
             remote = self.store.records(PAIR_TABLE)
@@ -231,9 +231,11 @@ class PairQueue:
             with self.lock: self.running=False; self.message='Paused. Open trades continue to be monitored.'
             return {'ok':True}
         with self.io, self.lock:
-            if action == 'start':
+            if action in ('start','resume'):
                 if any(r['status'] == 'Error' for r in self.rows): raise ValueError('Review the queue error before starting. Entry is never retried automatically.')
-                self.running=True; self.message='Queue started. Waiting for the first available pair.'
+                for row in self.rows:
+                    if action=='start' and row['status'] in PENDING: row['dispatched']=True
+                self.running=True; self.message='Queue started. Follow this batch in Trading.'
             elif action == 'retry':
                 for row in self.rows:
                     row['dirty']=row['status']!='Removing'
@@ -252,6 +254,20 @@ class PairQueue:
                     self.fleet.release_pair(identity)
                 self.running=False
                 row.update(status='Cancelled', message='Reviewed and removed. No entry retry; historical results retained if available.', dirty=True)
+            elif action == 'remove-selected':
+                ids=body.get('ids')
+                if not isinstance(ids,list) or not ids or any(not isinstance(i,str) for i in ids):
+                    raise ValueError('Select queued pairs to remove.')
+                rows=[r for r in self.rows if r['id'] in set(ids)]
+                if len(rows)!=len(set(ids)) or any(r['status'] not in PENDING | {'Removing'} for r in rows):
+                    raise ValueError('Only waiting pairs can be removed. Refresh your selection.')
+                for row in rows: row.update(status='Removing',message='Removing from Airtable.',dirty=False)
+                self.save()
+                try:
+                    for row in rows: self.remove(row)
+                except Exception:
+                    self.running=False; self.message='Removal pending. Retry Remove to finish deleting from Airtable.'
+                    raise
             elif action in ('move','cancel'):
                 row = next((r for r in self.rows if r['id']==body.get('id')), None)
                 if not row or row['status'] not in (PENDING | {'Removing'} if action == 'cancel' else PENDING): raise ValueError('Only waiting pairs can be moved or removed.')
@@ -276,6 +292,9 @@ class PairQueue:
     def remove(self, row):
         self.store.delete(row)
         with self.lock:
+            cancelled=copy.deepcopy(row)
+            cancelled.update(status='Cancelled',message='Removed from queue and Airtable.',dirty=False,cancelled=now())
+            self.history.append(cancelled)
             self.rows.remove(row)
             self.message='Pair removed from the queue and Airtable.'
             self.save()
@@ -310,7 +329,7 @@ class PairQueue:
             row = current
             if row is None:
                 if not self.running: return
-                row = next((r for r in self.rows if r['status'] in PENDING), None)
+                row = next((r for r in self.rows if r['status'] in PENDING and r.get('dispatched')), None)
                 if row is None:
                     self.running=False; self.message='Queue complete.'; return
             try: self.advance(row)
@@ -319,7 +338,7 @@ class PairQueue:
     def advance(self, row):
         spec = row['spec']; slots = (spec['left'],spec['right']); status=row['status']
         if status in PENDING:
-            if not self.running: return
+            if not self.running or not row.get('dispatched'): return
             with self.fleet.lock:
                 if any(s in self.fleet.owners for s in slots) or any(
                         a != 'Sim101' and a in p.settings.get('accounts', {}).values()

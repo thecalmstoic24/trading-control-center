@@ -79,3 +79,16 @@ main.planning-wide{max-width:none;width:100%;padding:28px 24px}
 #planning-table td.pnl-negative{color:#b42332;font-weight:600}
 #planning-table td.pnl-positive{color:#147447;font-weight:600}
 button:hover{filter:brightness(.96)}
+
+/* Batch workspace and readable account names. */
+.draft-account strong{font-size:18px;line-height:1.35}
+.vm-list-summary{grid-template-columns:22px minmax(180px,2fr) repeat(3,minmax(95px,1fr)) auto}
+.vm-list-summary input[type=checkbox],#queue-table input[type=checkbox],#trading-queue-table input[type=checkbox]{width:17px;height:17px;accent-color:#2164ca}
+#trading-queue-table{width:100%;font-size:13px;border-collapse:collapse}
+#trading-queue-table th,#trading-queue-table td{padding:10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+#trading-queue-table th{background:#e6edf5;position:sticky;top:0}
+#trading-queue-table small{display:block;max-width:250px;white-space:normal;color:var(--muted)}
+#trading-queue-table button{margin:3px}
+#trading-queue-table .queue-win{color:#147447}#trading-queue-table .queue-loss{color:#b42332}
+.pair-phase{font-weight:600}.pair-phase.trading,.pair-phase.preparing{color:#a54e00}.pair-phase.complete{color:#147447}
+@media(max-width:1000px){.vm-list-summary{grid-template-columns:22px 1fr 1fr}}

@@ -25,7 +25,10 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));assert.equal(await page.locator('#vms-panel').isVisible(),true);
- await page.locator('[data-vm=mff]').getByRole('button',{name:'Refresh',exact:true}).click();
+ await page.getByRole('checkbox',{name:'Select VM MFF-LOCDAO',exact:true}).check();
+ await page.locator('#vms-refresh-selected').click();
+ await page.waitForFunction(()=>document.querySelector('[data-vm=mff] .linked-accounts').textContent.includes('MFF-NEW'));
+ assert.deepEqual(writes.filter(w=>w.path==='/api/vm-refresh').map(w=>w.body.id),['mff']);
  await page.locator('[data-vm=mff] summary').click();
  assert.ok((await page.locator('[data-vm=mff] .linked-accounts').textContent()).includes('MFF-NEW'));
  await page.locator('#tab-planning').click();

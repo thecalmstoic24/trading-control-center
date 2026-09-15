@@ -37,17 +37,6 @@ $('register-vm').onclick=async()=>{
     $('connection-result').textContent='Registration saved. Waiting for a fresh agent response…'; await poll();
   } catch(e){$('connection-result').textContent=e.message;} finally{button.disabled=false;}
 };
-$('select-pair').onclick=async()=>{
-  if(pending)return; pending=true;
-  $('select-pair').disabled=true;
-  $('pair-result').textContent='Checking both VMs…';
-  try {
-    const result=await api('/api/pair',{left:$('pair-left').value,right:$('pair-right').value});
-    saveDraft();selectedPairId=result.pairId;initialized=false;closedSequence=null;
-     dirty=true; lastJob='';
-    $('pair-result').textContent='Pair created. Prepare & Verify.';
-  } catch(e){$('pair-result').textContent=e.message;alertText(e.message,true);} finally{pending=false;await poll();}
-};
 function saveDraft(){
   if(selectedPairId&&initialized)drafts[selectedPairId]={values:fields.map(id=>$(id).value),dirty};
 }
@@ -69,27 +58,7 @@ $('close-all').onclick=async()=>{
   }catch(e){$('pair-result').textContent=e.message;}
 };
 function renderRegistry(s) {
-  const key=JSON.stringify(s.fleet.map(a=>[a.id,a.name,a.pairId]));
-  if(key!==fleetKey){
-    for(const [index,side] of ['left','right'].entries()){
-      const select=$('pair-'+side), previous=select.value;select.replaceChildren();
-      const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose an available VM';select.append(placeholder);
-      for(const a of s.fleet){const option=document.createElement('option');option.value=a.id;option.disabled=!!a.pairId;option.textContent=a.name+(a.pairId?' — assigned to a pair':'');select.append(option);}
-      select.value=s.fleet.some(a=>a.id===previous&&!a.pairId)?previous:'';
-    }
-    fleetKey=key;
-  }
-  $('fleet-count').textContent=s.fleet.length+' / '+(s.limits?.vms||50);$('fleet').replaceChildren();
-  for(const a of s.fleet){
-    const item=document.createElement('div');item.className='fleet-item'+(a.fresh?' fresh':'');
-    const name=document.createElement('strong');name.textContent=a.name;
-    const status=document.createElement('span');status.textContent=(a.snapshotHeld?a.lastKnown.position+' (last known)':a.fresh?a.position:'Unknown / disconnected')+(a.pairId?' · paired':' · available');
-    item.append(name,status);$('fleet').append(item);
-  }
-  if(!s.fleet.length)$('fleet').textContent='Register your first two VMs to create a pair.';
-  for(const side of ['left','right'])$('pair-'+side).disabled=pending;
   $('pairs-count').textContent=s.pairs.length+' / '+(s.limits?.pairs||20);
-  $('select-pair').disabled=pending||s.pairs.length>=(s.limits?.pairs||20)||s.fleet.filter(a=>!a.pairId).length<2;
   $('connections').disabled=false;
   const imported=s.fleet.find(a=>a.id===registeredId);
   if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check that the agent is running and both computers are connected to the same Tailscale network.');
@@ -105,7 +74,7 @@ function renderRegistry(s) {
     const view=document.createElement('button');view.className='quiet';view.textContent=pair.id===selectedPairId?'Viewing':'View pair';view.onclick=()=>selectView(pair.id);
     row.append(info,view);$('pair-list').append(row);
   }
-  if(!s.pairs.length)$('pair-list').textContent='Choose two available VMs above and create your first pair.';
+  if(!s.pairs.length)$('pair-list').textContent='Start a planned batch in Planning to see its live pairs here.';
   $('close-all').disabled=s.pairs.length===0;
 }
 function render(s){
@@ -139,7 +108,7 @@ function render(s){
     renderPair(pair);
     pairJobs[pair.id]=lastJob;
     $('release-pair').disabled=pair.busy||pending||!(pair.agents.some(a=>(a.fresh?a.position:a.lastKnown?.position)==='Flat')&&pair.agents.every(a=>(!a.fresh||a.position==='Flat')&&!a.busy&&!a.scheduled&&!a.pending&&!a.closing));
-  }else alertText('Register VMs and create a pair to get started.');
+  }else alertText('Start a planned batch in Planning to get started.');
 }
 async function action(command) {
   if(pending && command!=='close') return;
@@ -231,7 +200,7 @@ let polling=false;
 async function poll(){
   if(polling)return;polling=true;
   try{render(await api('/api/state'));}
-  catch(e){$('pair-status-label').textContent='Unknown';$('pair-status-label').className='idle';$('pair-status-detail').textContent='Coordinator unavailable. Reconnect to verify this pair.';lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=$('select-pair').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
+  catch(e){$('pair-status-label').textContent='Unknown';$('pair-status-label').className='idle';$('pair-status-detail').textContent='Coordinator unavailable. Reconnect to verify this pair.';lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
     for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').className='position idle';root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}
   finally{polling=false;}
 }

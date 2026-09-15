@@ -24,11 +24,11 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('#left-quantity').inputValue(),'3');
  assert.equal(await page.locator('#pair-status-label').textContent(),'Pairing');
  const cards=await page.locator('.pair').boundingBox(),sidebar=await page.locator('.pair-status-panel').boundingBox();assert.ok(sidebar.x>=cards.x+cards.width);
- assert.equal(await page.locator('#vm-left .position').evaluate(e=>getComputedStyle(e).color),'rgb(255, 193, 123)');
+ assert.equal(await page.locator('#vm-left .position').evaluate(e=>getComputedStyle(e).color),'rgb(165, 78, 0)');
  pair.active=false;pair.closedSequence=1;pair.busy=true;for(const a of agents){a.position='Flat';a.lastKnown.position='Flat';pair.accountRefresh[a.id]='Refreshing accounts';}
  await page.evaluate(s=>render(s),state);
  assert.equal(await page.locator('#pair-status-label').textContent(),'Complete');
- assert.equal(await page.locator('#vm-left .position').evaluate(e=>getComputedStyle(e).color),'rgb(113, 224, 172)');
+ assert.equal(await page.locator('#vm-left .position').evaluate(e=>getComputedStyle(e).color),'rgb(20, 116, 71)');
  assert.equal(await page.locator('#prepare').isDisabled(),true);
  pair.busy=false;for(const a of agents)pair.accountRefresh[a.id]='Account refresh finished';
  await page.evaluate(s=>render(s),state);

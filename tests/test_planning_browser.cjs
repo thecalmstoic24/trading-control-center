@@ -63,8 +63,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#tab-planning').click();
  snapshot={...snapshot,updatedAt:99,columns:[...snapshot.columns,{name:'Realized PnL',type:'currency'}],rows:snapshot.rows.map((r,i)=>({...r,fields:{...r.fields,'Realized PnL':[-100,200,0][i]}}))};
  await page.waitForFunction(()=>document.querySelectorAll('#planning-table .pnl-negative').length===1);
- assert.equal(await page.locator('#planning-table .pnl-negative').textContent(),'-100');
- assert.equal(await page.locator('#planning-table .pnl-positive').textContent(),'200');
+ assert.equal(await page.locator('#planning-table .pnl-negative').textContent(),'-$100.00');
+ assert.equal(await page.locator('#planning-table .pnl-positive').textContent(),'$200.00');
  assert.equal(await page.locator('#planning-table .pnl-negative').evaluate(e=>getComputedStyle(e).color),'rgb(180, 35, 50)');
  assert.equal(await page.locator('#planning-table .pnl-positive').evaluate(e=>getComputedStyle(e).color),'rgb(20, 116, 71)');
  assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).colorScheme),'light');
