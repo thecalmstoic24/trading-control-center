@@ -1,6 +1,23 @@
 ﻿# One-click NinjaTrader Accounts export and direct Airtable sync.
 # First run prompts for a token, validates access, and saves it encrypted for this Windows user/PC.
 param([string]$RequestPath,[string]$ResultPath)
+function Get-AccountId16([string]$Name) {
+ if($Name -cmatch '^(BX-?M?\d+)(?:!Bulenox)+$') { return $Matches[1] }
+ return $Name
+}
+function Get-AccountMatches16($Names, $Records, [string]$Master) {
+ $key=($Master -replace '[^a-zA-Z0-9]','').ToUpperInvariant()
+ $group=@($Records | Where-Object { (([string]$_.fields.'Master Account' -replace '[^a-zA-Z0-9]','').ToUpperInvariant()) -ceq $key })
+ $distinct=@($group | ForEach-Object { [string]$_.fields.'Master Account' } | Sort-Object -Unique)
+ if($distinct.Count -gt 1) { throw 'Ambiguous Master Account names. Use an exact Master Account mapping.' }
+ foreach($name in @($Names)) {
+  $id=Get-AccountId16 ([string]$name)
+  $same=@($Names | Where-Object { (Get-AccountId16 ([string]$_)) -ceq $id })
+  if($same.Count -gt 1) { throw ('Ambiguous NinjaTrader account ID: '+$id+'. Resolve duplicate connection labels before refreshing.') }
+  $found=@($Records | Where-Object { [string]$_.fields.id -ceq $id })
+  if($same.Count -eq 1 -and $found.Count -eq 1 -and @($group | Where-Object { $_.id -ceq $found[0].id }).Count -eq 1) { $name }
+ }
+}
 $Setup=$false; $Preview=$false; $ExportOnly=$false; $Diagnose=$false; $CsvPath=$null
 $request14=Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
 $queue14=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data\sync-pending.json'
@@ -437,15 +454,7 @@ try {
     $records14+=@($page14.records);$offset14=$page14.offset
    } while($offset14)
    $master14=[string]$request14.MasterAccount
-   $key14=($master14 -replace '[^a-zA-Z0-9]','').ToUpperInvariant()
-   $group14=@($records14 | Where-Object { (([string]$_.fields.'Master Account' -replace '[^a-zA-Z0-9]','').ToUpperInvariant()) -ceq $key14 })
-   $distinct14=@($group14 | ForEach-Object { [string]$_.fields.'Master Account' } | Sort-Object -Unique)
-   if($distinct14.Count -gt 1) { throw 'Ambiguous Master Account names. Use an exact Master Account mapping.' }
-   $matches14=@()
-   foreach($name14 in @($request14.Accounts)) {
-    $found14=@($records14 | Where-Object { [string]$_.fields.id -ceq $name14 })
-    if($found14.Count -eq 1 -and @($group14 | Where-Object { $_.id -ceq $found14[0].id }).Count -eq 1) { $matches14+=$name14 }
-   }
+   $matches14=@(Get-AccountMatches16 $request14.Accounts $records14 $master14)
    @{ok=$true;accounts=@($matches14);message=($matches14.Count.ToString()+' matched accounts for '+$master14+'. Sim101 remains available.')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ResultPath -Encoding UTF8
    exit 0
   }

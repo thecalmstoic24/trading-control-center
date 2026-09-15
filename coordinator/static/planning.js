@@ -153,6 +153,7 @@
   for(const tab of ['vms','planning','trading'])el('tab-'+tab).onclick=()=>{
     for(const name of ['vms','planning','trading']){el(name+'-panel').hidden=name!==tab;el('tab-'+name).setAttribute('aria-selected',String(name===tab));}
     document.querySelector('main').classList.toggle('planning-wide',tab==='planning');
+    document.querySelector('main').classList.toggle('vm-view',tab==='vms');
     if(tab==='planning')poll();
   };
   const split=el('planning-divider'),layoutBox=document.querySelector('.planning-layout');

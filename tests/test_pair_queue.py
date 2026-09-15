@@ -35,7 +35,7 @@ class Agent(Fake):
         reply=super().__call__(config,command,body,**kw)
         if command=='post_trade' and not self.skip_receipt:
             s=config['id']; self.states[s]['syncReceipt']={'id':body['tradeId'],'completedUtc':'2026-09-14T12:00:00Z',
-                'accounts':[{'Account':'Sim101','CurrentBalance':100000+self.pnls[s],'Realized PnL':self.pnls[s]}]}
+                'accounts':[{'Account':getattr(self,'receipt_accounts',{}).get(s,'Sim101'),'CurrentBalance':100000+self.pnls[s],'Realized PnL':self.pnls[s]}]}
         return reply
 
 class QueueTests(unittest.TestCase):
@@ -97,6 +97,22 @@ class QueueTests(unittest.TestCase):
     def test_invalid_draft_identity_rejected(self):
         with self.assertRaises(ValueError): self.queue.add({**self.body,'draftKey':'invalid'})
         self.assertEqual(self.queue.rows,[])
+
+    def test_bulenox_queue_uses_canonical_receipts_and_airtable_results(self):
+        raw='BX-M7526703186112!Bulenox!Bulenox';clean='BX-M7526703186112'
+        self.agent.states['vm-left']['accounts']=['Sim101',raw]
+        self.agent.receipt_accounts={'vm-left':clean}
+        self.fleet.observe('vm-left');self.body['accounts']['vm-left']=clean
+        original=self.store.records
+        self.store.records=lambda table:[{'id':'recBUL','fields':{'id':clean,'Master Account':'BUL-THAO','CurrentBalance':50000}}] if table==TABLE else original(table)
+        pair=self.entered()
+        self.assertEqual(self.agent.states['vm-left']['account'],raw)
+        self.agent.pnls.update({'vm-left':900,'vm-right':-900});self.flat(pair);self.tick_until('Complete')
+        row=self.queue.rows[0];fields=PairStore.fields(row)
+        self.assertEqual(fields['Left Account ID'],clean)
+        self.assertEqual(fields['Left Account'],['recBUL'])
+        self.assertEqual(fields['Left Trade P&L'],900)
+        self.assertEqual(len([c for c in self.agent.calls if c[1]=='entry']),1)
 
     def test_no_entry_until_start_and_four_digit_ids(self):
         self.assertEqual(self.queue.add(self.body),'PAIR-0001');self.queue.tick()

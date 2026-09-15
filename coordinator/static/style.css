@@ -94,3 +94,14 @@ button:hover{filter:brightness(.96)}
 @media(max-width:1000px){.vm-list-summary{grid-template-columns:22px 1fr 1fr}}
 
 .planning-view-controls{display:flex;gap:12px;align-items:end;margin:12px 0}.planning-view-controls label{min-width:200px;max-width:450px;flex:1}.planning-view-controls select{font-size:14px}.planning-view-controls button{padding:11px 14px}#planning-view-error{color:var(--red)}
+
+/* Compact VM workspace: toolbar stays outside the scrolling rows. */
+#vms-panel{padding:14px 18px;display:flex;flex-direction:column;height:calc(100dvh - 300px);min-height:280px}
+#vms-panel>.section-title{flex-shrink:0;margin-bottom:4px}#vms-panel h2{font-size:16px}#vms-panel button{font-size:12px;padding:7px 11px}#vms-message{font-size:12px;margin:3px 0 8px}
+.vm-sort{display:flex;gap:10px;align-items:end;margin-bottom:10px;flex-shrink:0}.vm-sort label{display:flex;align-items:center;gap:8px}.vm-sort select{font-size:12px;padding:6px;margin:0;width:150px}
+#vms-list{overflow-y:auto;min-height:0;flex:1;scrollbar-gutter:stable;padding-right:5px}
+#vms-panel .vm-list-row{padding:10px 0}#vms-panel .vm-list-summary{gap:10px;font-size:12px}#vms-panel .vm-list-summary strong{font-size:15px}
+#vms-panel .vm-list-row details{margin-top:5px;font-size:11px}#vms-panel .vm-list-row p{font-size:11px;margin:4px 0 0}#vms-panel .linked-accounts{font-size:11px}
+@media(max-height:650px){#vms-panel{height:350px}}
+
+main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direction:column;padding:18px 32px}.vm-view .intro{flex-shrink:0;margin-bottom:14px}.vm-view h1{font-size:24px}.vm-view .intro p{font-size:13px}.vm-view .tabs{flex-shrink:0;margin-bottom:14px}.vm-view .tabs button{font-size:13px;padding:9px 16px}.vm-view #vms-panel{height:auto;min-height:0;flex:1}

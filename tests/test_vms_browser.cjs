@@ -1,0 +1,22 @@
+const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({executablePath:process.env.TCC_BROWSER_PATH,headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const fleet=Array.from({length:30},(_,i)=>({id:'vm'+i,name:'VM '+(30-i),online:i%2===0,fresh:true,position:i%3?'Flat':'Unknown',accounts:['Sim101'],configured:true}));
+ await page.route('http://127.0.0.1:8788/**',async route=>{const u=new URL(route.request().url());let result;
+ if(u.pathname==='/api/state')result={fleet,pairs:[],events:[]};else if(u.pathname==='/api/queue')result={rows:[],message:'Paused'};else if(u.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:null};
+ if(result)return route.fulfill({json:result});const f=u.pathname==='/'?'index.html':u.pathname.slice(1);await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',f)),contentType:f.endsWith('.js')?'application/javascript':f.endsWith('.css')?'text/css':'text/html'});});
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('.vm-list-row').first().waitFor();
+ assert.equal(await page.locator('.vm-list-summary strong').first().textContent(),'VM 1');
+ assert.equal(await page.locator('.vm-list-summary strong').first().evaluate(e=>getComputedStyle(e).fontSize),'15px');
+ const toolbar=await page.locator('#vms-register').boundingBox();
+ await page.locator('#vms-list').evaluate(e=>e.scrollTop=500);
+ const after=await page.locator('#vms-register').boundingBox();assert.equal(after.y,toolbar.y);assert.equal(await page.evaluate(()=>scrollY),0);
+ await page.waitForTimeout(1300);assert.ok(await page.locator('#vms-list').evaluate(e=>e.scrollTop)>=490);
+ await page.locator('#vms-sort-direction').click();await page.locator('#vms-list').evaluate(e=>e.scrollTop=0);assert.equal(await page.locator('.vm-list-summary strong').first().textContent(),'VM 30');
+ await page.locator('#vms-sort-direction').click();await page.locator('#vms-sort').selectOption('connection');
+ assert.equal(await page.locator('.vm-list-summary').first().locator('span').first().textContent(),'Connected');
+ await page.locator('#vms-sort').selectOption('position');assert.equal(await page.locator('.vm-list-summary').first().locator('span').nth(1).textContent(),'Flat');
+ await page.locator('#vms-sort').selectOption('availability');assert.equal(await page.locator('.vm-list-summary').first().locator('span').nth(2).textContent(),'Needs attention');
+ await page.reload();await page.locator('.vm-list-row').first().waitFor();assert.equal(await page.locator('#vms-sort').inputValue(),'availability');
+ await page.screenshot({path:'/tmp/vms-preview16.png',fullPage:true});assert.deepEqual(errors,[]);await browser.close();console.log('VM list: compact text, fixed toolbar, row-only scroll, stable polling scroll and four saved sorts passed.');
+})().catch(e=>{console.error(e);process.exit(1)});

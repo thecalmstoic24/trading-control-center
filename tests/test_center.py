@@ -50,6 +50,24 @@ class Tests(unittest.TestCase):
         self.temp.cleanup()
     def prepare(self):
         self.center.prepare(dict(ticker='MNQ',stopLoss=123,profit=456,noWorkingOrders=True),0)
+    def test_bulenox_alias_preserves_raw_prepare_and_peer_targets(self):
+        raw='BX-M7526703186112!Bulenox!Bulenox';clean='BX-M7526703186112'
+        self.fake.states['vm-left']['accounts']=['Sim101',raw]
+        self.center.prepare(dict(ticker='NQ SEP26',stopLoss=100,profit=200,accounts={'vm-left':clean}),0)
+        self.assertEqual(self.fake.states['vm-left']['account'],raw)
+        peer=[c[2] for c in self.fake.calls if c[0]=='vm-right' and c[1]=='bind_peer'][0]
+        self.assertEqual(peer['peerAccount'],raw)
+        view=self.center.view_agent('vm-left')
+        self.assertEqual(view['account'],clean);self.assertIn(clean,view['accounts'])
+        self.assertTrue(self.center.state()['canEnter'])
+    def test_bulenox_duplicate_or_missing_alias_blocks_prepare(self):
+        clean='BX-M7526703186112'
+        for names in [[],[clean,clean+'!Bulenox']]:
+            self.fake.states['vm-left']['accounts']=names
+            with self.assertRaisesRegex(ValueError,'missing or ambiguous'):
+                self.center.prepare(dict(ticker='NQ SEP26',stopLoss=100,profit=200,accounts={'vm-left':clean}),0)
+        self.assertFalse(any(c[1] in ('prepare','bind_peer') for c in self.fake.calls))
+
     def test_mirrored_readback_and_only_one_paired_entry(self):
         self.prepare()
         self.assertTrue(self.center.state()['canEnter'])

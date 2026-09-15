@@ -29,9 +29,10 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
+from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.15'
-AGENT_VERSIONS = {VERSION, '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.16'
+AGENT_VERSIONS = {VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -346,11 +347,15 @@ class Center:
         age = o.get('ageMs', 999999) + (time.monotonic() - o.get('received', time.monotonic())) * 1000
         fresh = bool(o.get('fresh') and age < MAX_AGE_MS)
         s = o.get('state', {})
-        cached = self.last_good.get(slot, {})
+        cached = self.last_good.get(slot, {}).copy()
+        raw_accounts=s.get('accounts') or cached.get('accounts', ['Sim101'])
+        if cached:
+            cached['account']=account_id(cached.get('account'))
+            cached['accounts']=account_list(cached.get('accounts', ['Sim101']))
         return dict(id=slot, name=self.name(slot), configured=slot in self.config,
                     online=bool(o.get('online') and time.monotonic() - o.get('received', 0) < 7), fresh=fresh,
                     ageMs=round(age), rttMs=o.get('rttMs'), position=s.get('position') if fresh else 'Unknown',
-                    account=s.get('account') if fresh else None, quantity=s.get('quantity') if fresh else None,
+                    account=account_id(s.get('account')) if fresh else None, quantity=s.get('quantity') if fresh else None,
                     ticker=s.get('ticker') if fresh else None, prepared=bool(fresh and s.get('prepared')),
                     prepareId=s.get('prepareId') if fresh else None,
                     scheduled=bool(s.get('scheduled')), busy=bool(s.get('busy')),
@@ -358,9 +363,9 @@ class Center:
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
-                    snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=s.get('accounts') or cached.get('accounts', ['Sim101']), accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
                     syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
-                    selectedAccount=s.get('selectedAccount', 'Sim101'), selectedQuantity=s.get('selectedQuantity', 1))
+                    selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
         return (agent['fresh'] and bool(agent['account'])
@@ -519,12 +524,13 @@ class Center:
         if not all(self.safe_flat(a) for a in self.state()['agents']):
             raise ValueError('Both VMs must report fresh Flat, with no pending action.')
         self.assert_generation(generation)
+        raw_accounts={slot:trading_name(accounts[slot],self.view_agent(slot)['rawAccounts']) for slot in self.pair}
         binding = uuid.uuid4().hex
         bindings = []
         for slot, peer in (self.pair, self.pair[::-1]):
             peer_config = self.config[peer].copy()
             peer_config['name'] = self.name(peer)
-            bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding, 'peerAccount':accounts[peer], 'peerQuantity':quantities[peer]}))
+            bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding, 'peerAccount':raw_accounts[peer], 'peerQuantity':quantities[peer]}))
         errors = []
         for future in bindings:
             try: future.result()
@@ -535,7 +541,7 @@ class Center:
         self.save_fleet()
         prepare_id = uuid.uuid4().hex
         def one(slot, sl, pt):
-            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=accounts[slot], quantity=quantities[slot]))
+            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=raw_accounts[slot], quantity=quantities[slot]))
         results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], right_stop, right_profit)]
         errors = []
         for slot, result in zip(self.pair, results):
