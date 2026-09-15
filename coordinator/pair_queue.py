@@ -1,4 +1,4 @@
-"""Durable, explicitly started sequential planning queue. No entry is retried.
+"""Durable, explicitly started planning queue for independent VMs. No entry is retried.
 
 Pair receipts come from the authenticated agent after its CSV values have been
 confirmed by Airtable. Accounts browsing remains read-only in planning.py.
@@ -348,20 +348,19 @@ class PairQueue:
                     continue
                 if row.get('dirty'):
                     self.sync(row)
-            current = next((r for r in self.rows if r['status'] not in PENDING | TERMINAL | {'Error'}), None)
-            row = current
-            if row is None:
-                if not self.running: return
-                candidates = [r for r in self.rows if r['status'] in PENDING and r.get('dispatched')]
-                if not candidates:
-                    self.running=False; self.message='Queue finished. Review any failed pairs in Trading.'; return
-                for row in candidates:
-                    try: self.advance(row)
-                    except Exception as exc: self.fail(row, exc)
-                    if row['status'] not in PENDING | {'Error'}: break
-                return
-            try: self.advance(row)
-            except Exception as exc: self.fail(row, exc)
+            # Advance every active pair, then reserve any eligible pending pairs.
+            # Fleet ownership is checked under its lock before each reservation.
+            active=[r for r in self.rows if r['status'] not in PENDING | TERMINAL | {'Error'}]
+            for row in active:
+                try: self.advance(row)
+                except Exception as exc: self.fail(row, exc)
+            if not self.running: return
+            for row in self.rows[:]:
+                if row['status'] not in PENDING or not row.get('dispatched'): continue
+                try: self.advance(row)
+                except Exception as exc: self.fail(row, exc)
+            if not any(r['status'] not in TERMINAL | {'Error'} and r.get('dispatched') for r in self.rows):
+                self.running=False; self.message='Queue finished. Review any failed pairs in Trading.'
 
     def advance(self, row):
         spec = row['spec']; slots = (spec['left'],spec['right']); status=row['status']
@@ -379,16 +378,32 @@ class PairQueue:
                     self.set_status(row,'Waiting','Waiting for both VMs to report fresh, idle Flat.'); return
                 if not all(a.get('queueReceipts') for a in agents):
                     raise ValueError('Update both selected VM agents to preview.7 for verified queue results.')
-                if not all(spec['accounts'][a['id']] in a['accounts'] for a in agents):
-                    raise ValueError('Selected account is no longer available. Refresh accounts and add a corrected pair.')
+                if not all(a.get('queueAccountRefresh') for a in agents):
+                    raise ValueError('Update both VM agents to Preview 18 for automatic verified account refresh.')
                 if not self.running: return
                 pair_id=self.fleet.create_pair(*slots)
                 row['pairId']=pair_id
                 pair=self.fleet.get_pair(pair_id)
                 pair.settings.update({k:spec[k] for k in ('ticker','stopLoss','profit','accounts','quantities','ratio') if k in spec})
-                row['beforeId']=uuid.uuid4().hex; row['phase']='before'; row['requested']=[]; row['deadline']=time.time()+300
-                self.set_status(row,'Preparing','Syncing starting balances and Realized PnL.'); return
+                row['refreshId']=uuid.uuid4().hex; row['phase']='accounts'; row['requested']=[]; row['deadline']=time.time()+150
+                self.set_status(row,'Preparing','Refreshing both agents’ account lists before preparation.'); return
         pair=self.fleet.get_pair(row['pairId'])
+        if status=='Preparing' and row['phase']=='accounts':
+            if not self.running: return
+            if time.time()>row['deadline']:
+                raise ValueError('Account refresh timed out. No trade entry sent. Check the agents’ account messages.')
+            for slot in slots:
+                if slot not in row['requested']:
+                    row['requested'].append(slot); self.save()
+                    pair.call(slot,'accounts',{'refreshId':row['refreshId']},15)
+                pair.observe(slot)
+            agents=[pair.view_agent(s) for s in slots]
+            if not all(pair.safe_flat(a) and a.get('accountRefreshId')==row['refreshId'] for a in agents): return
+            for a in agents:
+                if spec['accounts'][a['id']] not in a['accounts']:
+                    raise ValueError(a['name']+': Selected account is missing from the newly refreshed NinjaTrader/Airtable list. No entry sent.')
+            row['beforeId']=uuid.uuid4().hex; row['phase']='before'; row['requested']=[]; row['deadline']=time.time()+300
+            self.set_status(row,'Preparing','Accounts verified. Syncing starting balances and Realized PnL.'); return
         if status=='Preparing' and row['phase']=='before':
             if not self.running:
                 self.message='Paused before entry. Start Queue to continue.'; return

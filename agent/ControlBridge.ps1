@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.17'
+$script:ControlVersion = '16.0-preview.18'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -75,6 +75,8 @@ function Get-ControlStatus {
     $state['sync'] = $script:Sync14
     $state['syncReceipt'] = $script:SyncReceipt17
     $state['queueReceipts'] = $true
+    $state['queueAccountRefresh'] = $true
+    $state['accountRefreshId'] = $script:AccountRefreshId18
     $state['selectedAccount'] = $script:LockedAccount
     $state['selectedQuantity'] = $script:LockedQuantity
     $state['ticker'] = $(if ($state.ok) { $script:StateCache.Ticker } else { $null })
@@ -102,7 +104,7 @@ function Invoke-ControlCommand {
         $request | Add-Member -NotePropertyName token -NotePropertyValue $secretInput.Text -Force
         return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
     }
-    if ($Pending.Command -eq 'accounts') { Start-Worker14 -Mode 'accounts'; return @{ok=$true;message='Reading account list.'} }
+    if ($Pending.Command -eq 'accounts') { Start-Worker14 -Mode 'accounts' -RefreshId ([string]$request.refreshId); return @{ok=$true;message='Reading account list.'} }
     if ($Pending.Command -eq 'post_trade') {
         if([string]$request.tradeId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid trade ID.' }
         $script:RetryTrade14=[string]$request.tradeId

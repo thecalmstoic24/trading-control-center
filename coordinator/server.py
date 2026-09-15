@@ -31,8 +31,8 @@ sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.17'
-AGENT_VERSIONS = {'16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.18'
+AGENT_VERSIONS = {'16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -364,7 +364,7 @@ class Center:
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
                     snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
-                    syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
+                    accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):

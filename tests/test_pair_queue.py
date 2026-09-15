@@ -30,9 +30,10 @@ class Planning:
 class Agent(Fake):
     def __init__(self):
         super().__init__(); self.pnls={s:0 for s in module.IDS}; self.skip_receipt=False
-        for s in self.states.values(): s.update(queueReceipts=True,accounts=['Sim101'])
+        for s in self.states.values(): s.update(queueReceipts=True,queueAccountRefresh=True,accounts=['Sim101'])
     def __call__(self,config,command,body=None,**kw):
         reply=super().__call__(config,command,body,**kw)
+        if command=='accounts': self.states[config['id']]['accountRefreshId']=body.get('refreshId')
         if command=='post_trade' and not self.skip_receipt:
             s=config['id']; self.states[s]['syncReceipt']={'id':body['tradeId'],'completedUtc':'2026-09-14T12:00:00Z',
                 'accounts':[{'Account':getattr(self,'receipt_accounts',{}).get(s,'Sim101'),'CurrentBalance':100000+self.pnls[s],'Realized PnL':self.pnls[s]}]}
@@ -99,6 +100,63 @@ class QueueTests(unittest.TestCase):
         self.queue.advance=advance
         self.queue.tick()
         self.assertEqual(seen,[first['id'],second['id']])
+
+    def test_accounts_refresh_completes_before_export_and_prepare(self):
+        self.add_start();self.tick_until('Trading')
+        for slot in module.IDS:
+            commands=[c[1] for c in self.agent.calls if c[0]==slot]
+            self.assertLess(commands.index('accounts'),commands.index('post_trade'))
+            self.assertLess(commands.index('accounts'),commands.index('prepare'))
+
+    def test_old_refresh_id_cannot_start_export(self):
+        self.add_start();self.queue.tick();self.queue.tick()
+        row=self.queue.rows[0]
+        # Return to waiting for this request, with stale cached completion IDs.
+        row['phase']='accounts'
+        row['requested']=list(module.IDS)
+        for state in self.agent.states.values():state['accountRefreshId']='old'
+        self.queue.tick()
+        self.assertEqual(row['phase'],'accounts')
+        self.assertFalse(any(c[1] in ('post_trade','prepare','entry') for c in self.agent.calls))
+
+    def test_newly_refreshed_missing_account_stops_before_export(self):
+        self.add_start();self.queue.tick()
+        self.queue.rows[0]['spec']['accounts']['vm-left']='missing'
+        self.queue.tick()
+        self.assertEqual(self.queue.rows[0]['status'],'Error')
+        self.assertIn('newly refreshed',self.queue.rows[0]['message'])
+        self.assertFalse(any(c[1] in ('post_trade','prepare','entry') for c in self.agent.calls))
+
+    def test_failed_account_refresh_never_enters(self):
+        self.add_start();self.queue.tick()
+        self.agent.fail.add(('vm-right','accounts'))
+        self.queue.tick()
+        self.assertEqual(self.queue.rows[0]['status'],'Error')
+        self.assertFalse(any(c[1] in ('post_trade','prepare','entry') for c in self.agent.calls))
+
+    def test_independent_pairs_trade_concurrently_shared_vm_waits(self):
+        for i,slot in enumerate(['vm-c','vm-d']):
+            self.fleet.catalog.config[slot]=dict(id=slot,name=slot,host='100.64.0.'+str(i+10),port=8789,pin='c'*64,token='b'*64)
+            self.fleet.catalog.poll_locks[slot]=threading.Lock()
+            self.agent.states[slot]=dict(self.agent.states['vm-left'],id=slot)
+            self.agent.pnls[slot]=0
+            self.fleet.observe(slot)
+        self.queue.add(self.body)
+        shared=dict(self.body,right='vm-c',accounts={'vm-left':'Sim101','vm-c':'Sim101'},quantities={'vm-left':3,'vm-c':3})
+        free=dict(self.body,left='vm-c',right='vm-d',accounts={'vm-c':'Sim101','vm-d':'Sim101'},quantities={'vm-c':3,'vm-d':3})
+        self.queue.add(shared);self.queue.add(free);self.queue.command('start',{})
+        for _ in range(200):
+            self.queue.tick()
+            if self.queue.rows[0]['status']==self.queue.rows[2]['status']=='Trading':break
+            time.sleep(.01)
+        self.assertEqual([r['status'] for r in self.queue.rows],['Trading','Waiting','Trading'])
+        self.assertEqual(len(self.fleet.pairs),2)
+        self.assertEqual(len(self.fleet.owners),4)
+        self.queue.command('pause',{})
+        self.queue.tick()
+        self.assertFalse(self.queue.running)
+        self.assertEqual(self.queue.rows[1]['status'],'Waiting')
+        self.assertEqual(len(self.fleet.pairs),2)
 
     def test_ratio_survives_queue_and_reaches_agents(self):
         self.body.update(ratio='2:3',quantities={'vm-left':10,'vm-right':15},stopLoss=1000,profit=800,ticker='MNQ SEP26')

@@ -10,6 +10,7 @@ $script:WorkerMode14 = ''
 $script:WorkerResult14 = ''
 $script:WorkerStarted14 = [DateTime]::MinValue
 $script:AccountStamp14 = [DateTime]::MinValue
+$script:AccountRefreshId18 = ''
 $script:DesktopLease14 = $null
 $script:RetryAfter14=[DateTime]::UtcNow.AddSeconds(30)
 $data14 = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
@@ -89,18 +90,18 @@ function Start-ManualSync15 {
     Remove-Item $path -ErrorAction SilentlyContinue
 }
 function Start-Worker14 {
-    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport)
+    param([string]$Mode,[string]$TradeId='',[switch]$FreshExport,[string]$RefreshId='')
     if($Mode -in @('export','startup')) {
         if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
     } else { $null=Assert-Idle14 }
     Invalidate-Preparation
     $script:ControlPreparedId=''
     $directory=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
-    $request=@{Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
+    $request=@{RefreshId=$RefreshId;Mode=$Mode;TradeId=$TradeId;FreshExport=[bool]$FreshExport;MasterAccount=$script:ControlIdentity.Name}
     $mappingPath=Join-Path $directory 'airtable-master.txt'
     if(Test-Path $mappingPath) { $request.MasterAccount=(Get-Content $mappingPath -Raw).Trim() }
     if($Mode -eq 'accounts') {
-        $script:Accounts14=@('Sim101');$script:AccountStamp14=[DateTime]::MinValue
+        $script:AccountRefreshId18='';$script:Accounts14=@('Sim101');$script:AccountStamp14=[DateTime]::MinValue
         $request.Accounts=@(Get-Accounts14)
         $script:AccountMessage14='Reading current Airtable account matches...'
     }
@@ -150,6 +151,7 @@ function Poll-Worker14 {
         if($mode -eq 'export' -and $result.receipt) { $script:SyncReceipt17=$result.receipt }
         if($mode -eq 'accounts') {
             $script:Accounts14=@('Sim101')+@($result.accounts | Where-Object { $_ -cne 'Sim101' })
+            $script:AccountRefreshId18=[string]$result.refreshId
             $script:AccountStamp14=[DateTime]::UtcNow
             $script:AccountMessage14=[string]$result.message
         } else { $script:Sync14=[string]$result.message }

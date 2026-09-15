@@ -455,7 +455,7 @@ try {
    } while($offset14)
    $master14=[string]$request14.MasterAccount
    $matches14=@(Get-AccountMatches16 $request14.Accounts $records14 $master14)
-   @{ok=$true;accounts=@($matches14);message=($matches14.Count.ToString()+' matched accounts for '+$master14+'. Sim101 remains available.')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ResultPath -Encoding UTF8
+   @{ok=$true;refreshId=[string]$request14.RefreshId;accounts=@($matches14);message=($matches14.Count.ToString()+' matched accounts for '+$master14+'. Sim101 remains available.')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ResultPath -Encoding UTF8
    exit 0
   }
   if($request14.Mode -ne 'export') { throw 'Unsupported worker mode.' }

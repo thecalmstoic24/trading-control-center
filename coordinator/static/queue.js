@@ -27,6 +27,10 @@
     const valid=new Set(data.rows.filter(removable).map(r=>r.id));for(const id of selected)if(!valid.has(id))selected.delete(id);
     renderTable('queue-table',data.rows.filter(planned),true);
     renderTable('trading-queue-table',[...data.rows.filter(r=>!planned(r)),...(data.history||[])],false);
+    const activity=el('queue-activity');activity.replaceChildren();
+    for(const r of [...data.rows,...(data.history||[])].slice().reverse()){
+      if(!r.message)continue;const item=node('div');item.className='event';item.append(node('span',r.id+' · '+r.status+' · '+r.message));activity.append(item);
+    }
     updateButtons();
   }
   function renderTable(id,rows,isPlanning){
@@ -40,7 +44,7 @@
       for(const side of ['left','right']){const slot=s[side];tr.append(node('td',`${s.masters[slot]} / ${s.accounts[slot]}`),node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))));}
       tr.append(node('td',`${s.ticker} · ${s.quantities[s.left]} / ${s.quantities[s.right]}`));
       const label=r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
-      const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase();status.append(phase,node('small',r.message));tr.append(status);
+      const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase();status.append(phase);tr.append(status);
       for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';tr.append(td);}
       const actions=node('td');
       const button=(label,name,extra={})=>{const b=node('button',label);b.className='quiet';b.disabled=mutating;b.onclick=()=>action(name,{id:r.id,...extra});actions.append(b);};
