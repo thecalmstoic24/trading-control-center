@@ -92,3 +92,5 @@ button:hover{filter:brightness(.96)}
 #trading-queue-table .queue-win{color:#147447}#trading-queue-table .queue-loss{color:#b42332}
 .pair-phase{font-weight:600}.pair-phase.trading,.pair-phase.preparing{color:#a54e00}.pair-phase.complete{color:#147447}
 @media(max-width:1000px){.vm-list-summary{grid-template-columns:22px 1fr 1fr}}
+
+.planning-view-controls{display:flex;gap:12px;align-items:end;margin:12px 0}.planning-view-controls label{min-width:200px;max-width:450px;flex:1}.planning-view-controls select{font-size:14px}.planning-view-controls button{padding:11px 14px}#planning-view-error{color:var(--red)}

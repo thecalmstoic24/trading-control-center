@@ -42,7 +42,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(request.get_header('Authorization'),'Bearer private')
     def test_worker_failure_preserves_last_success_without_blocking_snapshot(self):
         entered=threading.Event();proceed=threading.Event()
-        def fetch(token):
+        def fetch(token,**kwargs):
             entered.set();proceed.wait(2);raise ValueError('Temporary failure')
         with tempfile.TemporaryDirectory() as directory:
             p=m.Planning(directory);p.data.update(rows=[{'id':'saved','fields':{}}],updatedAt=12)
@@ -55,6 +55,56 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(p.snapshot()['updatedAt'],12)
             self.assertEqual(p.snapshot()['error'],'Temporary failure')
             self.assertFalse(p.path.exists(),'failed tokens must not replace stored credential')
+    def test_view_links_and_ids_are_validated(self):
+        view=m.view_config('viwDqzyeYiDPtrdHA','Funded')
+        self.assertEqual(view['table'],m.TABLE)
+        self.assertEqual(view['view'],'viwDqzyeYiDPtrdHA')
+        self.assertEqual(view['name'],'Funded')
+        full=m.view_config('https://airtable.com/appOther123/tblOther123/viwOther123?blocks=hide')
+        self.assertEqual((full['base'],full['table'],full['view']),('appOther123','tblOther123','viwOther123'))
+        for link in ['https://evil.example/appOther123/tblOther123/viwOther123','https://airtable.com.evil.example/a','http://airtable.com/appOther123/tblOther123/viwOther123','https://airtable.com/shr123456','viw1?view=other',None]:
+            with self.assertRaises(ValueError):m.view_config(link)
+    def test_custom_table_and_view_used_on_every_page_and_schema(self):
+        urls=[]
+        def get(url,token):
+            urls.append(url)
+            if '/meta/' in url:return {'tables':[{'id':'tblOther123','fields':[{'name':'Empty money','type':'currency'}]}]}
+            self.assertIn('/appOther123/tblOther123?',url)
+            self.assertEqual(parse_qs(urlparse(url).query)['view'],['viwOther123'])
+            if len(urls)==1:return {'records':[],'offset':'next'}
+            return {'records':[]}
+        with patch.object(m.time,'sleep'):
+            result=m.fetch_view('private',get,base='appOther123',table_id='tblOther123',view='viwOther123')
+        self.assertEqual(result['columns'],[{'name':'Empty money','type':'currency'}])
+        self.assertIn('/meta/bases/appOther123/tables',urls[-1])
+    def test_saved_view_catalog_and_separate_caches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p=m.Planning(directory);default=p.active
+            p.data.update(rows=[{'id':'old','fields':{}}],updatedAt=1)
+            p.select_view(link='viwDqzyeYiDPtrdHA',name='Funded');new=p.active
+            self.assertEqual(p.snapshot()['rows'],[])
+            p.select_view(link='viwDqzyeYiDPtrdHA')
+            self.assertEqual(len(p.views),2)
+            self.assertEqual(p.views[-1]['name'],'Funded')
+            restored=m.Planning(directory)
+            self.assertEqual(restored.active,new);self.assertEqual(len(restored.views),2)
+            p.select_view(key=default)
+            self.assertEqual(p.snapshot()['rows'][0]['id'],'old')
+            with self.assertRaises(ValueError):p.select_view(key='unknown')
+            self.assertEqual(p.active,default)
+    def test_late_response_does_not_replace_new_view_data(self):
+        entered=threading.Event();proceed=threading.Event()
+        def fetch(token,**kwargs):
+            entered.set();proceed.wait(2)
+            return {'rows':[{'id':'old-view-record','fields':{}}],'columns':[]}
+        with tempfile.TemporaryDirectory() as directory:
+            p=m.Planning(directory);p.refresh('pat'+'x'*30)
+            with patch.object(m,'fetch_view',side_effect=fetch),patch.object(m,'credential'):
+                p.start();self.assertTrue(entered.wait(1))
+                p.select_view(link='viwDqzyeYiDPtrdHA');p.close();proceed.set();p.thread.join(2)
+            self.assertEqual(p.snapshot()['rows'],[])
+            self.assertTrue(p.snapshot()['viewKey'].endswith('viwDqzyeYiDPtrdHA'))
+
     def test_credential_secret_uses_stdin_not_arguments(self):
         class Result:returncode=0;stdout=''
         with patch.object(m.subprocess,'run',return_value=Result()) as call:

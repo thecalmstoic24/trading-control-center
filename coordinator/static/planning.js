@@ -1,6 +1,7 @@
 'use strict';
 (() => {
-  const key='planning-viw6K3jRjU5PJpWM4-v1';
+  const defaultView='appzvICrv7LLlZdxm/tbl1u1mKMpVLmTqQP/viw6K3jRjU5PJpWM4';
+  let viewKey=defaultView,key='planning-viw6K3jRjU5PJpWM4-v1',viewSignature='',requestGeneration=0;
   function display(value){
     if(value==null)return '';
     if(Array.isArray(value))return value.map(display).join(', ');
@@ -48,11 +49,13 @@
       if(u.status){const badge=document.createElement('span');badge.className='account-badge '+u.status.toLowerCase();badge.textContent=u.status;td.append(badge);}
     }
   }
-  let layout={hidden:[],order:[],columns:[],widths:{},split:65,sort:null};
-  try{
-    const saved=JSON.parse(localStorage.getItem(key));
-    if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))layout={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null};
-  }catch(_){}
+  function loadLayout(){
+    let result={hidden:[],order:[],columns:[],widths:{},split:65,sort:null};
+    try{const saved=JSON.parse(localStorage.getItem(key));
+      if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))result={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null};
+    }catch(_){}return result;
+  }
+  let layout=loadLayout();
   let data={rows:[],columns:[]},lastUpdate=null,dragId='',polling=false,signature=null,eventTimer=null;
   function save(){try{localStorage.setItem(key,JSON.stringify(layout));}catch(_){el('planning-status').textContent='Browser storage is unavailable; layout will last for this session.';}}
   function node(tag,text){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;}
@@ -127,9 +130,15 @@
     });table.prepend(group);apply();
   }
   async function poll(){
-    if(polling)return;polling=true;
+    if(polling)return;polling=true;const generation=requestGeneration;
     try{
-      const snapshot=await api('/api/planning');data=snapshot;
+      const snapshot=await api('/api/planning');if(generation!==requestGeneration)return;
+      const next=snapshot.viewKey||defaultView;
+      if(next!==viewKey){save();viewKey=next;key=next===defaultView?'planning-viw6K3jRjU5PJpWM4-v1':'planning-'+next+'-v1';layout=loadLayout();selected.clear();dragId='';lastUpdate=undefined;el('view-save-status').textContent='';resize(layout.split);}
+      data=snapshot;
+      const views=data.views||[{key:defaultView,name:'Accounts'}],signature=JSON.stringify(views);
+      if(signature!==viewSignature){viewSignature=signature;el('planning-view').replaceChildren();for(const v of views){const option=node('option',v.name);option.value=v.key;el('planning-view').append(option);}}
+      el('planning-view').value=viewKey;
       window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:data.rows}));
       el('planning-refresh').disabled=!!data.busy;
       el('planning-status').textContent=`${data.rows.length} accounts · ${data.updatedAt?'Updated '+new Date(data.updatedAt*1000).toLocaleString():'Not loaded yet'}${data.busy?' · Refreshing…':''}${data.error?' · '+data.error:''}`;
@@ -155,6 +164,16 @@
   split.onpointercancel=()=>{delete split.dataset.dragging;};
   split.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();resize(layout.split+(e.key==='ArrowLeft'?-2:2));save();}};
   el('planning-save-view').onclick=()=>{try{localStorage.setItem(key,JSON.stringify(layout));el('view-save-status').textContent='View saved';}catch(_){el('view-save-status').textContent='Unable to save view: browser storage is unavailable.';}};
+  async function changeView(body){
+    requestGeneration++;el('planning-view').disabled=true;el('planning-view-save').disabled=true;
+    try{await api('/api/planning/view',body);await poll();el('planning-view-dialog').close();}
+    catch(e){el('planning-view-error').textContent=e.message;el('planning-status').textContent=e.message;el('planning-view').value=viewKey;}
+    finally{el('planning-view').disabled=false;el('planning-view-save').disabled=false;}
+  }
+  el('planning-view').onchange=()=>changeView({key:el('planning-view').value});
+  el('planning-add-view').onclick=()=>{el('planning-view-link').value='';el('planning-view-name').value='';el('planning-view-error').textContent='';el('planning-view-dialog').showModal();};
+  el('planning-view-cancel').onclick=()=>el('planning-view-dialog').close();
+  el('planning-view-save').onclick=()=>changeView({link:el('planning-view-link').value.trim(),name:el('planning-view-name').value.trim()});
   el('planning-refresh').onclick=()=>refresh();
   el('planning-manual').onclick=()=>{layout.sort=null;save();renderTable();};
   el('planning-setup').onclick=()=>el('planning-dialog').showModal();
