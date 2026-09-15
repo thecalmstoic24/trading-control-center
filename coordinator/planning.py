@@ -121,7 +121,7 @@ class Planning:
         self.wake.set()
     def loop(self):
         while not self.stop.is_set():
-            self.wake.wait(30);self.wake.clear()
+            self.wake.wait();self.wake.clear()
             if self.stop.is_set():return
             with self.lock:
                 token=self.pending_token;self.pending_token=None

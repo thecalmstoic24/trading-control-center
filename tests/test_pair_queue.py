@@ -183,6 +183,29 @@ class QueueTests(unittest.TestCase):
         self.assertIn('Calibrate Chart 1',self.queue.rows[0]['message'])
         self.assertEqual(len(self.fleet.pairs),0)
 
+    def test_duplicate_completed_pair_new_identity_same_configuration_no_entry(self):
+        self.queue.add(self.body);source=self.queue.rows[0]
+        source.update(status='Complete',results={'vm-left':900,'vm-right':-850},started='old')
+        result=self.queue.command('duplicate',{'id':source['id'],'draftKey':'d'*32})
+        row=self.queue.rows[1]
+        self.assertEqual(row['id'],result['id']);self.assertNotEqual(row['id'],source['id'])
+        self.assertEqual(row['spec'],source['spec']);self.assertEqual(row['status'],'Queued')
+        self.assertNotIn('results',row);self.assertNotIn('started',row)
+        self.assertFalse(row.get('dispatched'));self.queue.tick()
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+        again=self.queue.command('duplicate',{'id':source['id'],'draftKey':'d'*32})
+        self.assertEqual(again,result);self.assertEqual(len(self.queue.rows),2)
+        self.assertIn(row['key'],self.store.rows)
+
+    def test_duplicate_rejects_running_source_and_identity_collision(self):
+        self.queue.add(self.body);source=self.queue.rows[0]
+        with self.assertRaisesRegex(ValueError,'completed'):
+            self.queue.command('duplicate',{'id':source['id'],'draftKey':'d'*32})
+        source['status']='Complete'
+        with self.assertRaisesRegex(ValueError,'identity conflict'):
+            self.queue.command('duplicate',{'id':source['id'],'draftKey':source['key']})
+        self.assertEqual(len(self.queue.rows),1)
+
     def test_ratio_survives_queue_and_reaches_agents(self):
         self.body.update(ratio='2:3',quantities={'vm-left':10,'vm-right':15},stopLoss=1000,profit=800,ticker='MNQ SEP26')
         self.queue.add(self.body)

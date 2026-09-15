@@ -227,6 +227,33 @@ class PairQueue:
 
     def command(self, action, body):
         if action == 'add': return {'id': self.add(body)}
+        if action == 'duplicate':
+            with self.lock:
+                source=next((r for r in self.rows if r['id']==body.get('id') and r['status']=='Complete'),None)
+                if not source: raise ValueError('Only completed pairs can be duplicated.')
+                spec=copy.deepcopy(source['spec'])
+                source_key=source['key']
+            spec['draftKey']=body.get('draftKey')
+            if not isinstance(spec['draftKey'],str) or not re.fullmatch('[a-f0-9]{32}',spec['draftKey']):
+                raise ValueError('Duplicate request identity is required.')
+            with self.lock:
+                existing=next((r for r in self.rows+self.history if r['key']==spec['draftKey']),None)
+                if existing and existing.get('duplicateOf')!=source_key: raise ValueError('Duplicate request identity conflict.')
+            identity=self.add(spec)
+            with self.io,self.lock:
+                row=next(r for r in self.rows if r['id']==identity)
+                if row.get('duplicateOf') not in (None,source_key): raise ValueError('Duplicate request identity conflict.')
+                if not row.get('duplicateOf'):
+                    row['duplicateOf']=source_key
+                    row['dirty']=True
+                    row['message']='Copied from '+source['id']+'. Select Start when ready.'
+                    self.rows.remove(row)
+                    index=next((i+1 for i,r in enumerate(self.rows) if r['key']==source_key),len(self.rows))
+                    self.rows.insert(index,row)
+                    for i,r in enumerate(self.rows):r['order']=i+1
+                    self.save()
+            return {'id':identity}
+
         # Pause must not wait for an export/network request.
         if action == 'pause':
             with self.lock: self.running=False; self.message='Paused. Open trades continue to be monitored.'
@@ -237,6 +264,10 @@ class PairQueue:
                 for row in self.rows:
                     if action=='start' and row['status'] in PENDING: row['dispatched']=True
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
+            elif action == 'start-one':
+                row=next((r for r in self.rows if r['id']==body.get('id')),None)
+                if not row or row['status'] not in PENDING: raise ValueError('Select a waiting pair.')
+                row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
             elif action == 'refresh':
                 self.refresh_remote()
             elif action == 'retry':

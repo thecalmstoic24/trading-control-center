@@ -102,8 +102,10 @@
     rows.forEach((row,i)=>{
       const tr=node('tr');tr.draggable=!layout.sort;tr.dataset.record=row.id;tr.dataset.account=display(row.fields.id);
       const select=node('td'),box=node('input');box.type='checkbox';box.checked=selected.has(row.id);box.setAttribute('aria-label','Select '+display(row.fields.id));
-      box.onchange=()=>{if(box.checked)selected.add(row.id);else selected.delete(row.id);};select.className='account-select';select.append(box);tr.append(select);
-      tr.ondragstart=e=>{dragId=row.id;e.dataTransfer.setData('text/plain',row.id);e.dataTransfer.effectAllowed='move';};
+      box.onchange=()=>{if(box.checked)selected.add(row.id);else selected.delete(row.id);};
+      let draggedRow=false;tr.onpointerdown=()=>{draggedRow=false;};
+      tr.onclick=e=>{if(draggedRow||e.target.closest('input,button,a,select')||window.getSelection().toString())return;box.checked=!box.checked;box.onchange();};select.className='account-select';select.append(box);tr.append(select);
+      tr.ondragstart=e=>{draggedRow=true;dragId=row.id;e.dataTransfer.setData('text/plain',row.id);e.dataTransfer.effectAllowed='move';};
       tr.ondragover=e=>{if(!layout.sort)e.preventDefault();};
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
       const order=node('td');order.className='row-order';order.append(node('span',String(i+1)));
@@ -184,11 +186,5 @@
     const value=el('planning-token').value.trim();el('planning-token').value='';el('planning-save').disabled=true;
     try{await refresh({token:value});}finally{el('planning-save').disabled=false;}
   };
-  window.addEventListener('fleet-updated',e=>{
-    const s=e.detail;
-    const next=JSON.stringify([...(s.fleet||[]).map(a=>[a.id,a.sync]),...(s.pairs||[]).map(p=>[p.id,p.closedSequence])]);
-    if(signature!==null&&signature!==next){clearTimeout(eventTimer);eventTimer=setTimeout(()=>refresh(),1500);}
-    signature=next;
-  });
   renderTable();poll();setInterval(poll,3000);
 })();

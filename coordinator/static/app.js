@@ -85,7 +85,7 @@ function render(s){
   }
   renderRegistry(s);
   const pair=s.pairs.find(p=>p.id===selectedPairId);
-  $('pair-workspace').hidden=!pair;
+  $('pair-workspace').hidden=true;
   if(pair){
     let restoringDraft=false;
     $('selected-pair-title').textContent=pair.name;

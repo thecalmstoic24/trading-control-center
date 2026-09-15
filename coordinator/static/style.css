@@ -110,3 +110,7 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 #queue-activity .event{display:block;padding:12px 14px;line-height:1.6}
 #queue-activity .event span{display:block;white-space:normal;overflow-wrap:anywhere}
 #queue-activity{height:auto;max-height:280px;scrollbar-gutter:stable}
+
+#pair-workspace,.pair-overview{display:none!important}
+#compact-pair{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+#compact-pair h3{font-size:15px;margin:0 0 10px}.compact-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}.compact-account{padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px;line-height:1.6;overflow-wrap:anywhere}.compact-account strong{font-size:15px}.pair-actions{white-space:nowrap}.pair-actions button{font-size:12px;padding:6px 10px;margin:3px 4px 3px 0}.duplicate-button{background:#2376c8;color:white;border-color:#2376c8}.pair-select-row{cursor:pointer}#compact-pair>.pair-actions{margin-top:8px}@media(max-width:650px){.compact-cards{grid-template-columns:1fr}}
