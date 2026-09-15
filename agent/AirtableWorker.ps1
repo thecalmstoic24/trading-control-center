@@ -2,7 +2,7 @@
 # First run prompts for a token, validates access, and saves it encrypted for this Windows user/PC.
 param([string]$RequestPath,[string]$ResultPath)
 function Get-AccountId16([string]$Name) {
- if($Name -cmatch '^(BX-?M?\d+)(?:!Bulenox)+$') { return $Matches[1] }
+ if($Name -cmatch '^(BX-?M?\d+)(?:[!|]Bulenox)+$') { return $Matches[1] }
  return $Name
 }
 function Get-AccountMatches16($Names, $Records, [string]$Master) {
@@ -489,7 +489,7 @@ try {
   }
   $data=@(); $seen=@{}
   foreach($row in $rows) {
-   $id=(([string]$row.'Display name') -split '!',2)[0].Trim()
+   $id=(([string]$row.'Display name') -split '[!|]',2)[0].Trim()
    if(-not $id) { throw 'CSV has a blank account ID.' }
    # Sim101 is read for queue test receipts; it is never uploaded to Accounts.
    if($row.PSObject.Properties.Name -contains 'ConnectionStatus' -and $row.ConnectionStatus -ne 'Connected') { Log "Skipped disconnected account: $id"; continue }

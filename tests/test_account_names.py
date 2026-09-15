@@ -11,3 +11,10 @@ class AccountNames(unittest.TestCase):
    self.assertEqual(account_id(name),name)
  def test_collision_is_not_selectable(self):
   self.assertEqual(account_list(['BX-M123','BX-M123!Bulenox','Sim101']),['Sim101'])
+
+class PipeSuffixTests(unittest.TestCase):
+    def test_reported_labels(self):
+        for raw in ['BX-M7526703186112|Bulenox','BX-M7526707176126|Bulenox','BX-M7526703186112|Bulenox!Bulenox']:
+            clean=raw.split('|')[0]
+            self.assertEqual(account_id(raw),clean)
+            self.assertEqual(trading_name(clean,[raw,'Sim101']),raw)

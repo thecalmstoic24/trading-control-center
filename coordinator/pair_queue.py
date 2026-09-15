@@ -159,6 +159,7 @@ class PairQueue:
 
     def sync(self, row):
         # Queue mutation and background sync are serialized by io.
+        if row.get('remoteDeleted'): return
         self.store.push(row)
         with self.lock: row['dirty'] = False; self.save()
 
@@ -232,10 +233,12 @@ class PairQueue:
             return {'ok':True}
         with self.io, self.lock:
             if action in ('start','resume'):
-                if any(r['status'] == 'Error' for r in self.rows): raise ValueError('Review the queue error before starting. Entry is never retried automatically.')
+                # Failed rows retain their VM reservations, but do not stop unrelated rows.
                 for row in self.rows:
                     if action=='start' and row['status'] in PENDING: row['dispatched']=True
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
+            elif action == 'refresh':
+                self.refresh_remote()
             elif action == 'retry':
                 for row in self.rows:
                     row['dirty']=row['status']!='Removing'
@@ -289,6 +292,25 @@ class PairQueue:
             self.save()
         return {'ok':True}
 
+    def refresh_remote(self):
+        # Called under io + lock. Never interpret a failed read as an empty table.
+        remote = self.store.records(PAIR_TABLE)
+        keys = {r.get('fields', {}).get('Execution Key') for r in remote}
+        removed = 0
+        for row in self.rows[:]:
+            if row['key'] in keys or (row.get('dirty') and not row.get('remoteDeleted')):
+                continue
+            row.update(remoteDeleted=True, dirty=False)
+            if row['status']=='Preparing': row['status']='Error'
+            if row.get('pairId') in self.fleet.pairs:
+                row['message']='Deleted in Airtable. Trade monitoring retained until the VMs are released.'
+                continue
+            self.rows.remove(row)
+            removed += 1
+        self.history = [r for r in self.history if r['key'] in keys]
+        self.message=f'Trading refreshed from Airtable. {removed} deleted pair(s) removed.'
+        self.save()
+
     def remove(self, row):
         self.store.delete(row)
         with self.lock:
@@ -304,7 +326,7 @@ class PairQueue:
             return any(r.get('pairId') == identity and r['status'] not in TERMINAL for r in self.rows)
 
     def fail(self, row, error):
-        with self.lock: self.running=False; self.message=str(error)
+        with self.lock: self.message='Pair failed; continuing with eligible queued pairs. '+str(error)
         self.set_status(row, 'Error', str(error))
 
     def receipt(self, pair, slot, identity):
@@ -319,19 +341,25 @@ class PairQueue:
     def tick(self):
         with self.io:
             for row in self.rows[:]:
+                if row.get('remoteDeleted') and row.get('pairId') not in self.fleet.pairs:
+                    self.rows.remove(row); self.save(); continue
                 if row['status']=='Removing':
                     self.remove(row)
                     continue
                 if row.get('dirty'):
                     self.sync(row)
-            current = next((r for r in self.rows if r['status'] not in PENDING | TERMINAL), None)
-            if current and current['status']=='Error': return
+            current = next((r for r in self.rows if r['status'] not in PENDING | TERMINAL | {'Error'}), None)
             row = current
             if row is None:
                 if not self.running: return
-                row = next((r for r in self.rows if r['status'] in PENDING and r.get('dispatched')), None)
-                if row is None:
-                    self.running=False; self.message='Queue complete.'; return
+                candidates = [r for r in self.rows if r['status'] in PENDING and r.get('dispatched')]
+                if not candidates:
+                    self.running=False; self.message='Queue finished. Review any failed pairs in Trading.'; return
+                for row in candidates:
+                    try: self.advance(row)
+                    except Exception as exc: self.fail(row, exc)
+                    if row['status'] not in PENDING | {'Error'}: break
+                return
             try: self.advance(row)
             except Exception as exc: self.fail(row, exc)
 

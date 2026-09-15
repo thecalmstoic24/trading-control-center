@@ -16,6 +16,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
     queue.history.push(...queue.rows.filter(r=>body.ids.includes(r.id)).map(r=>({...r,status:'Cancelled',message:'Removed from Airtable.'})));
     queue.rows=queue.rows.filter(r=>!body.ids.includes(r.id));
    }
+   if(url.pathname==='/api/queue/refresh')queue.rows=queue.rows.filter(r=>r.id!=='PAIR-0001');
    result={ok:true};
   }else if(url.pathname==='/api/state')result={fleet:[],pairs:[],events:[],limits:{vms:50,pairs:20}};
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:null,error:'',busy:false};
@@ -48,6 +49,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('#trading-queue-table tr[data-pair]').count(),4);
  assert.deepEqual(writes.filter(w=>w.path==='/api/queue/remove-selected').map(w=>w.body.ids),[['PAIR-0003'],['PAIR-0004']]);
  assert.ok(!writes.some(w=>w.path==='/api/action'));
- await page.screenshot({path:'/tmp/queue-preview14.png',fullPage:true});
+ await page.locator('#trading-refresh').click();
+ await page.waitForFunction(()=>!document.querySelector('#trading-queue-table [data-pair="PAIR-0001"]'));
+ assert.ok(writes.some(w=>w.path==='/api/queue/refresh'));
+ await page.screenshot({path:'/tmp/queue-preview17.png',fullPage:true});
  assert.deepEqual(errors,[]);await browser.close();console.log('Queue browser: batch transfer, new plans isolated, completion/canceled history, bulk removal and active protection passed.');
 })().catch(e=>{console.error(e);process.exit(1)});

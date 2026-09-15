@@ -14,6 +14,7 @@
   const removable=r=>pending(r)||r.status==='Removing';
   const planned=r=>!r.dispatched&&(pending(r)||r.status==='Removing');
   function updateButtons(){
+    el('trading-refresh').disabled=mutating;
     const anyPlans=data.rows.some(planned);
     el('queue-start').disabled=mutating||!anyPlans;
     el('queue-pause').disabled=el('trading-pause').disabled=mutating||!data.running;
@@ -69,6 +70,7 @@
     try{await api('/api/queue/add',body);el('queue-dialog').close();await poll();}catch(err){el('queue-form-status').textContent=err.message;}finally{el('queue-save').disabled=false;}
   };
   for(const [id,isPlanning] of [['queue-remove-selected',true],['trading-remove-selected',false]])el(id).onclick=()=>action('remove-selected',{ids:data.rows.filter(r=>planned(r)===isPlanning&&removable(r)&&selected.has(r.id)).map(r=>r.id)});
+  el('trading-refresh').onclick=()=>action('refresh');
   el('trading-resume').onclick=()=>action('resume');el('trading-pause').onclick=()=>action('pause');el('trading-retry').onclick=()=>action('retry');
   el('queue-start').onclick=()=>action('start');el('queue-pause').onclick=()=>action('pause');el('queue-retry').onclick=()=>action('retry');
   window.addEventListener('queue-refresh',poll);setInterval(poll,3000);poll();

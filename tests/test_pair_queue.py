@@ -53,6 +53,53 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def test_refresh_removes_deleted_history_without_recreating(self):
+        self.queue.add(self.body)
+        row=self.queue.rows[0]
+        row.update(status='Complete',dispatched=True)
+        self.queue.command('refresh',{})
+        self.assertEqual(self.queue.rows,[])
+        self.queue.tick()
+        self.assertEqual(len(self.store.rows),1) # no push/delete as a result of reading
+
+    def test_refresh_read_failure_preserves_rows(self):
+        self.queue.add(self.body)
+        def broken(table): raise ValueError('offline')
+        self.store.records=broken
+        with self.assertRaisesRegex(ValueError,'offline'):self.queue.command('refresh',{})
+        self.assertEqual(len(self.queue.rows),1)
+
+    def test_deleted_active_record_keeps_monitor_and_never_upserts(self):
+        self.add_start();self.queue.tick()
+        row=self.queue.rows[0];self.queue.sync(row)
+        identity=row['pairId']
+        self.queue.command('refresh',{})
+        self.assertIn(identity,self.fleet.pairs)
+        self.assertTrue(row['remoteDeleted'])
+        self.store.fail=True
+        self.queue.sync(row) # suppressed even if worker would fail
+
+    def test_failed_row_does_not_block_next_unreserved_pair(self):
+        self.queue.add(self.body);self.queue.add(self.body)
+        first,second=self.queue.rows
+        self.queue.fail(first,'Selected account missing')
+        self.queue.command('start',{})
+        self.queue.tick()
+        self.assertEqual(first['status'],'Error')
+        self.assertEqual(second['status'],'Preparing')
+
+    def test_waiting_row_does_not_block_later_eligible_row(self):
+        self.queue.add(self.body);self.queue.add(self.body)
+        self.queue.command('start',{})
+        first,second=self.queue.rows
+        seen=[]
+        def advance(row):
+            seen.append(row['id'])
+            row['status']='Waiting' if row is first else 'Preparing'
+        self.queue.advance=advance
+        self.queue.tick()
+        self.assertEqual(seen,[first['id'],second['id']])
+
     def test_ratio_survives_queue_and_reaches_agents(self):
         self.body.update(ratio='2:3',quantities={'vm-left':10,'vm-right':15},stopLoss=1000,profit=800,ticker='MNQ SEP26')
         self.queue.add(self.body)

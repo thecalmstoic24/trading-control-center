@@ -4,7 +4,7 @@ from collections import Counter
 
 def account_id(value):
     if not isinstance(value,str): return value
-    match=re.fullmatch(r'(BX-?M?\d+)(?:!Bulenox)+',value)
+    match=re.fullmatch(r'(BX-?M?\d+)(?:[!|]Bulenox)+',value)
     return match.group(1) if match else value
 
 def account_list(names):
