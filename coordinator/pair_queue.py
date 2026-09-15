@@ -229,7 +229,7 @@ class PairQueue:
             if len(matches) != 1: raise ValueError('Account must have one exact Airtable match.')
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
             balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
-            metrics[slot]={k:matches[0]['fields'].get(k) for k in ('CurrentBalance','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
+            metrics[slot]={k:matches[0]['fields'].get(k) for k in ('CurrentBalance','Realized PnL','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
         if len(members)==2 and all(accounts[s]!='Sim101' for s in members):
             funds=[]
             for slot in (left,right):

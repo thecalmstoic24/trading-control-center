@@ -60,6 +60,15 @@
       validateCard(card,d);save();
     };l.append(n);form.append(l);
   }
+  function updateMetrics(host,item){
+    const f=item?.metrics||{},fmt=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
+    host.replaceChildren();
+    const line=make('p');line.className='draft-balance';line.append(make('span','Current Balance: '+fmt(item?.balance)+' · '));
+    const pnl=f['Realized PnL'],value=make('span','Realized P&L: '+fmt(pnl));value.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(value);host.append(line);
+    if(item?.metrics){const dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:null;
+      for(const [label,value] of [['Drawdown',fmt(dd)],['Stop',fmt(f.stop)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']]){const metric=make('div',label+': '+value);metric.className='pair-secondary-metrics';host.append(metric);}
+    }
+  }
   function render(){
     const list=el('draft-list');list.replaceChildren();
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
@@ -90,8 +99,7 @@
         };
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
-        const balance=make('p',item?.balance!=null&&Number.isFinite(Number(item.balance))?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(item.balance)):'Balance unavailable');balance.className='draft-balance';block.append(balance);
-        if(item?.metrics){const f=item.metrics,fmt=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);const dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:null;for(const [label,value] of [['Drawdown',fmt(dd)],['Stop',fmt(f.stop)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']])block.append(make('div',label+': '+value));}
+        const metrics=make('div');metrics.className='draft-metrics';updateMetrics(metrics,item);block.append(metrics);
         const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
           const remove=make('button','×');remove.type='button';remove.className='quiet account-remove';remove.setAttribute('aria-label','Remove account '+item.account);
@@ -145,9 +153,9 @@
     const rows=new Map(e.detail.map(r=>[r.id,r]));
     for(const d of drafts)for(const side of ['left','right']){
       const item=d[side],row=rows.get(item?.record);if(!row)continue;
-      item.balance=row.fields.CurrentBalance??null;
-      const cell=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .draft-balance`);
-      if(cell)cell.textContent=item.balance!=null&&Number.isFinite(Number(item.balance))?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(item.balance)):'Balance unavailable';
+      item.balance=row.fields.CurrentBalance??null;item.metrics=row.fields;
+      const cell=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .draft-metrics`);
+      if(cell)updateMetrics(cell,item);
     }
     save();
   });

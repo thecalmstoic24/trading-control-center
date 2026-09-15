@@ -2,6 +2,7 @@
 (() => {
   const el=id=>document.getElementById(id), node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   let fleet=[],data={rows:[]},busy=false,resizing=false,detailId='';const duplicateKeys=new Map();
+  let sortColumn=10,sortDirection=-1;
   const selected=new Set();let mutating=false;
   const pending=r=>['Queued','Waiting'].includes(r.status);
   const dollars=v=>v===undefined?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
@@ -38,15 +39,42 @@
     table.style.tableLayout='fixed';
     [...table.querySelectorAll('th')].forEach((th,i)=>{
       if(widths[i])th.style.width=widths[i]+'px';th.style.position='relative';
-      const handle=node('span');handle.className='column-resizer';handle.title='Drag to resize column';
+      const handle=node('span');handle.onclick=e=>e.stopPropagation();handle.className='column-resizer';handle.title='Drag to resize column';
       handle.onpointerdown=e=>{resizing=true;e.preventDefault();e.stopPropagation();const start=e.clientX,width=th.getBoundingClientRect().width;handle.setPointerCapture(e.pointerId);
         handle.onpointermove=ev=>{widths[i]=Math.max(65,width+ev.clientX-start);th.style.width=widths[i]+'px';try{localStorage.setItem('pair-widths-'+table.id,JSON.stringify(widths));}catch(_){}};
         handle.onpointerup=handle.onpointercancel=()=>{resizing=false;handle.onpointermove=null;};};th.append(handle);
     });
   }
+  function sortValue(r,column){
+    const s=r.spec,slot=column<5?s.left:s.right;
+    if(column===1)return r.id;
+    if(column===2||column===4){const id=column===2?s.left:s.right;return id?`${s.masters[id]} / ${s.accounts[id]}`:null;}
+    if(column===3||column===5)return slot?((r.after?.[slot]||r.before?.[slot])?.balance??s.balances?.[slot]??null):null;
+    if(column===6)return `${s.ticker} · ${s.quantities[s.left]??''} / ${s.quantities[s.right]??''}`;
+    if(column===7)return r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
+    if(column===8||column===9)return r.results?.[column===8?s.left:s.right]??null;
+    const time=Date.parse(r.completedUtc||r.synced||r.cancelled||'');return Number.isFinite(time)?time:null;
+  }
+  function sortedRows(rows){
+    return rows.slice().sort((a,b)=>{
+      const x=sortValue(a,sortColumn),y=sortValue(b,sortColumn);
+      if(x===null||y===null)return x===y?b.id.localeCompare(a.id,undefined,{numeric:true}):x===null?1:-1;
+      const result=typeof x==='number'&&typeof y==='number'?x-y:String(x).localeCompare(String(y),undefined,{numeric:true,sensitivity:'base'});
+      return result*sortDirection||b.id.localeCompare(a.id,undefined,{numeric:true});
+    });
+  }
   function renderTable(id,rows,isPlanning){
     const table=el(id);table.replaceChildren();const head=node('thead'),hr=node('tr');
-    for(const label of ['Select','Pair ID','Left master / account','Left balance','Right master / account','Right balance','Instrument / Qty','Status','Left P&L','Right P&L','Completed Time','Actions'])hr.append(node('th',label));
+    if(!isPlanning)rows=sortedRows(rows);
+    for(const [column,label] of ['Select','Pair ID','Left master / account','Left balance','Right master / account','Right balance','Instrument / Qty','Status','Left P&L','Right P&L','Completed Time','Actions'].entries()){
+      const th=node('th');
+      if(!isPlanning&&column>0&&column<11){
+        th.setAttribute('aria-sort',column===sortColumn?(sortDirection===1?'ascending':'descending'):'none');
+        const button=node('button',label+(column===sortColumn?(sortDirection===1?' ▲':' ▼'):''));button.className='column-sort';
+        button.onclick=()=>{sortDirection=column===sortColumn?-sortDirection:column===10?-1:1;sortColumn=column;render();};th.append(button);
+      }else th.textContent=label;
+      hr.append(th);
+    }
     head.append(hr);table.append(head);const body=node('tbody');
     for(const r of rows){
       const tr=node('tr'),s=r.spec,selection=node('td');tr.dataset.pair=r.id;if(!isPlanning){tr.classList.add('pair-select-row');tr.onclick=e=>{if(e.target.closest('button,input'))return;detailId=r.id;if(r.pairId)selectView(r.pairId);renderDetail();};}
@@ -95,7 +123,9 @@
       const slot=s[side];if(!slot)continue;const card=node('article');card.className='compact-account';
       const direction=(side==='left')===(s.direction==='buy')?'Buy':'Sell';
       card.append(node('strong',(s.masters[slot]||s.names[slot])+' · '+direction),node('div',s.accounts[slot]));
-      const f=s.metrics?.[slot]||{},dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:undefined;card.append(node('div','Balance: '+dollars(s.balances?.[slot])+' · Drawdown: '+dollars(dd)),node('div','Trading days: '+(f.tradingDays??'—')+' · Largest profit day: '+dollars(f.largestProfitDay??undefined)));
+      const f=s.metrics?.[slot]||{},dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:undefined;const current=r.after?.[slot]||r.before?.[slot]||{},pnl=current.pnl??f['Realized PnL'];
+      const line=node('div','Current Balance: '+dollars(current.balance??s.balances?.[slot])+' · '),realized=node('span','Realized P&L: '+dollars(pnl??undefined));realized.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(realized);card.append(line);
+      const metrics=node('div','Drawdown: '+dollars(dd)+' · Stop: '+dollars(f.stop??undefined)+' · Largest profit day: '+dollars(f.largestProfitDay??undefined)+' · Trading days: '+(f.tradingDays??'—'));metrics.className='pair-secondary-metrics';card.append(metrics);
       card.append(node('div','Quantity: '+s.quantities[slot]+' · Ratio: '+(s.ratio||'1:1')));
       card.append(node('div','Profit: '+dollars(side==='left'?s.profit:s.stopLoss*factor)+' · Stop: '+dollars(side==='left'?s.stopLoss:s.profit*factor)));
       const result=node('div','Result: '+dollars(r.results?.[slot]));result.className=r.results?.[slot]>0?'queue-win':r.results?.[slot]<0?'queue-loss':'';card.append(result);cards.append(card);

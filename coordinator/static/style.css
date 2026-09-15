@@ -122,3 +122,9 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 .vm-paired{background:#bd6613;color:white}.vm-available{background:#1964c9;color:white}.vm-error{background:#bd303b;color:white}
 .column-resizer{position:absolute;right:0;top:0;height:100%;width:8px;cursor:col-resize;touch-action:none;border-right:2px solid #8997ab}
 #trading-queue-table th,#trading-queue-table td,#queue-table th,#queue-table td{overflow-wrap:anywhere;min-width:65px}
+
+.column-sort{border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 12px 0 0;text-align:left;cursor:pointer}.column-sort:focus-visible{outline:2px solid #2376c8}
+.draft-card .draft-account .draft-balance{white-space:normal}
+.draft-account .pair-secondary-metrics,.compact-account .pair-secondary-metrics{font-size:11px;line-height:1.5}
+.draft-account .queue-win,.compact-account .queue-win{color:#147447}.draft-account .queue-loss,.compact-account .queue-loss{color:#b42332}
+.realized-pnl{color:var(--text);white-space:nowrap}
