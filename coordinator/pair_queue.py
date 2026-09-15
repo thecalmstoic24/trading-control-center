@@ -22,7 +22,7 @@ from ratios import pair_amounts, validate_quantities
 
 PAIR_TABLE = 'tblHhpDgF7rYPQOaA'
 PENDING = {'Queued', 'Waiting'}
-TERMINAL = {'Complete', 'Cancelled'}
+TERMINAL = {'Complete', 'Cancelled', 'Removing'}
 
 
 def now():
@@ -87,6 +87,17 @@ class PairStore:
         if len(saved) != 1 or saved[0].get('fields', {}).get('Execution Key') != row['key']:
             raise ValueError('Airtable did not confirm the pair record.')
         return saved[0]['id']
+
+    def delete(self, row):
+        matches = [r for r in self.records(PAIR_TABLE)
+                   if r.get('fields', {}).get('Execution Key') == row['key']]
+        for record in matches:
+            record_id = record['id']
+            if not re.fullmatch(r'rec[A-Za-z0-9]+', record_id):
+                raise ValueError('Invalid Airtable pair record identity.')
+            result = self.request(PAIR_TABLE, 'DELETE', query={'records[]': record_id})
+            if not any(r.get('id') == record_id and r.get('deleted') is True for r in result.get('records', [])):
+                raise ValueError('Airtable did not confirm pair deletion. Retry Remove.')
 
     @staticmethod
     def fields(row):
@@ -225,7 +236,7 @@ class PairQueue:
                 self.running=True; self.message='Queue started. Waiting for the first available pair.'
             elif action == 'retry':
                 for row in self.rows:
-                    row['dirty']=True
+                    row['dirty']=row['status']!='Removing'
                     if row['status']=='Error' and row.get('closed') and row.get('afterId') and row.get('pairId') in self.fleet.pairs:
                         row.update(status='Awaiting results', deadline=time.time()+300, message='Retrying result verification only; no entry retry.')
                 self.message='Saved pair records will be synced again. No trade entry is retried.'
@@ -243,8 +254,16 @@ class PairQueue:
                 row.update(status='Cancelled', message='Reviewed and removed. No entry retry; historical results retained if available.', dirty=True)
             elif action in ('move','cancel'):
                 row = next((r for r in self.rows if r['id']==body.get('id')), None)
-                if not row or row['status'] not in PENDING: raise ValueError('Only waiting pairs can be moved or removed.')
-                if action == 'cancel': row.update(status='Cancelled',message='Removed from queue.',dirty=True)
+                if not row or row['status'] not in (PENDING | {'Removing'} if action == 'cancel' else PENDING): raise ValueError('Only waiting pairs can be moved or removed.')
+                if action == 'cancel':
+                    # Persist exclusion before network I/O; a lost delete response is retryable.
+                    row.update(status='Removing',message='Removing from Airtable. Retry Remove if interrupted.',dirty=False)
+                    self.save()
+                    try: self.remove(row)
+                    except Exception:
+                        self.running=False
+                        self.message='Pair removal pending. Retry Remove to finish deleting it from Airtable.'
+                        raise
                 else:
                     pending=[r for r in self.rows if r['status'] in PENDING]; i=pending.index(row); j=i+int(body.get('delta',0))
                     if not 0 <= j < len(pending): raise ValueError('Already at the end of the queue.')
@@ -253,6 +272,13 @@ class PairQueue:
             else: raise ValueError('Unknown queue action.')
             self.save()
         return {'ok':True}
+
+    def remove(self, row):
+        self.store.delete(row)
+        with self.lock:
+            self.rows.remove(row)
+            self.message='Pair removed from the queue and Airtable.'
+            self.save()
 
     def owned(self, identity):
         with self.lock:
@@ -273,7 +299,10 @@ class PairQueue:
 
     def tick(self):
         with self.io:
-            for row in self.rows:
+            for row in self.rows[:]:
+                if row['status']=='Removing':
+                    self.remove(row)
+                    continue
                 if row.get('dirty'):
                     self.sync(row)
             current = next((r for r in self.rows if r['status'] not in PENDING | TERMINAL), None)

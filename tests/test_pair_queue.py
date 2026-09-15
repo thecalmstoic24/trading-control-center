@@ -17,6 +17,9 @@ class Store:
         if table==PAIR_TABLE:
             return [{'fields':{'Pair ID':f'PAIR-{self.maximum:04d}'}}] if self.maximum else []
         return []
+    def delete(self,row):
+        if self.fail: raise ValueError('Airtable unavailable')
+        self.rows.pop(row['key'],None)
     def push(self,row):
         if self.fail: raise ValueError('Airtable unavailable')
         self.rows[row['key']]=copy.deepcopy(row)
@@ -141,7 +144,39 @@ class QueueTests(unittest.TestCase):
     def test_sort_cancel_only_waiting(self):
         self.queue.add(self.body);self.queue.add(self.body);self.queue.command('move',{'id':'PAIR-0002','delta':-1})
         self.assertEqual(self.queue.rows[0]['id'],'PAIR-0002');self.queue.command('cancel',{'id':'PAIR-0001'})
-        self.assertEqual(self.queue.rows[1]['status'],'Cancelled')
+        self.assertEqual([r['id'] for r in self.queue.rows],['PAIR-0002'])
+        self.assertEqual(len(self.store.rows),1)
+    def test_delete_failure_survives_restart_without_entry_or_recreation(self):
+        self.queue.add(self.body); row=self.queue.rows[0]; self.store.fail=True
+        with self.assertRaisesRegex(ValueError,'unavailable'):
+            self.queue.command('cancel',{'id':row['id']})
+        self.assertEqual(row['status'],'Removing')
+        restored=PairQueue(self.fleet,Planning(),self.store)
+        self.assertEqual(restored.rows[0]['status'],'Removing')
+        self.store.fail=False; restored.tick()
+        self.assertEqual(restored.rows,[]); self.assertEqual(self.store.rows,{})
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+    def test_cannot_remove_preparing_or_trading_pair(self):
+        self.queue.add(self.body); row=self.queue.rows[0]
+        for status in ['Preparing','Trading','Awaiting results','Complete','Error']:
+            row['status']=status
+            with self.assertRaisesRegex(ValueError,'Only waiting'):
+                self.queue.command('cancel',{'id':row['id']})
+        self.assertEqual(len(self.store.rows),1)
+    def test_remote_delete_targets_execution_key_only_and_is_idempotent(self):
+        store=PairStore(Planning()); calls=[]; records=[
+            {'id':'recOwn','fields':{'Execution Key':'own'}},
+            {'id':'recOther','fields':{'Execution Key':'other'}}]
+        store.records=lambda table: records[:]
+        def request(table,method,query):
+            calls.append((table,method,query))
+            records[:]=[r for r in records if r['id']!=query['records[]']]
+            return {'records':[{'id':query['records[]'],'deleted':True}]}
+        store.request=request
+        store.delete({'key':'own'}); store.delete({'key':'own'})
+        self.assertEqual(calls,[(PAIR_TABLE,'DELETE',{'records[]':'recOwn'})])
+        self.assertEqual(records[0]['id'],'recOther')
+
     def test_invalid_amounts_accounts_and_quantities(self):
         for values in ({'stopLoss':0},{'profit':float('nan')},{'quantities':{'vm-left':0}},{'accounts':{'vm-left':'random'}}):
             with self.assertRaises(ValueError):self.queue.add({**self.body,**values})

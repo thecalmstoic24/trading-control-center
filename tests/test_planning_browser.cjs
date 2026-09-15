@@ -61,7 +61,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.deepEqual(await page.locator('#planning-table thead th').allTextContents(),['Select','Order','Balance','Pair status','id']);
  await page.locator('#tab-trading').click();assert.equal(await page.locator('#trading-panel').isVisible(),true);
  await page.locator('#tab-planning').click();
- await page.screenshot({path:'/tmp/planning-preview5.png',fullPage:true});
+ snapshot={...snapshot,updatedAt:99,columns:[...snapshot.columns,{name:'Realized PnL',type:'currency'}],rows:snapshot.rows.map((r,i)=>({...r,fields:{...r.fields,'Realized PnL':[-100,200,0][i]}}))};
+ await page.waitForFunction(()=>document.querySelectorAll('#planning-table .pnl-negative').length===1);
+ assert.equal(await page.locator('#planning-table .pnl-negative').textContent(),'-100');
+ assert.equal(await page.locator('#planning-table .pnl-positive').textContent(),'200');
+ assert.equal(await page.locator('#planning-table .pnl-negative').evaluate(e=>getComputedStyle(e).color),'rgb(180, 35, 50)');
+ assert.equal(await page.locator('#planning-table .pnl-positive').evaluate(e=>getComputedStyle(e).color),'rgb(20, 116, 71)');
+ assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).colorScheme),'light');
+ await page.screenshot({path:'/tmp/planning-preview13.png',fullPage:true});
  assert.ok((await page.getByRole('columnheader',{name:'Balance',exact:true}).boundingBox()).width>=originalWidth+95);
  assert.deepEqual(errors,[]);assert.deepEqual(writes,['/api/planning/refresh']);
  await browser.close();console.log('Planning browser: sort, hide, refresh, persistence, drag, tabs and trading-command isolation passed.');

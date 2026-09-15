@@ -93,7 +93,7 @@
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
       const order=node('td');order.className='row-order';order.append(node('span',String(i+1)));
 
-      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);tr.append(node('td',display(row.fields[c.name])));}body.append(tr);
+      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',display(value));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
     });
     if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
     table.append(body);resizeColumns(table,cols);decorate();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';

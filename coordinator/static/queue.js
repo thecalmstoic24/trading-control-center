@@ -23,6 +23,7 @@
       if(pending(r))for(const [label,name,extra] of [['↑','move',{delta:-1}],['↓','move',{delta:1}],['Remove','cancel',{}]]){
         const b=node('button',label);b.className='quiet';b.onclick=()=>action(name,{id:r.id,...extra});actions.append(b);
       }
+      if(r.status==='Removing'){const b=node('button','Retry Remove');b.className='quiet';b.onclick=()=>action('cancel',{id:r.id});actions.append(b);}
       if(r.status==='Error'){const b=node('button','Resolve after closing');b.className='quiet';b.onclick=()=>action('resolve',{id:r.id});actions.append(b);}
       if(r.pairId){const b=node('button','View trade');b.className='quiet';b.onclick=()=>{selectView(r.pairId);el('tab-trading').click();};actions.append(b);}
       tr.append(actions);body.append(tr);

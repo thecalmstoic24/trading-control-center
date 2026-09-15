@@ -13,6 +13,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    writes.push({path:url.pathname,body:req.postDataJSON()});
    if(url.pathname==='/api/queue/start')queue.running=true;
    if(url.pathname==='/api/queue/pause')queue.running=false;
+   if(url.pathname==='/api/queue/cancel')queue.rows=queue.rows.filter(r=>r.id!==req.postDataJSON().id);
    result={ok:true};
   }else if(url.pathname==='/api/state')result={fleet,pairs:[],events:[],limits:{vms:50,pairs:20}};
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:null,error:'',busy:false};
@@ -33,6 +34,12 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const added=writes.find(w=>w.path==='/api/queue/add');assert.equal(added.body.quantities.left,3);assert.equal(added.body.quantities.right,2);assert.equal(added.body.accounts.left,'Account-left');
  assert.ok(!writes.some(w=>w.path==='/api/action'),'adding a plan must not trade');
  await page.locator('#queue-start').click();await page.waitForFunction(()=>!document.querySelector('#queue-pause').disabled);await page.locator('#queue-pause').click();
- await page.screenshot({path:'/tmp/queue-preview7.png',fullPage:true});
+ queue.rows.push({id:'PAIR-0002',spec,status:'Queued',message:'Waiting'},{id:'PAIR-0003',spec,status:'Trading',message:'Active'});
+ await page.waitForFunction(()=>document.querySelector('#queue-table').textContent.includes('PAIR-0002'));
+ assert.equal(await page.locator('#queue-table tbody tr').filter({hasText:'PAIR-0003'}).getByRole('button',{name:'Remove',exact:true}).count(),0);
+ await page.locator('#queue-table tbody tr').filter({hasText:'PAIR-0002'}).getByRole('button',{name:'Remove',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector('#queue-table').textContent.includes('PAIR-0002'));
+ assert.equal(writes.filter(w=>w.path==='/api/queue/cancel').length,1);
+ await page.screenshot({path:'/tmp/queue-preview13.png',fullPage:true});
  assert.deepEqual(errors,[]);await browser.close();console.log('Queue browser passed: planning form, defaults, accounts, quantities, colors, Start/Pause; adding plans sends no trade command.');
 })().catch(e=>{console.error(e);process.exit(1)});
