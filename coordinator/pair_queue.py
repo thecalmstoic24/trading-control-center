@@ -25,6 +25,10 @@ PENDING = {'Queued', 'Waiting'}
 TERMINAL = {'Complete', 'Cancelled', 'Removing'}
 
 
+def slots(spec):
+    return tuple(s for s in (spec.get("left"), spec.get("right")) if s)
+
+
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
@@ -107,6 +111,7 @@ class PairStore:
             'Created At': row['created'], 'Activity / Error': row.get('message', '')}
         for side in ('left', 'right'):
             title = side.title(); slot = spec[side]
+            if not slot: continue
             f.update({title + ' VM': spec['names'][slot], title + ' Account ID': spec['accounts'][slot],
                       title + ' Master Account': spec['masters'].get(slot, ''),
                       title + ' Quantity': spec['quantities'][slot],
@@ -121,7 +126,7 @@ class PairStore:
                     f[title + ' Realized PnL ' + phase.title()] = snap['pnl']
                     f[title + ' Current Balance'] = snap['balance']
             if slot in row.get('results', {}): f[title + ' Trade P&L'] = row['results'][slot]
-        if len(row.get('results',{})) == 2: f['Combined Result'] = round(sum(row['results'].values()), 2)
+        if len(row.get('results',{})) == len(slots(spec)): f['Combined Result'] = round(sum(row['results'].values()), 2)
         for src, dst in [('started', 'Started At'), ('closed', 'Closed At'), ('synced', 'Results Synced At')]:
             if row.get(src): f[dst] = row[src]
         return f
@@ -157,11 +162,13 @@ class PairQueue:
     def set_status(self, row, status, message):
         with self.lock:
             if (row['status'], row.get('message')) == (status, message): return
-            row.update(status=status, message=message, dirty=True); self.save()
+            row.update(status=status, message=message, dirty=True)
+            if status in {'Complete','Cancelled'}: row.setdefault('completedUtc', now())
+            self.save()
 
     def sync(self, row):
         # Queue mutation and background sync are serialized by io.
-        if row.get('remoteDeleted'): return
+        if row.get('remoteDeleted') or row.get('localDraft'): return
         self.store.push(row)
         with self.lock: row['dirty'] = False; self.save()
 
@@ -174,15 +181,19 @@ class PairQueue:
                 existing = next((r for r in self.rows + self.history if r['key']==draft_key),None)
                 if existing: return existing['id']
             spec = self.validate(body)
-            remote = self.store.records(PAIR_TABLE)
+            local = body.get('localDraft') is True
+            remote = [] if local else self.store.records(PAIR_TABLE)
             maximum = max([int(r.get('fields', {}).get('Pair ID', '')[5:]) for r in remote
                            if re.fullmatch(r'PAIR-\d+', r.get('fields', {}).get('Pair ID', ''))] or [0])
             with self.lock:
-                number = max(self.next_id, maximum + 1); self.next_id = number + 1
+                number = max(self.next_id, maximum + 1)
+                if not local: self.next_id = number + 1
                 row = dict(id=f'PAIR-{number:04d}', key=draft_key or uuid.uuid4().hex, spec=spec, status='Queued',
                            message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
+                if local: row.update(id='DRAFT-'+row['key'],localDraft=True,dirty=False,draft=copy.deepcopy(body.get('draft')))
                 self.rows.append(row); self.save()
-            try: self.sync(row)
+            try:
+                if not local: self.sync(row)
             except Exception as exc:
                 with self.lock: self.message = str(exc)
                 # Retain the durable item; refresh shows the saved item and sync error.
@@ -192,9 +203,11 @@ class PairQueue:
         left, right = body.get('left'), body.get('right')
         with self.fleet.lock:
             config = self.fleet.catalog.config
-            if left == right or left not in config or right not in config: raise ValueError('Choose two different registered VMs.')
-            names = {s: self.fleet.catalog.name(s) for s in (left, right)}
-            available = {s: self.fleet.view(s)['accounts'] for s in (left, right)}
+            members=slots(body)
+            if not members or len(set(members))!=len(members) or any(s not in config for s in members): raise ValueError('Choose one registered VM or two different registered VMs.')
+            if len(members)==1 and not self.fleet.view(members[0]).get('singlePair'): raise ValueError('Update the selected VM to Preview 23 for Single Pair.')
+            names = {s: self.fleet.catalog.name(s) for s in members}
+            available = {s: self.fleet.view(s)['accounts'] for s in members}
         ticker = str(body.get('ticker', '')).strip().upper()
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker): raise ValueError('Enter a valid instrument.')
         direction = body.get('direction')
@@ -204,9 +217,9 @@ class PairQueue:
             if isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or not 0 < v <= 100000 or round(v,2) != v:
                 raise ValueError('Enter positive Currency stop loss and profit target amounts, up to two decimals.')
         pair_amounts(body)
-        accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}
+        accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}; metrics = {}
         source = self.store.records(TABLE)
-        for slot in (left, right):
+        for slot in members:
             a = body.get('accounts', {}).get(slot); q = body.get('quantities', {}).get(slot)
             if a not in available[slot]: raise ValueError('Account is not in this VM’s discovered NinjaTrader/Airtable list. Refresh accounts first.')
             if type(q) is not int or not 1 <= q <= 1000: raise ValueError('Quantity must be a whole number from 1 to 1000.')
@@ -216,16 +229,17 @@ class PairQueue:
             if len(matches) != 1: raise ValueError('Account must have one exact Airtable match.')
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
             balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
-        if all(accounts[s]!='Sim101' for s in (left,right)):
+            metrics[slot]={k:matches[0]['fields'].get(k) for k in ('CurrentBalance','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
+        if len(members)==2 and all(accounts[s]!='Sim101' for s in members):
             funds=[]
             for slot in (left,right):
                 name=masters[slot].strip().upper(); prefix=re.match(r'^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)',name)
                 funds.append(prefix.group(0) if prefix else re.split(r'[-_\s]+',name)[0])
             if funds[0] and funds[0]==funds[1]: raise ValueError('Same fund: choose accounts from different funds.')
-        if accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
-        validate_quantities(dict(body, quantities=quantities), left, right)
+        if len(members)==2 and accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
+        if len(members)==2: validate_quantities(dict(body, quantities=quantities), left, right)
         return dict(**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
-                    names=names,masters=masters,records=records,balances=balances,**amounts)
+                    names=names,masters=masters,records=records,balances=balances,metrics=metrics,**amounts)
 
     def command(self, action, body):
         if action == 'add': return {'id': self.add(body)}
@@ -261,17 +275,28 @@ class PairQueue:
             with self.lock: self.running=False; self.message='Paused. Open trades continue to be monitored.'
             return {'ok':True}
         with self.io, self.lock:
+            if action == 'edit-draft':
+                row=next((r for r in self.rows if r['id']==body.get('id')),None)
+                if not row or not row.get('localDraft') or row.get('dispatched'): raise ValueError('Only unstarted local drafts can be edited.')
+                self.rows.remove(row);self.save()
+                return {'draft':row}
             if action in ('start','resume'):
                 # Failed rows retain their VM reservations, but do not stop unrelated rows.
                 for row in self.rows:
                     if action=='start' and row['status'] in PENDING:
+                        if row.get('localDraft'):
+                            remote=self.store.records(PAIR_TABLE)
+                            maximum=max([int(x['fields']['Pair ID'][5:]) for x in remote if re.fullmatch(r'PAIR-\d+',x.get('fields',{}).get('Pair ID',''))] or [0])
+                            number=max(self.next_id,maximum+1);self.next_id=number+1
+                            row.update(id=f'PAIR-{number:04d}',localDraft=False,dirty=True)
+                            self.save()
                         row['dispatched']=True
-                        row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in (row['spec']['left'],row['spec']['right']))
+                        row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']))
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
             elif action == 'start-one':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or row['status'] not in PENDING: raise ValueError('Select a waiting pair.')
-                row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in (row['spec']['left'],row['spec']['right']));row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
+                row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']));row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
             elif action == 'refresh':
                 self.refresh_remote()
             elif action == 'retry':
@@ -295,6 +320,20 @@ class PairQueue:
                 row.update(status='Queued',dispatched=True,dirty=True,message='Preparation retry requested after calibration. Settings retained.')
                 self.running=True
                 self.message='Retrying preparation. No previous entry is retried.'
+            elif action == 'skip-results':
+                row=next((r for r in self.rows if r['id']==body.get('id')),None)
+                if not row or not (row['status']=='Awaiting results' or (row['status']=='Error' and row.get('closed'))): raise ValueError('Select a closed pair awaiting results.')
+                pair=self.fleet.get_pair(row['pairId'])
+                pair.refresh_both()
+                if not all(pair.view_agent(s).get('skipResults') for s in pair.pair): raise ValueError('Update participating agents to Preview 23 before skipping results.')
+                for s in pair.pair: pair.call(s,'skip_results',{'tradeId':row['afterId']},15)
+                pair.refresh_both()
+                deadline=time.monotonic()+3
+                while pair.sync_dispatch and time.monotonic()<deadline: time.sleep(.05)
+                if pair.sync_dispatch: raise ValueError('Export stopped. Wait for the current refresh to finish, then click Skip Results again.')
+                self.fleet.release_pair(row['pairId'])
+                row.update(released22=True,fast22=True,resultsSkipped=True,completedUtc=now())
+                self.set_status(row,'Complete','Results skipped; VMs released. Queued pairs continue.')
             elif action == 'resolve':
                 row = next((r for r in self.rows if r['id']==body.get('id')), None)
                 if not row or row['status'] != 'Error': raise ValueError('Select an interrupted pair.')
@@ -305,8 +344,7 @@ class PairQueue:
                     if pair.sync_dispatch or not all(pair.safe_flat(pair.view_agent(s)) for s in pair.pair):
                         raise ValueError('Close the trade and verify both VMs fresh and Flat in Trading first.')
                     self.fleet.release_pair(identity)
-                self.running=False
-                row.update(status='Cancelled', message='Reviewed and removed. No entry retry; historical results retained if available.', dirty=True)
+                row.update(status='Cancelled', completedUtc=now(), released22=bool(row.get('fast22')), message='Reviewed and removed. Historical results retained; queued pairs continue.', dirty=True)
             elif action == 'remove-selected':
                 ids=body.get('ids')
                 if not isinstance(ids,list) or not ids or any(not isinstance(i,str) for i in ids):
@@ -348,7 +386,7 @@ class PairQueue:
         keys = {r.get('fields', {}).get('Execution Key') for r in remote}
         removed = 0
         for row in self.rows[:]:
-            if row['key'] in keys or (row.get('dirty') and not row.get('remoteDeleted')):
+            if row.get('localDraft') or row['key'] in keys or (row.get('dirty') and not row.get('remoteDeleted')):
                 continue
             row.update(remoteDeleted=True, dirty=False)
             if row['status']=='Preparing': row['status']='Error'
@@ -362,10 +400,10 @@ class PairQueue:
         self.save()
 
     def remove(self, row):
-        self.store.delete(row)
+        if not row.get('localDraft'): self.store.delete(row)
         with self.lock:
             cancelled=copy.deepcopy(row)
-            cancelled.update(status='Cancelled',message='Removed from queue and Airtable.',dirty=False,cancelled=now())
+            cancelled.update(status='Cancelled',message='Removed from queue and Airtable.',dirty=False,cancelled=now(),completedUtc=now())
             self.history.append(cancelled)
             self.rows.remove(row)
             self.message='Pair removed from the queue and Airtable.'
@@ -413,18 +451,18 @@ class PairQueue:
                 self.running=False; self.message='Queue finished. Review any failed pairs in Trading.'
 
     def advance(self, row):
-        spec = row['spec']; slots = (spec['left'],spec['right']); status=row['status']
+        spec = row['spec']; members = slots(spec); status=row['status']
         if status in PENDING:
             if not self.running or not row.get('dispatched'): return
             with self.fleet.lock:
-                if any(s in self.fleet.owners for s in slots) or any(
+                if any(s in self.fleet.owners for s in members) or any(
                         a != 'Sim101' and a in p.settings.get('accounts', {}).values()
                         for a in spec['accounts'].values() for p in self.fleet.pairs.values()):
                     self.set_status(row,'Waiting','A VM or account is assigned to another pair. Release it in Trading when finished.'); return
             if not row.get('checked22'):
-                for s in slots: self.fleet.observe(s)
+                for s in members: self.fleet.observe(s)
             with self.fleet.lock:
-                agents=[self.fleet.view(s) for s in slots]
+                agents=[self.fleet.view(s) for s in members]
                 if any(a.get('calibrationRequired') for a in agents):
                     raise ValueError('Calibration required. Click Calibrate Chart 1 on the affected agent, then Retry preparation.')
                 if not row.get('checked22') and not all(self.fleet.catalog.safe_flat(a) for a in agents):
@@ -435,7 +473,7 @@ class PairQueue:
                     raise ValueError('Update both VM agents to Preview 18 for automatic verified account refresh.')
                 if not self.running: return
                 if row.get('fast22'): row['checked22']=True
-                pair_id=self.fleet.create_pair(*slots)
+                pair_id=self.fleet.create_pair(spec['left'],spec['right'])
                 row['pairId']=pair_id
                 pair=self.fleet.get_pair(pair_id)
                 pair.settings.update({k:spec[k] for k in ('ticker','stopLoss','profit','accounts','quantities','ratio') if k in spec})
@@ -458,12 +496,12 @@ class PairQueue:
             if not self.running: return
             if time.time()>row['deadline']:
                 raise ValueError('Account refresh timed out. No trade entry sent. Check the agents’ account messages.')
-            for slot in slots:
+            for slot in members:
                 if slot not in row['requested']:
                     row['requested'].append(slot); self.save()
                     pair.call(slot,'accounts',{'refreshId':row['refreshId']},15)
                 pair.observe(slot)
-            agents=[pair.view_agent(s) for s in slots]
+            agents=[pair.view_agent(s) for s in members]
             if not all(pair.safe_flat(a) and a.get('accountRefreshId')==row['refreshId'] for a in agents): return
             for a in agents:
                 if spec['accounts'][a['id']] not in a['accounts']:
@@ -474,13 +512,13 @@ class PairQueue:
             if not self.running:
                 self.message='Paused before entry. Start Queue to continue.'; return
             if time.time()>row['deadline']: raise ValueError('Starting export timed out. No entry sent.')
-            for slot in slots:
+            for slot in members:
                 if slot not in row['requested']:
                     row['requested'].append(slot); self.save() # before dispatch; no blind retry
                     pair.call(slot,'post_trade',{'tradeId':row['beforeId']},15)
                 pair.observe(slot)
-            snaps={s:self.receipt(pair,s,row['beforeId']) for s in slots}
-            if not all(snaps.values()) or not all(pair.safe_flat(pair.view_agent(s)) for s in slots): return
+            snaps={s:self.receipt(pair,s,row['beforeId']) for s in members}
+            if not all(snaps.values()) or not all(pair.safe_flat(pair.view_agent(s)) for s in members): return
             row['before']=snaps
             if not self.running: self.save(); return
             row['phase']='prepare'; row['job']=pair.submit('prepare',spec); self.save(); return
@@ -497,7 +535,7 @@ class PairQueue:
             with self.lock:
                 if not self.running:
                     row['phase']='prepare'; self.set_status(row,'Preparing','Paused before entry.'); return
-                row['job']=pair.submit(spec['direction'],{}); self.save(); return
+                row['job']=pair.submit(('sell' if spec['direction']=='buy' else 'buy') if not spec.get('left') else spec['direction'],{}); self.save(); return
         if status=='Trading':
             pair.state()
             job=next((j for j in pair.jobs if j['id']==row.get('job')),None)
@@ -510,8 +548,8 @@ class PairQueue:
                 if row.get('fast22'):
                     self.set_status(row,'Awaiting results','CSV capture still pending. These VMs remain reserved until both snapshots are saved; other pairs continue.')
                 else: raise ValueError('Post-trade result export timed out. Pair retained for review; no next entry.')
-            for slot in slots: pair.observe(slot)
-            snaps={s:self.receipt(pair,s,row['afterId']) for s in slots}
+            for slot in members: pair.observe(slot)
+            snaps={s:self.receipt(pair,s,row['afterId']) for s in members}
             if not all(snaps.values()) or pair.sync_dispatch: return
             if row.get('fast22'):
                 row['after']=snaps;row['results']={}
@@ -526,11 +564,11 @@ class PairQueue:
                 self.set_status(row,'Complete','CSVs saved; VMs released. Airtable upload runs in background.' if len(row['results'])==2 else 'CSVs saved; VMs released. P&L unavailable where a same-day baseline is missing.')
                 return
             # Midnight/session rollover can invalidate subtraction; never silently call it a loss.
-            if any(row['before'][s]['time'][:10] != snaps[s]['time'][:10] for s in slots):
+            if any(row['before'][s]['time'][:10] != snaps[s]['time'][:10] for s in members):
                 raise ValueError('Result crossed a UTC date boundary. Review PnL reset before recording a result.')
-            row['after']=snaps; row['results']={s:trade_result(row['before'][s]['pnl'],snaps[s]['pnl']) for s in slots}; row['synced']=now()
+            row['after']=snaps; row['results']={s:trade_result(row['before'][s]['pnl'],snaps[s]['pnl']) for s in members}; row['synced']=now()
             # Save final results remotely while the pair is still reserved.
-            row['status']='Complete'; row['message']='Results synced. Releasing VMs.'; row['dirty']=True; self.save(); self.sync(row)
+            row['completedUtc']=now(); row['status']='Complete'; row['message']='Results synced. Releasing VMs.'; row['dirty']=True; self.save(); self.sync(row)
             try: self.fleet.release_pair(row['pairId'])
             except Exception as exc:
                 self.fail(row,'Results saved, but VM release failed: '+str(exc)); return

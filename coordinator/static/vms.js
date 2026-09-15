@@ -25,7 +25,7 @@
      const connection=node('span',vm.online?'Connected':'Disconnected');connection.className=vm.online?'complete':'idle';line.append(connection);
      line.append(node('span',position(vm)));
      const busy=pending.has(vm.id)||vm.refresh?.status==='running';
-     line.append(node('span',availability(vm)));
+     const availabilityLabel=node('span',availability(vm));availabilityLabel.className='vm-availability '+(vm.refresh?.status==='error'||!vm.online?'vm-error':vm.pairId?'vm-paired':availability(vm)==='Ready · Available'?'vm-available':'vm-error');line.append(availabilityLabel);
      const button=node('button',busy?'Refreshing…':'Refresh');button.disabled=busy;button.onclick=()=>refresh(vm.id);line.append(button);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
      const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);row.append(details);

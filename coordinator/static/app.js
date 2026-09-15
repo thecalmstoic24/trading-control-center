@@ -176,8 +176,8 @@ function renderPair(s) {
     root.querySelector('.latency').textContent=a.rttMs==null?'— ms':a.rttMs+' ms RTT';
     root.querySelector('.vm-message').textContent=a.message || a.execution || (a.configured?'Waiting for agent status.':'Import this VM’s connection code to begin.');
   }
-  $('buy').textContent='Buy '+s.agents[0].name+' / Sell '+s.agents[1].name;
-  $('sell').textContent='Sell '+s.agents[0].name+' / Buy '+s.agents[1].name;
+  $('buy').textContent='Buy '+s.agents[0].name+(s.agents[1]?' / Sell '+s.agents[1].name:' · Single Pair');
+  $('sell').textContent='Sell '+s.agents[0].name+(s.agents[1]?' / Buy '+s.agents[1].name:' · Single Pair');
   const ready=s.canEnter&&!dirty&&!pending;
   $('buy').disabled=$('sell').disabled=!ready;
   $('prepare').disabled=s.busy||s.active||pending;

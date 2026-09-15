@@ -26,7 +26,7 @@ try {
     $rejected=$false
     try { Call 'status' ('0'*64) | Out-Null } catch {$rejected=$true}
     Check $rejected 'Bad certificate pin accepted'
-    foreach($command in @('bind_peer','accounts','post_trade')) {
+    foreach($command in @('bind_peer','accounts','post_trade','skip_results','bind_single','single_entry')) {
         $task=[ControlGateway11]::Send('127.0.0.1',18789,$pin,$credential,$command,'{}',2000)
         $pending=$null
         for($i=0;$i -lt 50 -and -not $pending;$i++){ $pending=$gateway.Take();Start-Sleep -Milliseconds 10 }

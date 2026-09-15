@@ -49,6 +49,9 @@ class QueueTests(unittest.TestCase):
         self.body=dict(left='vm-left',right='vm-right',ticker='NQ SEP26',direction='buy',stopLoss=100,profit=200,
             accounts={s:'Sim101' for s in module.IDS},quantities={s:3 for s in module.IDS})
     def tearDown(self):
+        for pair in list(self.fleet.pairs.values()):
+            deadline=time.monotonic()+3
+            while pair.operation.locked() and time.monotonic()<deadline:time.sleep(.01)
         self.fleet.shutdown()
         for c in [self.fleet.catalog,*self.fleet.pairs.values(),*self.fleet.retired]:
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
@@ -59,6 +62,84 @@ class QueueTests(unittest.TestCase):
             state.update(backgroundExports=True,syncReceipt={'id':'baseline','completedUtc':'2026-09-14T11:00:00Z',
                 'accounts':[{'Account':'Sim101','CurrentBalance':100000,'Realized PnL':0}]})
             self.fleet.observe(slot)
+
+    def test_local_draft_gets_id_only_at_start(self):
+        key='a'*32
+        identity=self.queue.add(dict(self.body,localDraft=True,draftKey=key,draft={'key':key}))
+        self.assertTrue(identity.startswith('DRAFT-'));self.assertEqual(self.store.rows,{})
+        self.queue.tick();self.assertEqual(self.store.rows,{})
+        self.queue.command('start',{})
+        row=self.queue.rows[0];self.assertEqual(row['id'],'PAIR-0001');self.assertEqual(row['key'],key)
+        self.queue.command('start',{});self.assertEqual(row['id'],'PAIR-0001')
+
+    def test_local_draft_can_return_for_edit_without_remote_delete(self):
+        identity=self.queue.add(dict(self.body,localDraft=True,draft={'key':'a'*32}))
+        self.store.fail=True
+        result=self.queue.command('edit-draft',{'id':identity})
+        self.assertEqual(result['draft']['draft']['key'],'a'*32);self.assertEqual(self.queue.rows,[])
+
+    def test_resolve_error_releases_vm_and_continues_queue(self):
+        self.enable_fast22();self.add_start();self.queue.tick()
+        first=self.queue.rows[0];pair=self.fleet.get_pair(first['pairId'])
+        while pair.operation.locked():time.sleep(.01)
+        self.queue.fail(first,'test preparation error')
+        self.queue.add(self.body);self.queue.command('start',{});self.queue.tick()
+        self.assertEqual(self.queue.rows[1]['status'],'Waiting')
+        self.queue.command('resolve',{'id':first['id']})
+        self.assertTrue(self.queue.running);self.assertIn('completedUtc',first)
+        self.queue.tick();self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+
+    def test_skip_results_releases_and_keeps_queue_running(self):
+        self.enable_fast22()
+        for s in self.agent.states.values():s['skipResults']=True
+        pair=self.entered();self.agent.skip_receipt=True;self.flat(pair);self.tick_until('Awaiting results')
+        while pair.sync_dispatch:time.sleep(.01)
+        row=self.queue.rows[0]
+        self.queue.add(self.body);self.queue.command('start',{})
+        self.queue.command('skip-results',{'id':row['id']})
+        self.assertEqual(row['status'],'Complete');self.assertTrue(row['resultsSkipped']);self.assertIn('completedUtc',row)
+        self.assertEqual(len([c for c in self.agent.calls if c[1]=='skip_results']),2)
+        self.queue.tick();self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+
+    def test_skip_rejection_keeps_reservation(self):
+        self.enable_fast22()
+        for s in self.agent.states.values():s['skipResults']=True
+        pair=self.entered();self.agent.skip_receipt=True;self.flat(pair);self.tick_until('Awaiting results')
+        while pair.sync_dispatch:time.sleep(.01)
+        row=self.queue.rows[0];self.agent.fail.add(('vm-right','skip_results'))
+        with self.assertRaises(TimeoutError):self.queue.command('skip-results',{'id':row['id']})
+        self.assertIn(row['pairId'],self.fleet.pairs);self.assertEqual(row['status'],'Awaiting results')
+
+    def test_single_pair_left_and_right_use_only_selected_agent(self):
+        for side in ('left','right'):
+            with self.subTest(side=side):
+                self.enable_fast22()
+                selected='vm-'+side;other='right' if side=='left' else 'left'
+                self.agent.states[selected]['singlePair']=True;self.fleet.observe(selected)
+                original=self.fleet.transport
+                def transport(config,command,body=None,**kw):
+                    if command=='single_entry':
+                        self.agent.calls.append((config['id'],command,body))
+                        self.agent.states[config['id']].update(position='1 L' if body['side']=='BUY' else '1 S')
+                        return {'ok':True}
+                    return original(config,command,body,**kw)
+                self.fleet.transport=transport
+                body=dict(self.body);body[other]=None
+                body['accounts']={selected:'Sim101'};body['quantities']={selected:3}
+                self.queue.rows=[];self.queue.add(body);self.queue.command('start',{})
+                self.agent.calls=[];self.tick_until('Trading');row=self.queue.rows[0]
+                pair=self.fleet.get_pair(row['pairId'])
+                for _ in range(100):
+                    pair.refresh_both()
+                    if pair.opened_ids and not pair.operation.locked():break
+                    time.sleep(.01)
+                self.assertEqual(pair.pair,(selected,))
+                entries=[c for c in self.agent.calls if c[1]=='single_entry']
+                self.assertEqual(len(entries),1);self.assertEqual(entries[0][2]['side'],'BUY' if side=='left' else 'SELL')
+                self.assertFalse(any(c[0]!=selected for c in self.agent.calls))
+                self.assertFalse(any(c[1] in ('bind_peer','peer_check','entry') for c in self.agent.calls))
+                self.flat(pair);self.tick_until('Complete');self.assertNotIn(selected,self.fleet.owners)
+                self.fleet.transport=original
 
     def test_fast_start_has_no_account_or_export_requests(self):
         self.enable_fast22();self.entered()

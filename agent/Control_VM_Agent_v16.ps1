@@ -2045,6 +2045,9 @@ $form.Add_FormClosed({
     Stop-AgentListener
 })
 
+$script:SkippedResults23=@{}
+$skipPath23=Join-Path $env:LOCALAPPDATA 'TradingControlCenter/agent-data/skipped-results.json'
+if(Test-Path $skipPath23){foreach($id23 in @(Get-Content $skipPath23 -Raw | ConvertFrom-Json)){$script:SkippedResults23[[string]$id23]=$true}}
 $script:SyncReceipt17 = $null
 # V14 account targets are retained across restarts; never silently fall back to Sim101 for an active account.
 $script:PeerAccount14 = 'Sim101'
@@ -2138,6 +2141,7 @@ function Start-ManualSync15 {
 }
 function Start-Worker14 {
     param([string]$Mode,[string]$TradeId='',[switch]$FreshExport,[string]$RefreshId='',[switch]$CaptureOnly)
+    if($Mode -eq 'export' -and $script:SkippedResults23.ContainsKey($TradeId)){throw 'Results were skipped; export will not restart.'}
     if($Mode -in @('export','startup')) {
         if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
     } else { $null=Assert-Idle14 }
@@ -2162,6 +2166,7 @@ function Start-Worker14 {
     $script:Busy=$true
     Set-ControlsForBusyState -Busy $true
     if($Mode -eq 'startup') { $script:Sync14='Checking Airtable login; complete setup if prompted.' }
+    $script:WorkerTradeId23=$TradeId
     $script:WorkerMode14=$Mode
     $script:WorkerStarted14=[DateTime]::UtcNow
     try {
@@ -2241,7 +2246,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.22'
+$script:ControlVersion = '16.0-preview.23'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2308,6 +2313,8 @@ function Get-ControlStatus {
     $state['accounts'] = @($script:Accounts14)
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
+    $state['singlePair'] = $true
+    $state['skipResults'] = $true
     $state['backgroundExports'] = $true
     $state['syncReceipt'] = $script:SyncReceipt17
     $state['calibrationRequired'] = [bool]$script:CalibrationRequired20
@@ -2342,6 +2349,40 @@ function Invoke-ControlCommand {
         return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
     }
     if ($Pending.Command -eq 'accounts') { Start-Worker14 -Mode 'accounts' -RefreshId ([string]$request.refreshId); return @{ok=$true;message='Reading account list.'} }
+    if ($Pending.Command -eq 'skip_results') {
+        $id23=[string]$request.tradeId
+        if($id23 -notmatch '^[a-f0-9]{32}$') { throw 'Invalid trade ID.' }
+        if($script:ScheduledAction -or $script:PendingVerification -or $script:CloseCheck) { throw 'Wait for trade closure verification.' }
+        if((Get-ChartSnapshot).Position -cne 'Flat') { throw 'Results can only be skipped after the account is Flat.' }
+        if($script:Worker14 -and ($script:WorkerMode14 -cne 'export' -or $script:WorkerTradeId23 -cne $id23)){throw 'Another desktop operation is running.'}
+        $script:SkippedResults23[$id23]=$true
+        $skipPath23=Join-Path $controlDirectory 'skipped-results.json'
+        ConvertTo-Json -InputObject @($script:SkippedResults23.Keys) | Set-Content ($skipPath23+'.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($skipPath23+'.tmp') -Destination $skipPath23 -Force
+        if($script:Worker14) {
+            if($script:WorkerMode14 -cne 'export' -or $script:WorkerTradeId23 -cne $id23) { throw 'Another desktop operation is running.' }
+            if(-not $script:Worker14.HasExited) { $script:Worker14.Kill(); if(-not $script:Worker14.WaitForExit(5000)) { throw 'Export has not stopped.' } }
+            $script:Worker14.Dispose();$script:Worker14=$null
+            $script:Busy=$false;Set-ControlsForBusyState -Busy $false;$refreshTimer.Start()
+        }
+        $path23=Join-Path $controlDirectory 'sync-pending.json'
+        if(Test-Path $path23) {
+            $item23=Get-Content $path23 -Raw | ConvertFrom-Json
+            if([string]$item23.tradeId -cne $id23) { throw 'A different trade has pending export work.' }
+            Remove-Item -LiteralPath $path23 -Force
+        }
+        $script:RetryTrade14='';$script:Sync14='Results skipped by user.'
+        return @{ok=$true;message='Export and desktop retries stopped.'}
+    }
+    if ($Pending.Command -eq 'bind_single') {
+        $null=Assert-Idle14
+        if((Get-ChartSnapshot).Position -cne 'Flat') { throw 'Single Pair requires Flat.' }
+        if([string]$request.bindingId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid binding.' }
+        $script:BoundPeer=$null;$script:SingleBinding23=[string]$request.bindingId
+        $script:PairCoordinatorActive=$false;$script:LocalOpened=$false;$script:CurrentPairId=''
+        $pairEnabled.Checked=$false;$peerIpInput.Text='';Invalidate-Preparation;$script:ControlPreparedId=''
+        return @{ok=$true;message='Single Pair bound; preparation required.'}
+    }
     if ($Pending.Command -eq 'post_trade') {
         if([string]$request.tradeId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid trade ID.' }
         $script:RetryTrade14=[string]$request.tradeId
@@ -2353,6 +2394,7 @@ function Invoke-ControlCommand {
         if ($script:Busy -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
         $snapshot = Get-ChartSnapshot
         if($snapshot.Position -cne 'Flat') { throw 'Current chart account must be Flat.' }
+        $script:SingleBinding23=''
         $peer = $request.peer
         if ([string]$request.bindingId -notmatch '^[a-f0-9]{32}$' -or [string]$peer.id -ceq $script:ControlIdentity.Id -or
             [string]$peer.token -notmatch '^[a-f0-9]{64}$' -or [string]$peer.pin -notmatch '^[a-f0-9]{64}$') { throw 'Invalid peer registration.' }
@@ -2383,6 +2425,7 @@ function Invoke-ControlCommand {
         Invalidate-Preparation
         $script:ControlPreparedId = ''
         $script:BoundPeer = $null
+        $script:SingleBinding23=''
         $script:CurrentPairId = ''
         $script:LocalOpened = $false
         $peerIpInput.Text = ''
@@ -2432,7 +2475,8 @@ function Invoke-ControlCommand {
         $prepareId = [string]$request.prepareId
         if ($prepareId -notmatch '^[0-9a-f]{32}$') { throw 'Invalid preparation ID.' }
         if ([decimal]$request.stopLoss -le 0 -or [decimal]$request.profit -le 0) { throw 'Currency amounts must be positive.' }
-        $pairEnabled.Checked = $true
+        $pairEnabled.Checked = -not [bool]$request.single
+        if([bool]$request.single -and -not $script:SingleBinding23) { throw 'Bind Single Pair first.' }
         # Remote preparation deliberately prepares ONLY this VM. Coordinator mirrors both requests.
         $payload = @{command='prepare'; token=$secretInput.Text; ticker=[string]$request.ticker; stopLoss=$request.stopLoss; profit=$request.profit}
         $answer = Process-AgentRequest -JsonLine ($payload | ConvertTo-Json -Compress)
@@ -2452,6 +2496,18 @@ function Invoke-ControlCommand {
             if($attempt19 -lt 3) { Start-Sleep -Milliseconds 250 }
         }
         throw ('Direct peer connection failed after 3 checks: '+$last19+'. No trade command sent.')
+    }
+    if ($Pending.Command -eq 'single_entry') {
+        if(-not $script:SingleBinding23 -or $script:BoundPeer -or $pairEnabled.Checked) { throw 'Prepare Single Pair first.' }
+        if(-not $script:ControlPreparedId -or [string]$request.prepareId -cne $script:ControlPreparedId) { throw 'Preparation changed.' }
+        $side23=[string]$request.side
+        if($side23 -cnotin @('BUY','SELL')) { throw 'Invalid side.' }
+        $button23=if($side23 -ceq 'BUY'){'ChartTraderControlQuickBuyMarketButton'}else{'ChartTraderControlQuickSellMarketButton'}
+        $script:ControlPreparedId=''
+        $script:RemoteCommandActive=$true
+        try { Invoke-Entry -Side $side23 -ButtonId $button23 } finally { $script:RemoteCommandActive=$false }
+        if($script:LastError) { throw $script:LastError }
+        return @{ok=$true;message='Single entry requested; verify actual position.'}
     }
     if ($Pending.Command -eq 'entry') {
         if (-not $script:BoundPeer) { throw 'Prepare this selected pair first.' }

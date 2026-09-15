@@ -31,8 +31,8 @@ sys.path.insert(0, str(ROOT))
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.22'
-AGENT_VERSIONS = {'16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.23'
+AGENT_VERSIONS = {'16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -367,7 +367,7 @@ class Center:
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
                     snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
-                    calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
+                    calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -517,7 +517,7 @@ class Center:
             if type(quantity) is not int or not 1 <= quantity <= 1000:
                 raise ValueError('Quantity must be a whole number from 1 to 1000.')
             accounts[slot], quantities[slot] = account, quantity
-        validate_quantities(dict(body, quantities=quantities), *self.pair)
+        if len(self.pair)==2: validate_quantities(dict(body, quantities=quantities), *self.pair)
         with self.lock:
             if self.active:
                 raise ValueError('Verify Both Flat before preparing another pair.')
@@ -530,7 +530,10 @@ class Center:
         raw_accounts={slot:trading_name(accounts[slot],self.view_agent(slot)['rawAccounts']) for slot in self.pair}
         binding = uuid.uuid4().hex
         bindings = []
-        for slot, peer in (self.pair, self.pair[::-1]):
+        if len(self.pair)==1:
+            if not self.view_agent(self.pair[0]).get('singlePair'): raise ValueError('Update this agent to Preview 23 for Single Pair.')
+            self.call(self.pair[0],'bind_single',{'bindingId':binding})
+        for slot, peer in ((self.pair, self.pair[::-1]) if len(self.pair)==2 else ()):
             peer_config = self.config[peer].copy()
             peer_config['name'] = self.name(peer)
             bindings.append(self.pool.submit(self.call, slot, 'bind_peer', {'peer':peer_config,'bindingId':binding, 'peerAccount':raw_accounts[peer], 'peerQuantity':quantities[peer]}))
@@ -544,8 +547,10 @@ class Center:
         self.save_fleet()
         prepare_id = uuid.uuid4().hex
         def one(slot, sl, pt):
-            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=raw_accounts[slot], quantity=quantities[slot]))
-        results = [self.pool.submit(one, self.pair[0], stop, profit), self.pool.submit(one, self.pair[1], right_stop, right_profit)]
+            return self.call(slot, 'prepare', dict(ticker=ticker, stopLoss=sl, profit=pt, prepareId=prepare_id, account=raw_accounts[slot], quantity=quantities[slot],single=len(self.pair)==1))
+        amounts=[(stop,profit),(right_stop,right_profit)]
+        if len(self.pair)==1 and body.get('right')==self.pair[0]: amounts=[(right_stop,right_profit)]
+        results = [self.pool.submit(one,slot,*amounts[i]) for i,slot in enumerate(self.pair)]
         errors = []
         for slot, result in zip(self.pair, results):
             try:
@@ -563,7 +568,7 @@ class Center:
             self.refresh_both()
             agents = self.state()['agents']
             if all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepare_id for a in agents):
-                if [(float(a['stopLoss']), float(a['profit'])) for a in agents] != [(stop, profit), (right_stop, right_profit)]:
+                if [(float(a['stopLoss']), float(a['profit'])) for a in agents] != amounts[:len(self.pair)]:
                     raise ValueError('Mirrored stop-loss/profit readback does not match.')
                 with self.lock:
                     self.assert_generation(generation)
@@ -579,14 +584,14 @@ class Center:
             if not prepared or self.active:
                 raise ValueError('Prepare and verify both VMs before entry.')
         # Read-only authenticated checks in both directions, before marking entry active.
-        checks={slot:self.pool.submit(self.call,slot,'peer_check',{'prepareId':prepared},35) for slot in self.pair}
+        checks={slot:self.pool.submit(self.call,slot,'peer_check',{'prepareId':prepared},35) for slot in self.pair if len(self.pair)==2}
         errors=[]
         for slot,future in checks.items():
             try: future.result()
             except Exception as exc: errors.append(self.name(slot)+': '+str(exc))
         if errors:
             raise ValueError('Peer connection check failed; no entry sent. Update both agents to Preview 19 and verify their direct connection. '+'; '.join(errors))
-        self.event('Direct peer connection verified in both directions. Rechecking readiness before entry.')
+        self.event('Direct peer connection verified in both directions. Rechecking readiness before entry.' if len(self.pair)==2 else 'Single Pair: rechecking local readiness before entry.')
         self.refresh_both()
         if not all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepared for a in self.state()['agents']):
             raise ValueError('Readiness changed. Prepare both VMs again.')
@@ -600,7 +605,7 @@ class Center:
         try:
             # ONE paired entry request to the selected left VM: retain the V10.4 arm/commit and peer monitoring.
             # Never retry an entry following a lost response.
-            self.call(self.pair[0], 'entry', dict(side=side.upper(), prepareId=prepared), timeout=30)
+            self.call(self.pair[0], 'single_entry' if len(self.pair)==1 else 'entry', dict(side=side.upper(), prepareId=prepared), timeout=30)
             self.assert_generation(generation)
             self.event(f'Pair entry accepted by {self.name(self.pair[0])}. Waiting for actual position observations; acceptance is not a fill.')
         except Exception as exc:
@@ -673,7 +678,7 @@ class Fleet:
         self.catalog.active = False
 
     def _load_pair(self, identity, members):
-        if not re.fullmatch('[a-f0-9]{32}', identity) or len(members) != 2 or members[0] == members[1]:
+        if not re.fullmatch('[a-f0-9]{32}', identity) or len(members) not in (1,2) or len(set(members))!=len(members):
             raise ValueError('Invalid saved pair. Restore the coordinator configuration backup.')
         if any(slot in self.owners for slot in members):
             raise ValueError('Saved pairs share a VM. Restore the coordinator configuration backup.')
@@ -711,43 +716,44 @@ class Fleet:
         return result
 
     def create_pair(self, left, right):
+        members=tuple(s for s in (left,right) if s)
         # Network I/O stays outside the fleet lock so other pairs keep monitoring.
         with self.lock:
-            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in (left,right)):
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in members):
                 raise ValueError('VM account refresh is running. Wait for it to finish.')
-            if left == right or left not in self.catalog.config or right not in self.catalog.config:
+            if not members or len(set(members))!=len(members) or any(s not in self.catalog.config for s in members):
                 raise ValueError('Choose two different registered VMs.')
             for identity, pair in self.pairs.items():
-                if pair.pair == (left, right):
+                if pair.pair == members:
                     return identity
             if left in self.owners or right in self.owners:
                 raise ValueError('A selected VM belongs to another pair. Release that pair first.')
-        requests = [self.catalog.pool.submit(self.catalog.observe, slot) for slot in (left, right)]
+        requests = [self.catalog.pool.submit(self.catalog.observe, slot) for slot in members]
         for request in requests:
             request.result()
         # Recheck reservations after the requests: another browser may have paired a VM.
         with self.lock:
-            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in (left,right)):
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in members):
                 raise ValueError('VM account refresh is running. Wait for it to finish.')
-            if left == right or left not in self.catalog.config or right not in self.catalog.config:
+            if not members or len(set(members))!=len(members) or any(s not in self.catalog.config for s in members):
                 raise ValueError('Choose two different registered VMs.')
             for identity,pair in self.pairs.items():
-                if pair.pair == (left, right):
+                if pair.pair == members:
                     return identity
             if len(self.pairs) >= MAX_PAIRS:
                 raise ValueError(f'Up to {MAX_PAIRS} pairs can be assigned simultaneously. Release an idle pair to create another.')
             if left in self.owners or right in self.owners:
                 raise ValueError('A selected VM belongs to another pair. Close, verify and release that pair first.')
-            if not all(self.catalog.safe_flat(self.view(slot)) for slot in (left, right)):
+            if not all(self.catalog.safe_flat(self.view(slot)) for slot in members):
                 raise ValueError('New pair requires two fresh, idle Flat agents.')
             identity = uuid.uuid4().hex
-            pair = self._load_pair(identity, (left, right))
+            pair = self._load_pair(identity, members)
             try:
                 pair.save_fleet()
                 self.save_index()
             except Exception:
                 del self.pairs[identity]
-                for slot in (left, right):
+                for slot in members:
                     del self.owners[slot]
                 self.retired.append(pair)
                 raise
@@ -782,7 +788,7 @@ class Fleet:
                 pair.assert_generation(generation)
                 if not releasable(pair.state()['agents']):
                     raise ValueError('Pair readiness changed; release blocked.')
-                if len(verified_slots) != 2:
+                if len(verified_slots) != len(pair.pair):
                     pair.event('Pair assignment released with an Unknown VM. Its remote position and binding were not verified or closed.')
                 pair.active = False
                 (pair.directory / 'entry-unresolved.json').unlink(missing_ok=True)

@@ -1,4 +1,7 @@
-﻿$script:SyncReceipt17 = $null
+$script:SkippedResults23=@{}
+$skipPath23=Join-Path $env:LOCALAPPDATA 'TradingControlCenter/agent-data/skipped-results.json'
+if(Test-Path $skipPath23){foreach($id23 in @(Get-Content $skipPath23 -Raw | ConvertFrom-Json)){$script:SkippedResults23[[string]$id23]=$true}}
+$script:SyncReceipt17 = $null
 # V14 account targets are retained across restarts; never silently fall back to Sim101 for an active account.
 $script:PeerAccount14 = 'Sim101'
 $script:PeerQuantity14 = 1
@@ -91,6 +94,7 @@ function Start-ManualSync15 {
 }
 function Start-Worker14 {
     param([string]$Mode,[string]$TradeId='',[switch]$FreshExport,[string]$RefreshId='',[switch]$CaptureOnly)
+    if($Mode -eq 'export' -and $script:SkippedResults23.ContainsKey($TradeId)){throw 'Results were skipped; export will not restart.'}
     if($Mode -in @('export','startup')) {
         if(Test-SyncDesktopBusy15) { throw 'Trading automation is using the desktop. Sync will wait.' }
     } else { $null=Assert-Idle14 }
@@ -115,6 +119,7 @@ function Start-Worker14 {
     $script:Busy=$true
     Set-ControlsForBusyState -Busy $true
     if($Mode -eq 'startup') { $script:Sync14='Checking Airtable login; complete setup if prompted.' }
+    $script:WorkerTradeId23=$TradeId
     $script:WorkerMode14=$Mode
     $script:WorkerStarted14=[DateTime]::UtcNow
     try {

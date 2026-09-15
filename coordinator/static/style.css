@@ -114,3 +114,11 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 #pair-workspace,.pair-overview{display:none!important}
 #compact-pair{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 #compact-pair h3{font-size:15px;margin:0 0 10px}.compact-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}.compact-account{padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px;line-height:1.6;overflow-wrap:anywhere}.compact-account strong{font-size:15px}.pair-actions{white-space:nowrap}.pair-actions button{font-size:12px;padding:6px 10px;margin:3px 4px 3px 0}.duplicate-button{background:#2376c8;color:white;border-color:#2376c8}.pair-select-row{cursor:pointer}#compact-pair>.pair-actions{margin-top:8px}@media(max-width:650px){.compact-cards{grid-template-columns:1fr}}
+
+/* Preview 23 status and table controls */
+.pair-phase.waiting,.pair-phase.queued{background:#ad168f;color:#fff}
+.pair-phase.awaiting-results{background:#1964c9;color:#fff}
+.vm-availability{padding:6px 10px;border-radius:6px}
+.vm-paired{background:#bd6613;color:white}.vm-available{background:#1964c9;color:white}.vm-error{background:#bd303b;color:white}
+.column-resizer{position:absolute;right:0;top:0;height:100%;width:8px;cursor:col-resize;touch-action:none;border-right:2px solid #8997ab}
+#trading-queue-table th,#trading-queue-table td,#queue-table th,#queue-table td{overflow-wrap:anywhere;min-width:65px}

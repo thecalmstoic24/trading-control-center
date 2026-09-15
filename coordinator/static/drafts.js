@@ -21,7 +21,7 @@
       const account=String(row.fields.id||'');if(!account)continue;
       let d=drafts.find(d=>!d[side]&&!inFlight.has(d.key));
       if(!d){d={key:crypto.randomUUID().replaceAll('-',''),ticker:'NQ SEP26',direction:'buy',ratio:'1:1',rightStopLoss:'0',rightProfit:'0',stopLoss:'0',profit:'0',leftQuantity:'1',rightQuantity:'1'};drafts.push(d);}
-      d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,vm:''};chooseVM(d[side]);
+      d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,metrics:row.fields,vm:''};chooseVM(d[side]);
     }
     window.planningSelection.clear();el('draft-message').textContent='Accounts added to drafts.';save();render();usage();
   }
@@ -30,7 +30,7 @@
     const rows=window.planningSelection.rows();
     if(rows.length!==1){el('draft-message').textContent='Select exactly one account in the table, then click the empty box.';return;}
     const row=rows[0],account=String(row.fields.id||'');if(!account)return;
-    d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,vm:''};chooseVM(d[side]);
+    d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,metrics:row.fields,vm:''};chooseVM(d[side]);
     window.planningSelection.clear();el('draft-message').textContent='Selected account added to this slot.';save();render();usage();
   }
   const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
@@ -43,8 +43,8 @@
   function validateCard(card,d){
     const error=problem(d),button=card.querySelector('button[type=submit]');
     if(!button)return;
-    button.disabled=!!error||!d.left||!d.right||inFlight.has(d.key);
-    button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':'Confirm pair';
+    button.disabled=!!error||(!d.left&&!d.right)||inFlight.has(d.key);
+    button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':(!d.left||!d.right)?'Confirm Single Pair':'Confirm pair';
     card.querySelector('.draft-notice').textContent=error==='Invalid quantity'?'Invalid quantity: whole contracts only. Adjust quantity or use MNQ.':d.notice||'';
   }
   let dragged=null;
@@ -91,6 +91,7 @@
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
         const balance=make('p',item?.balance!=null&&Number.isFinite(Number(item.balance))?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(item.balance)):'Balance unavailable');balance.className='draft-balance';block.append(balance);
+        if(item?.metrics){const f=item.metrics,fmt=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);const dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:null;for(const [label,value] of [['Drawdown',fmt(dd)],['Stop',fmt(f.stop)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']])block.append(make('div',label+': '+value));}
         const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
           const remove=make('button','×');remove.type='button';remove.className='quiet account-remove';remove.setAttribute('aria-label','Remove account '+item.account);
@@ -126,12 +127,12 @@
         e.preventDefault();if(inFlight.has(d.key)||problem(d))return;
         if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
         const left=d.left?.vm,right=d.right?.vm;
-        if(!left||!right||left===right){message.textContent='Both accounts need an unambiguous match on two different registered VMs.';return;}
+        if((d.left&&!left)||(d.right&&!right)||left===right){message.textContent='Both accounts need an unambiguous match on two different registered VMs.';return;}
         const [a,b]=d.ratio.split(':').map(Number);
         if(Number(d.leftQuantity)*b!==Number(d.rightQuantity)*a){message.textContent='Adjust quantity to whole contracts matching the ratio.';return;}
         inFlight.add(d.key);disabled.disabled=true;confirm.textContent='Adding…';
         try{
-          await api('/api/queue/add',{draftKey:d.key,left,right,accounts:{[left]:d.left.account,[right]:d.right.account},quantities:{[left]:Number(d.leftQuantity),[right]:Number(d.rightQuantity)},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+          await api('/api/queue/add',{localDraft:true,draft:JSON.parse(JSON.stringify(d)),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
           drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
           window.dispatchEvent(new Event('queue-refresh'));
         }catch(err){d.error=err.message;save();}finally{inFlight.delete(d.key);render();usage();}
@@ -139,6 +140,7 @@
       list.append(card);
     });
   }
+  window.addEventListener('edit-local-draft',e=>{const d=e.detail;if(!drafts.some(x=>x.key===d.key))drafts.push(d);save();render();usage();});
   window.addEventListener('planning-accounts-updated',e=>{
     const rows=new Map(e.detail.map(r=>[r.id,r]));
     for(const d of drafts)for(const side of ['left','right']){
