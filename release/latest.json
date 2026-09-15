@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "16.0-preview.22",
-  "url": "https://raw.githubusercontent.com/thecalmstoic24/trading-control-center/741833eba1512c935270ae08ecdfec3e03e2c321/release/Setup_Trading_Control_Center_v16.ps1",
-  "sha256": "2513e621a126a58ff264c45e921826aeedc38a1df84c1bf3ba535104b177ffb0"
+  "version": "16.0-preview.23",
+  "url": "https://raw.githubusercontent.com/thecalmstoic24/trading-control-center/f90e13b1648b5358ceb6b3b4ab7fd69a78abad13/release/Setup_Trading_Control_Center_v16.ps1",
+  "sha256": "80a610b7379a36685bbf360e068d61dd3f6dd93916bfc7b59e307db2c5008035"
 }
