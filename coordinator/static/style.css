@@ -148,3 +148,6 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 #vm-events{min-height:0;flex:1;height:auto;overflow:auto;scrollbar-gutter:stable}
 #vm-events .event{display:block;padding:8px 2px}#vm-events time{display:block;font-size:10px;margin-bottom:4px}
 @media(max-width:850px){#vms-split{display:flex;flex-direction:column;overflow:auto}#vms-divider{display:none}.vm-list-pane{min-height:250px;flex:1}.vm-log-pane{min-height:180px;max-height:280px;margin-top:16px}}
+
+#vms-divider,#trading-divider{margin:0;border:0;background:linear-gradient(to right,transparent 4px,var(--line) 4px,var(--line) 6px,transparent 6px)}
+#vms-divider:hover,#vms-divider:focus,#trading-divider:hover,#trading-divider:focus{background:linear-gradient(to right,transparent 3px,var(--cyan) 3px,var(--cyan) 7px,transparent 7px)}

@@ -32,7 +32,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.ok((await page.locator('main').boundingBox()).width>1850);
  const divider=await page.locator('#vms-divider').boundingBox();
  await page.mouse.move(divider.x+5,divider.y+30);await page.mouse.down();await page.mouse.move(divider.x-150,divider.y+30);await page.mouse.up();
- const saved=await page.evaluate(()=>localStorage.getItem('vms-list-share'));assert.ok(+saved<80);
+ const saved=await page.evaluate(()=>localStorage.getItem('vms-list-share'));assert.ok(saved!==null&&+saved<80,'Dragging did not save panel width');
  await page.reload();await page.locator('#vm-events .event').waitFor();assert.equal(await page.locator('#vms-divider').getAttribute('aria-valuenow'),String(Math.round(+saved)));
  await page.locator('#vms-divider').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#vms-divider').getAttribute('aria-valuenow'),String(Math.round(+saved+2)));
  await page.locator('#tab-trading').click();assert.ok((await page.locator('#trading-split').boundingBox()).width>1800);

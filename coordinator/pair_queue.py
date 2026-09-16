@@ -454,6 +454,10 @@ class PairQueue:
             agents=pair.state()['agents']
             if not all(pair.safe_flat(a) for a in agents): return
             if row.get('started') and not all(pair.target_matches(a) for a in agents): return
+            if row.get('closed') and row.get('afterId'):
+                if not all(a.get('skipResults') for a in agents): return
+                for slot in pair.pair: pair.call(slot,'skip_results',{'tradeId':row['afterId']},15)
+                row['resultsSkipped']=True
             self.fleet.release_pair(identity, strict=True)
         except (ValueError, KeyError) as exc:
             row['releaseMessage']=str(exc)

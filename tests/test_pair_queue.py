@@ -161,6 +161,16 @@ class QueueTests(unittest.TestCase):
         pair.transport=changed;self.queue.release_error(row)
         self.assertIn(row['pairId'],self.fleet.pairs);self.assertFalse(row.get('errorReleased'))
 
+    def test_closed_error_stops_pending_exports_before_release(self):
+        row,pair=self.failed_reserved_pair()
+        row.update(started='2026-09-16T12:00:00Z',closed='2026-09-16T12:01:00Z',afterId='a'*32)
+        for state in self.agent.states.values():state['skipResults']=True
+        self.queue.release_error(row)
+        self.assertTrue(row['errorReleased']);self.assertTrue(row['resultsSkipped'])
+        commands=[c[1] for c in self.agent.calls]
+        self.assertEqual(commands.count('skip_results'),2)
+        self.assertLess(commands.index('skip_results'),commands.index('unbind_peer'))
+
     def test_retry_released_error_waits_for_new_owner(self):
         row,pair=self.failed_reserved_pair();row.update(started='2026-09-16T12:00:00Z',entryNotSent=True)
         self.queue.release_error(row);self.assertTrue(row['errorReleased'])
