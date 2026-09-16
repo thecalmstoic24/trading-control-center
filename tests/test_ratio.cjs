@@ -11,3 +11,5 @@ for(const ratio of r.options){
 const d={ratio:'2:3',ticker:'NQ SEP26',leftQuantity:'1'};r.quantities(d);assert.equal(d.ticker,'MNQ SEP26');assert.equal(d.leftQuantity,'10');assert.equal(d.rightQuantity,'15');
 const e={ratio:'3:4',ticker:'NQ SEP26',leftQuantity:'1'};r.quantities(e);assert.match(e.notice,/fractional/);assert.equal(e.ticker,'NQ SEP26');
 console.log('All ratios: amounts, bidirectional quantities, swaps, MNQ conversion and fractional rejection passed.');
+
+for(const ticker of ['NQ','NQ DEC26','NQ MAR27']){const d={ratio:'2:3',ticker,leftQuantity:'1'};r.quantities(d);assert.equal(d.ticker,ticker.replace('NQ','MNQ'));assert.equal(d.leftQuantity,'10');assert.equal(d.rightQuantity,'15');}

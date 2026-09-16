@@ -20,7 +20,7 @@
     for(const row of rows){
       const account=String(row.fields.id||'');if(!account)continue;
       let d=drafts.find(d=>!d[side]&&!inFlight.has(d.key));
-      if(!d){d={key:crypto.randomUUID().replaceAll('-',''),ticker:'NQ SEP26',direction:'buy',ratio:'1:1',rightStopLoss:'0',rightProfit:'0',stopLoss:'0',profit:'0',leftQuantity:'1',rightQuantity:'1'};drafts.push(d);}
+      if(!d){d={key:crypto.randomUUID().replaceAll('-',''),ticker:'NQ',direction:'buy',ratio:'1:1',rightStopLoss:'0',rightProfit:'0',stopLoss:'0',profit:'0',leftQuantity:'1',rightQuantity:'1'};drafts.push(d);}
       d[side]={account,master:String(row.fields['Master Account']||''),record:row.id,balance:row.fields.CurrentBalance??null,metrics:row.fields,vm:''};chooseVM(d[side]);
     }
     window.planningSelection.clear();el('draft-message').textContent='Accounts added to drafts.';save();render();usage();
@@ -54,7 +54,7 @@
     n.oninput=()=>{
       PairRatio.edit(d,key,n.value);
       for(const other of form.closest('form').querySelectorAll('input[data-value-key]')){
-        if(other!==n||d.ticker==='MNQ SEP26')other.value=d[other.dataset.valueKey];
+        if(other!==n||/^MNQ(?: |$)/.test(d.ticker))other.value=d[other.dataset.valueKey];
       }
       const card=form.closest('form');card.querySelector('[data-field=ticker]').value=d.ticker;card.querySelector('.draft-notice').textContent=d.notice||'';
       validateCard(card,d);save();
@@ -119,9 +119,9 @@
       }
       const footer=make('div');footer.className='draft-footer';disabled.append(footer);
       const instrumentLabel=make('label','Instrument'),instrument=make('select');instrument.dataset.field='ticker';
-      for(const value of ['NQ SEP26','MNQ SEP26']){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
+      for(const value of [...new Set(['NQ','MNQ',d.ticker])]){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
       instrument.onchange=()=>{
-        const next=instrument.value,scale=next===d.ticker?1:next==='MNQ SEP26'?10:0.1;
+        const next=instrument.value,scale=next.split(' ')[0]===d.ticker.split(' ')[0]?1:/^MNQ(?: |$)/.test(next)?10:0.1;
         const l=Number(d.leftQuantity)*scale,r=Number(d.rightQuantity)*scale;
         if(!Number.isInteger(l)||!Number.isInteger(r)){d.notice='Cannot convert to whole NQ contracts. Adjust quantities first.';instrument.value=d.ticker;card.querySelector('.draft-notice').textContent=d.notice;return;}
         d.ticker=next;d.leftQuantity=String(l);d.rightQuantity=String(r);d.notice='';save();render();

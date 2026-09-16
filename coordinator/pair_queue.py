@@ -3,6 +3,7 @@
 Pair receipts come from the authenticated agent after its CSV values have been
 confirmed by Airtable. Accounts browsing remains read-only in planning.py.
 """
+import contracts
 import copy
 import datetime as dt
 import json
@@ -191,6 +192,7 @@ class PairQueue:
                 row = dict(id=f'PAIR-{number:04d}', key=draft_key or uuid.uuid4().hex, spec=spec, status='Queued',
                            message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
                 if local: row.update(id='DRAFT-'+row['key'],localDraft=True,dirty=False,draft=copy.deepcopy(body.get('draft')))
+                if local and isinstance(row.get('draft'),dict): row['draft']['ticker']=spec['ticker']
                 self.rows.append(row); self.save()
             try:
                 if not local: self.sync(row)
@@ -208,7 +210,7 @@ class PairQueue:
             if len(members)==1 and not self.fleet.view(members[0]).get('singlePair'): raise ValueError('Update the selected VM to Preview 23 for Single Pair.')
             names = {s: self.fleet.catalog.name(s) for s in members}
             available = {s: self.fleet.view(s)['accounts'] for s in members}
-        ticker = str(body.get('ticker', '')).strip().upper()
+        ticker = contracts.resolve(self.fleet.directory, body.get('ticker', ''))
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker): raise ValueError('Enter a valid instrument.')
         direction = body.get('direction')
         if direction not in ('buy', 'sell'): raise ValueError('Select the pair direction.')

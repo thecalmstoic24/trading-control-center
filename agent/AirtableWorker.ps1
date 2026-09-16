@@ -355,16 +355,85 @@ function Money([string]$text) {
  if($negative) { if($n -lt 0) { throw 'Ambiguous negative amount.' }; $n=-$n }
  return $n
 }
+function Get-AirtableHttpStatus($ErrorRecord) {
+ if($ErrorRecord.Exception.Data.Contains('HttpStatus')) { return [int]$ErrorRecord.Exception.Data['HttpStatus'] }
+ if($null -ne $ErrorRecord.Exception.Response) { return [int]$ErrorRecord.Exception.Response.StatusCode }
+ return 0
+}
+function ConvertTo-CurlConfigValue([string]$Value) {
+ return '"'+$Value.Replace('\','\\').Replace('"','\"').Replace("`r",'\r').Replace("`n",'\n').Replace("`t",'\t')+'"'
+}
+function Invoke-AirtableCurl($RequestParams) {
+ $uri=[Uri]$RequestParams.Uri
+ if($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.airtable.com' -or $uri.Port -ne 443 -or $uri.UserInfo -or -not $uri.AbsolutePath.StartsWith('/v0/')) { throw 'Unapproved Airtable request address.' }
+ $method=([string]$RequestParams.Method).ToUpperInvariant()
+ if($method -notin @('GET','PATCH')) { throw 'Unsupported Airtable fallback method.' }
+ $curl=Join-Path $env:WINDIR 'System32\curl.exe'
+ if(-not (Test-Path -LiteralPath $curl)) { throw 'Windows curl.exe is unavailable. Install Windows updates, then retry Airtable Setup.' }
+ $config=@('silent','show-error','connect-timeout = 8','max-time = 25','proto = "=https"',
+  ('url = '+(ConvertTo-CurlConfigValue $uri.AbsoluteUri)),('request = '+(ConvertTo-CurlConfigValue $method)),
+  ('header = '+(ConvertTo-CurlConfigValue ('Authorization: '+[string]$RequestParams.Headers.Authorization))),
+  'write-out = "\n%{http_code}"')
+ if($RequestParams.ContainsKey('Body')) {
+  $config+=('header = "Content-Type: application/json; charset=utf-8"')
+  $config+=('data-binary = '+(ConvertTo-CurlConfigValue ([string]$RequestParams.Body)))
+ }
+ $process=New-Object System.Diagnostics.Process
+ $info=New-Object System.Diagnostics.ProcessStartInfo
+ $info.FileName=$curl
+ # Credentials and request body travel through stdin, never command-line arguments or temporary files.
+ $info.Arguments='--disable --config -'
+ $info.UseShellExecute=$false;$info.CreateNoWindow=$true
+ $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+ $info.StandardOutputEncoding=New-Object Text.UTF8Encoding($false)
+ $process.StartInfo=$info
+ $configBytes=$null
+ try {
+  [void]$process.Start()
+  $outputTask=$process.StandardOutput.ReadToEndAsync();$errorTask=$process.StandardError.ReadToEndAsync()
+  # .NET Framework (Windows PowerShell 5.1) has no StandardInputEncoding setter.
+  # Send UTF-8 bytes directly so token/body encoding does not depend on the console code page.
+  $configBytes=[Text.Encoding]::UTF8.GetBytes(($config -join "`n")+"`n")
+  $process.StandardInput.BaseStream.Write($configBytes,0,$configBytes.Length)
+  $process.StandardInput.BaseStream.Flush();$process.StandardInput.BaseStream.Close()
+  [Array]::Clear($configBytes,0,$configBytes.Length);$configBytes=$null;$config=$null
+  if(-not $process.WaitForExit(30000)) { $process.Kill();$process.WaitForExit();throw 'Airtable curl connection timed out. No response received.' }
+  $output=$outputTask.GetAwaiter().GetResult();[void]$errorTask.GetAwaiter().GetResult()
+  if($process.ExitCode -ne 0) { throw ('Airtable curl connection failed (curl exit '+$process.ExitCode+'). Check this VM network connection.') }
+  $match=[regex]::Match($output,'(?s)^(.*)\n([0-9]{3})$')
+  if(-not $match.Success) { throw 'Airtable curl returned an unreadable response.' }
+  $status=[int]$match.Groups[2].Value
+  if($status -lt 200 -or $status -ge 300) {
+   $exception=New-Object System.Exception("Airtable returned HTTP $status.")
+   $exception.Data['HttpStatus']=$status
+   throw $exception
+  }
+  return ($match.Groups[1].Value | ConvertFrom-Json)
+ } finally { if($null -ne $configBytes){[Array]::Clear($configBytes,0,$configBytes.Length)};$config=$null;$process.Dispose() }
+}
+function Invoke-AirtableRequest($RequestParams) {
+ $preference=Join-Path $state 'curl-transport.txt'
+ if($script:UseAirtableCurl -or (Test-Path -LiteralPath $preference)) { return Invoke-AirtableCurl $RequestParams }
+ try { return Invoke-RestMethod @RequestParams } catch {
+  if((Get-AirtableHttpStatus $_) -ne 0) { throw }
+  # Only reads and idempotent record PATCH updates are used by this worker.
+  Log 'PowerShell could not reach Airtable. Trying Windows curl (connection hotfix 24.2).'
+  $result=Invoke-AirtableCurl $RequestParams
+  $script:UseAirtableCurl=$true
+  try { Set-Content -LiteralPath $preference -Value 'curl' -Encoding ASCII } catch { }
+  return $result
+ }
+}
+
 function Api([string]$method,[string]$url,$body=$null) {
  for($attempt=0;$attempt -lt 4;$attempt++) {
   Start-Sleep -Milliseconds 300
   try {
-   $requestParams=@{Uri=$url; Method=$method; Headers=$script:headers; TimeoutSec=30; ErrorAction='Stop'}
+   $requestParams=@{Uri=$url; Method=$method; Headers=$script:headers; TimeoutSec=15; ErrorAction='Stop'}
    if($null -ne $body) { $requestParams.Body=($body|ConvertTo-Json -Depth 8 -Compress); $requestParams.ContentType='application/json; charset=utf-8' }
-   return Invoke-RestMethod @requestParams
+   return Invoke-AirtableRequest $requestParams
   } catch {
-   $code=0
-   if($null -ne $_.Exception.Response) { $code=[int]$_.Exception.Response.StatusCode }
+   $code=Get-AirtableHttpStatus $_
    # Stop immediately on an API failure; do not proceed to another batch.
    $detail=[string]$_.ErrorDetails.Message
    throw "Airtable request failed (HTTP $code). $detail Check token scopes, base access, field names and writable field types."
@@ -389,14 +458,13 @@ function Initialize-Airtable {
   $script:headers=@{Authorization='Bearer '+$savedCredential.Password.Trim()}
   $savedCredential=$null
   try {
-   $probe=Invoke-RestMethod -Uri ($endpoint+'?maxRecords=1&fields%5B%5D=id') -Method GET -Headers $script:headers -TimeoutSec 30 -ErrorAction Stop
+   $probe=Invoke-AirtableRequest @{Uri=($endpoint+'?maxRecords=1&fields%5B%5D=id');Method='GET';Headers=$script:headers;TimeoutSec=15;ErrorAction='Stop'}
    if($null -eq $probe.records) { throw 'Airtable returned an unexpected response.' }
    Log 'Saved Airtable login verified. Continuing automatically.'
    return
   } catch {
-   $status=0
-   if($null -ne $_.Exception.Response) { $status=[int]$_.Exception.Response.StatusCode }
-   if($status -ne 401 -and $status -ne 403) { throw "Airtable connection check failed (HTTP $status). Check network access and the configured base/table. No export started." }
+   $status=Get-AirtableHttpStatus $_
+   if($status -ne 401 -and $status -ne 403) { throw "Airtable connection check failed (HTTP $status). Check network access and the configured base/table. $($_.Exception.Message) No export started." }
    $script:headers=$null
    Log 'Saved Airtable login was rejected. Enter a valid token to update setup.'
   }
@@ -418,13 +486,12 @@ function Initialize-Airtable {
  } finally { $plain=$null; $entered=$null }
  $script:stage='Validate Airtable setup'
  try {
-  $probe=Invoke-RestMethod -Uri ($endpoint+'?maxRecords=1&fields%5B%5D=id') -Method GET -Headers $script:headers -TimeoutSec 30 -ErrorAction Stop
+  $probe=Invoke-AirtableRequest @{Uri=($endpoint+'?maxRecords=1&fields%5B%5D=id');Method='GET';Headers=$script:headers;TimeoutSec=15;ErrorAction='Stop'}
   if($null -eq $probe.records) { throw 'Airtable returned an unexpected response.' }
  } catch {
-  $status=0
-  if($null -ne $_.Exception.Response) { $status=[int]$_.Exception.Response.StatusCode }
+  $status=Get-AirtableHttpStatus $_
   $script:headers=$null
-  throw "Airtable setup check failed (HTTP $status). Check token, base access, network, and table. Token was not saved; no export started. Run Execute again after correcting it."
+  throw "Airtable setup check failed (HTTP $status). Check token, base access, network, and table. $($_.Exception.Message) Token was not saved; no export started. Run Execute again after correcting it."
  }
  $script:stage='Save encrypted Airtable setup'
  $temporaryToken=Join-Path $state ('token_'+[Guid]::NewGuid().ToString('N')+'.tmp')

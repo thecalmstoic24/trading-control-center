@@ -57,6 +57,34 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def test_contract_month_pins_confirmed_pair_and_survives_reload(self):
+        import contracts
+        self.queue.add(dict(self.body,ticker='NQ',localDraft=True,draft={'key':'a'*32,'ticker':'NQ'}))
+        first=self.queue.rows[0]
+        self.assertEqual(first['spec']['ticker'],'NQ DEC26')
+        self.assertEqual(first['draft']['ticker'],'NQ DEC26')
+        contracts.save(self.fleet.directory,'MAR27')
+        restored=PairQueue(self.fleet,Planning(),self.store)
+        self.assertEqual(restored.rows[0]['spec']['ticker'],'NQ DEC26')
+        self.queue.add(dict(self.body,ticker='MNQ',localDraft=True))
+        self.assertEqual(self.queue.rows[1]['spec']['ticker'],'MNQ MAR27')
+        self.queue.command('start',{})
+        self.assertEqual(first['spec']['ticker'],'NQ DEC26')
+        self.queue.tick()
+        pair=self.fleet.get_pair(first['pairId'])
+        deadline=time.monotonic()+3
+        while pair.operation.locked() and time.monotonic()<deadline:time.sleep(.01)
+        self.assertEqual(pair.settings['ticker'],'NQ DEC26')
+        self.assertTrue(all(c[2]['ticker']=='NQ DEC26' for c in self.agent.calls if c[1]=='prepare'))
+
+    def test_manual_pair_resolves_from_shared_contract_setting(self):
+        import contracts
+        contracts.save(self.fleet.directory,'JUN27')
+        identity=self.fleet.create_pair('vm-left','vm-right')
+        pair=self.fleet.get_pair(identity)
+        pair.prepare(dict(self.body,ticker='MNQ'),pair.generation)
+        self.assertEqual(pair.settings['ticker'],'MNQ JUN27')
+
     def enable_fast22(self):
         for slot,state in self.agent.states.items():
             state.update(backgroundExports=True,syncReceipt={'id':'baseline','completedUtc':'2026-09-14T11:00:00Z',

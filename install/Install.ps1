@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '16.0-preview.24'
+$version = '16.0-preview.25'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
@@ -40,7 +40,7 @@ function Add-DesktopShortcut([string]$Name,[string]$Script) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text='Trading Control Center - V16 Setup'
+$form.Text='Trading Control Center - '+$version+' Setup'
 $form.Font=New-Object Drawing.Font('Segoe UI',9)
 $form.AutoScaleDimensions=New-Object Drawing.SizeF(96,96)
 $form.AutoScaleMode='Dpi'

@@ -28,11 +28,12 @@ import webbrowser
 import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.24'
-AGENT_VERSIONS = {'16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.25'
+AGENT_VERSIONS = {'16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -153,7 +154,7 @@ class Center:
         self.prepared = None
         self.active = False
         self.generation = 0
-        self.settings = dict(ticker='NQ SEP26', stopLoss=0, profit=0, accounts={}, quantities={})
+        self.settings = dict(ticker='NQ', stopLoss=0, profit=0, accounts={}, quantities={})
         self.last_positions = {}
         self.logger = logging.getLogger('center-' + uuid.uuid4().hex)
         self.logger.setLevel(logging.INFO)
@@ -504,7 +505,7 @@ class Center:
                 raise ValueError('Operation cancelled by Close Both; prepare again.')
 
     def prepare(self, body, generation):
-        ticker = str(body.get('ticker', '')).strip().upper()
+        ticker = contracts.resolve(getattr(self, 'contract_directory', self.directory), body.get('ticker', ''))
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker):
             raise ValueError('Enter the NinjaTrader instrument, for example MNQ 09-26.')
         stop, profit, right_stop, right_profit = pair_amounts(body)
@@ -686,6 +687,7 @@ class Fleet:
         if pair.active and pair.pair != members:
             raise ValueError('Unresolved pair membership differs from its saved reservation.')
         pair.pair = members
+        pair.contract_directory = self.directory
         pair.config = self.catalog.config
         pair.poll_locks = self.catalog.poll_locks
         for slot in members:
@@ -1023,6 +1025,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed(auth=self.path.startswith('/api/')):
             return
+        if self.path == '/api/contracts':
+            try: self.reply(200, contracts.settings(self.server.center.directory))
+            except ValueError as exc: self.reply(400, {'error':str(exc)})
+            return
         if self.path == '/api/queue':
             self.reply(200, self.server.queue.snapshot())
             return
@@ -1032,7 +1038,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
@@ -1056,7 +1062,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError('Invalid request body.')
-            if self.path.startswith('/api/queue/'):
+            if self.path == '/api/contracts':
+                self.reply(200, contracts.save(self.server.center.directory, body.get('month','')))
+            elif self.path.startswith('/api/queue/'):
                 self.reply(200, self.server.queue.command(self.path.rsplit('/',1)[1], body))
             elif self.path == '/api/planning/view':
                 self.server.planning.select_view(body.get('key'),body.get('link'),body.get('name',''))

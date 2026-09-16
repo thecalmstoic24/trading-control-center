@@ -9,8 +9,8 @@
    if(!Number.isFinite(q)||q<=0)return;
    let l=side==='left'?q:q/factor(d),r=side==='right'?q:q*factor(d);
    const whole=n=>Math.abs(n-Math.round(n))<1e-8;
-   if((!whole(l)||!whole(r))&&d.ticker==='NQ SEP26'&&whole(l*10)&&whole(r*10)){
-     l*=10;r*=10;d.ticker='MNQ SEP26';d.notice='Switched both accounts to MNQ to preserve exposure with whole contracts.';
+   if((!whole(l)||!whole(r))&&/^NQ(?: |$)/.test(d.ticker)&&whole(l*10)&&whole(r*10)){
+     l*=10;r*=10;d.ticker=d.ticker.replace(/^NQ/,'MNQ');d.notice='Switched both accounts to MNQ to preserve exposure with whole contracts.';
    }
    d.leftQuantity=String(whole(l)?Math.round(l):round(l));d.rightQuantity=String(whole(r)?Math.round(r):round(r));
    if(!whole(l)||!whole(r))d.notice='This ratio needs fractional contracts. Adjust quantity; contracts will not be rounded.';
