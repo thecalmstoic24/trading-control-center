@@ -134,7 +134,10 @@ function Initialize-AtmEdit26($Handle,$Root) {
 }
 function Open-CalibratedAtm26($Handle,$Root) {
  $null=Get-CalibratedChart20
- if($null -eq $script:AtmEdit26){throw 'ATM Edit calibration required. Click Calibrate Chart 1, then Retry preparation.'}
+ if($null -eq $script:AtmEdit26){
+  if($null -ne $script:ManualEdit261){return Open-ManualAtm261 -Handle $Handle -Root $Root -Saved $script:ManualEdit261}
+  throw 'ATM Edit calibration required. Click Calibrate Chart 1 or Locate Edit button, then Retry preparation.'
+ }
  $selector=Find-UiaById -Root $Root -AutomationId 'ChartTraderControlATMStrategySelector'
  if($null -eq $selector){throw 'ATM Strategy box is unavailable. Calibrate Chart 1 again.'}
  $b=$selector.Current.BoundingRectangle
@@ -171,9 +174,16 @@ function Calibrate-Chart20 {
  Invalidate-Preparation
  $script:ControlPreparedId=''
  # Chart tracking remains usable if Edit calibration needs an ATM template selected.
- Initialize-AtmEdit26 -Handle $h -Root ([System.Windows.Automation.AutomationElement]::FromHandle($h))
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($h)
+ $script:ManualEdit261=$null
+ try {
+  Initialize-AtmEdit26 -Handle $h -Root $root
+  $calibrationStatus20.Text='Chart 1 and ATM Edit calibrated.'
+ } catch {
+  if(-not (Restore-ManualEdit261 -Handle $h -Root $root)){throw 'Cannot find ATM Edit automatically. Use Locate Edit button to save its location on this VM.'}
+  $calibrationStatus20.Text='Chart 1 calibrated using your saved Edit location.'
+ }
  $script:CalibrationRequired20=$false
- $calibrationStatus20.Text='Chart 1 and ATM Edit calibrated.'
 }
 $form.ClientSize=New-Object Drawing.Size(460,348)
 $calibrate20=New-Object Windows.Forms.Button

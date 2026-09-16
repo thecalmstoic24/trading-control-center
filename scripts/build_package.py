@@ -15,6 +15,7 @@ from upgrade_v14 import upgrade
 source = upgrade(source)
 extension = (ROOT / 'agent' / 'ControlV14.ps1').read_text(encoding='utf-8-sig')
 bridge = extension + '\n' + bridge + '\n' + (ROOT / 'agent' / 'ControlV16.ps1').read_text(encoding='utf-8-sig')
+bridge += '\n' + (ROOT / 'agent' / 'ManualEdit26.ps1').read_text(encoding='utf-8-sig')
 output = source.replace(anchor, bridge + '\n' + anchor + '\nexit 0')
 target = ROOT / 'agent' / 'Control_VM_Agent_v16.ps1'
 target.write_text(output, encoding='utf-8-sig')  # Windows PowerShell 5.1 needs BOM for Unicode.

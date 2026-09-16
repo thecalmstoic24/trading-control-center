@@ -7,11 +7,12 @@ $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
 $script:ControlVersion = '16.0-preview.26'
+$script:AgentBuild = '16.0-preview.26.1'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
 $agentNameInput.Text = $script:ControlIdentity.Name
-$form.Text = "Trading Agent $script:ControlVersion - $($script:ControlIdentity.Name) - V16"
+$form.Text = "Trading Agent $script:AgentBuild - $($script:ControlIdentity.Name) - V16"
 $heading.Text = "Trading Agent - $($script:ControlIdentity.Name)"
 $portInput.Value = 8789
 $peerPortInput.Value = 8789
@@ -96,6 +97,10 @@ function Get-ControlStatus {
 function Invoke-ControlCommand {
     param($Pending)
     if ($Pending.AgeSeconds -gt 10 -and $Pending.Command -notin @('close','peer_close')) { throw 'Command expired in queue; prepare again.' }
+    if($script:LocatingEdit261) {
+        if($Pending.Command -in @('close','peer_close')){Stop-LocateEdit261}
+        elseif($Pending.Command -ne 'status'){throw 'Locating ATM Edit; wait for calibration to finish.'}
+    }
     $request = $Pending.Body | ConvertFrom-Json
     if (-not $script:AgentStarted) { throw 'Start the agent and verify its peer connection first.' }
     if ($Pending.Command -eq 'peer' -or $Pending.Command -eq 'peer_close') {
