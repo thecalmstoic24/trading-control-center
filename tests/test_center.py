@@ -88,6 +88,29 @@ class Tests(unittest.TestCase):
         self.assertFalse(any(c[1] in ('entry','close') for c in self.fake.calls))
         self.assertEqual({c[0] for c in self.fake.calls if c[1]=='peer_check'},set(self.center.pair))
 
+    def test_authenticated_before_arm_rejection_is_retryable_without_recovery_entry(self):
+        self.prepare();original=self.center.transport
+        def transport(config,command,body=None,**kwargs):
+            if command=='entry':
+                self.fake.calls.append((config['id'],command,body))
+                return dict(ok=False,message='Timing unstable',errorCode='READINESS_BEFORE_ARM',entryNotSent=True,prepareId=body['prepareId'],bindingId=self.center.binding_id)
+            return original(config,command,body,**kwargs)
+        self.center.transport=transport
+        with self.assertRaises(module.EntryNotSentError):self.center.entry('buy',0)
+        self.assertFalse(self.center.active)
+        self.assertFalse((self.center.directory/'entry-unresolved.json').exists())
+        self.assertEqual(sum(c[1]=='entry' for c in self.fake.calls),1)
+        self.assertFalse(any(c[1]=='close' for c in self.fake.calls))
+
+    def test_mismatched_readiness_proof_remains_uncertain(self):
+        self.prepare();original=self.center.transport
+        def transport(config,command,body=None,**kwargs):
+            if command=='entry':return dict(ok=False,message='Timing unstable',errorCode='READINESS_BEFORE_ARM',entryNotSent=True,prepareId='wrong',bindingId=self.center.binding_id)
+            return original(config,command,body,**kwargs)
+        self.center.transport=transport
+        with self.assertRaisesRegex(ValueError,'Entry did not complete normally'):self.center.entry('buy',0)
+        self.assertEqual({c[0] for c in self.fake.calls if c[1]=='close'},set(self.center.pair))
+
     def test_both_peer_checks_precede_single_entry(self):
         self.prepare();self.center.entry('buy',0)
         commands=[c[1] for c in self.fake.calls]

@@ -1,0 +1,42 @@
+name: Windows release validation
+on:
+  push:
+    branches: [control-center-third-computer]
+    paths: ['agent/**', 'scripts/**', 'tests/**', '.github/workflows/validate.yml']
+permissions:
+  contents: read
+jobs:
+  agent:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Windows PowerShell 5.1 syntax and timing tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem agent,install -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
+            if($errors){throw ($errors | Out-String)}
+          }
+          & ./tests/Test-Preview27.ps1
+      - name: TLS timing, credentials and command transport
+        shell: pwsh
+        run: ./tests/Test-Gateway.ps1
+      - name: Saved Edit fallback regression
+        shell: powershell
+        run: ./tests/Test-Edit-Location.ps1
+      - name: JavaScript regressions
+        shell: pwsh
+        run: |
+          node tests/test_ratio.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_vm_error.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_queue_display.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_trading_layout.cjs
+          exit $LASTEXITCODE

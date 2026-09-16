@@ -17,7 +17,9 @@ try {
     $gateway.Start()
     $gateway.Publish('{"id":"test-agent","ok":true}')
     Check ((Call 'status').state.id -eq 'test-agent') 'TLS status failed'
-    Check ((Call 'peer_ping').version -eq '10.4') 'Timing compatibility failed'
+    $probe=Call 'peer_ping'
+    Check ($probe.version -eq '10.4' -and $probe.timingProtocol -eq 27) 'Timing protocol failed'
+    Check ($probe.clientStartTicks -gt $probe.callStartTicks -and $probe.clientEndTicks -ge $probe.clientStartTicks -and $probe.peerTicks -gt 0 -and $probe.peerFrequency -gt 0) 'Post-handshake timer samples missing'
     $gateway.PublishPeer('{"ok":true,"position":"Flat"}',150)
     Check ((Call 'peer_monitor').ok) 'Fresh peer status unavailable'
     Start-Sleep -Milliseconds 200

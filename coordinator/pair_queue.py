@@ -44,6 +44,11 @@ def trade_result(before, after):
     return round(money(after) - money(before), 2)
 
 
+def retryable_entry(row):
+    return bool(row.get('entryNotSent') or (
+        str(row.get('message','')).startswith('Entry did not complete normally: ')
+        and str(row.get('message','')).endswith('Entry stage readiness check: Estimated VM clock difference exceeds 500 ms. Synchronize Windows time.')))
+
 class PairStore:
     def __init__(self, planning):
         self.planning = planning
@@ -158,7 +163,11 @@ class PairQueue:
             os.replace(tmp, self.path)
 
     def snapshot(self):
-        with self.lock: return copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history})
+        with self.lock:
+            result=copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history})
+            for row in result['rows']:
+                row['canRetryReadiness']=row['status']=='Error' and retryable_entry(row)
+            return result
 
     def set_status(self, row, status, message):
         with self.lock:
@@ -311,19 +320,27 @@ class PairQueue:
                 self.message='Saved pair records will be synced again. No trade entry is retried.'
             elif action == 'retry-prepare':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
-                if not row or row['status']!='Error' or row.get('started'):
+                if not row or row['status']!='Error' or (row.get('started') and not retryable_entry(row)):
                     raise ValueError('Retry preparation is only available before any entry was requested.')
                 identity=row.get('pairId')
+                if row.get('started'):
+                    if identity not in self.fleet.pairs: raise ValueError('Reconnect and verify this pair before retrying; its live reservation is unavailable.')
+                    checked=self.fleet.get_pair(identity)
+                    if checked.operation.locked() or checked.sync_dispatch or any(j['status']=='running' for j in checked.jobs): raise ValueError('Wait for the existing operation before retrying.')
+                    checked.refresh_both()
+                    if checked.active or checked.opened_ids or not all(checked.safe_flat(a) and checked.target_matches(a) for a in checked.state()['agents']):
+                        raise ValueError('Retry requires both selected accounts freshly verified Flat, idle, and with no observed entry.')
                 if identity in self.fleet.pairs:
                     pair=self.fleet.get_pair(identity)
                     if pair.active or pair.operation.locked() or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs):
                         raise ValueError('Wait for the existing operation and verify positions before retrying.')
                     self.fleet.release_pair(identity)
-                for key in ('pairId','phase','job','before','beforeId','afterId','requested','deadline','refreshId'):
+                row.setdefault('attempts',[]).append({'started':row.get('started'),'message':row.get('message'),'retriedUtc':now(),'entryNotSent':retryable_entry(row)})
+                for key in ('pairId','phase','job','before','beforeId','afterId','requested','deadline','refreshId','started','closed','closedSequence','entryNotSent','checked22'):
                     row.pop(key,None)
-                row.update(status='Queued',dispatched=True,dirty=True,message='Preparation retry requested after calibration. Settings retained.')
+                row.update(status='Queued',dispatched=True,dirty=True,message='Retry requested. Rechecking account, preparation and timing before a new entry. Settings retained.')
                 self.running=True
-                self.message='Retrying preparation. No previous entry is retried.'
+                self.message='Retrying only the selected pair after pre-entry rejection; checks will run again.'
             elif action == 'skip-results':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or not (row['status']=='Awaiting results' or (row['status']=='Error' and row.get('closed'))): raise ValueError('Select a closed pair awaiting results.')
@@ -543,7 +560,9 @@ class PairQueue:
         if status=='Trading':
             pair.state()
             job=next((j for j in pair.jobs if j['id']==row.get('job')),None)
-            if job and job['status']=='error': raise ValueError(job['message'])
+            if job and job['status']=='error':
+                row['entryNotSent']=bool(job.get('entryNotSent'))
+                raise ValueError(job['message'])
             if pair.closed_sequence <= row['closedSequence']: return
             row['closed']=now(); row['deadline']=time.time()+(30 if row.get('fast22') else 300)
             self.set_status(row,'Awaiting results','Waiting for confirmed post-trade exports.'); return

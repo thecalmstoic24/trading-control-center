@@ -32,9 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.26.1'
+VERSION = '16.0-preview.27'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
-AGENT_VERSIONS = {'16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+AGENT_VERSIONS = {'16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -127,6 +127,14 @@ def agent_call(config, command, body=None, timeout=5, request_id=None):
     result['_rttMs'] = round((time.monotonic() - start) * 1000)
     return result
 
+
+class AgentReplyError(ValueError):
+    def __init__(self, message, response):
+        super().__init__(message)
+        self.response=response
+
+class EntryNotSentError(ValueError):
+    entry_not_sent=True
 
 class Center:
     def __init__(self, directory, transport=agent_call, persist=True):
@@ -440,7 +448,7 @@ class Center:
         response = self.transport(config, command, body or {}, timeout=timeout)
         if not response.get('ok'):
             # Agent-authenticated messages contain UI errors, never credentials.
-            raise ValueError(f"{self.name(slot)}: {str(response.get('message', 'Command rejected'))[:400]}")
+            raise AgentReplyError(f"{self.name(slot)}: {str(response.get('message', 'Command rejected'))[:400]}", response)
         return response
 
     def refresh_both(self):
@@ -501,7 +509,7 @@ class Center:
         except Exception as exc:
             with self.lock:
                 self.prepared = None
-                job.update(status='error', message=str(exc)[:500])
+                job.update(status='error', message=str(exc)[:500], entryNotSent=bool(getattr(exc,'entry_not_sent',False)))
             self.event(str(exc))
         finally:
             if command != 'close':
@@ -599,11 +607,11 @@ class Center:
             try: future.result()
             except Exception as exc: errors.append(self.name(slot)+': '+str(exc))
         if errors:
-            raise ValueError('Peer connection check failed; no entry sent. Update both agents to Preview 19 and verify their direct connection. '+'; '.join(errors))
+            raise EntryNotSentError('Peer connection check failed; no entry sent. Update both agents to Preview 19 and verify their direct connection. '+'; '.join(errors))
         self.event('Direct peer connection verified in both directions. Rechecking readiness before entry.' if len(self.pair)==2 else 'Single Pair: rechecking local readiness before entry.')
         self.refresh_both()
         if not all(self.safe_flat(a) and self.target_matches(a) and a['prepared'] and a['prepareId'] == prepared for a in self.state()['agents']):
-            raise ValueError('Readiness changed. Prepare both VMs again.')
+            raise EntryNotSentError('Readiness changed before entry was sent. Prepare both VMs again.')
         self.assert_generation(generation)
         with self.lock:
             self.assert_generation(generation)
@@ -618,6 +626,16 @@ class Center:
             self.assert_generation(generation)
             self.event(f'Pair entry accepted by {self.name(self.pair[0])}. Waiting for actual position observations; acceptance is not a fill.')
         except Exception as exc:
+            reply=exc.response if isinstance(exc,AgentReplyError) else {}
+            if (reply.get('errorCode')=='READINESS_BEFORE_ARM' and reply.get('entryNotSent') is True
+                    and reply.get('prepareId')==prepared and reply.get('bindingId')==self.binding_id):
+                self.refresh_both()
+                if not self.opened_ids and all(self.safe_flat(a) and self.target_matches(a) for a in self.state()['agents']):
+                    with self.lock:
+                        self.active=False
+                        (self.directory/'entry-unresolved.json').unlink(missing_ok=True)
+                    self.event('Readiness rejected before either entry was armed; both accounts independently verified Flat. Retry is available.')
+                    raise EntryNotSentError(str(exc)) from exc
             self.event('Entry outcome uncertain. Requesting recovery close on both VMs.')
             with self.lock:
                 self.generation += 1
@@ -1046,7 +1064,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:

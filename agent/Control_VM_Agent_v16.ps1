@@ -1356,6 +1356,7 @@ function Schedule-LocalAction {
         Coordinator = $Coordinator
         ArmedClick = $armedClick
         ArmedUtc = [DateTime]::UtcNow
+        ArmedTicks = [Diagnostics.Stopwatch]::GetTimestamp()
     }
     if ($ExecuteAtUtc -eq [DateTime]::MaxValue) {
         $executionStatus.Text = "$normalizedSide ARMED - waiting for synchronized commit"
@@ -1424,15 +1425,18 @@ function Invoke-PairedEntry {
 
         Schedule-LocalAction -Side $localSideNormalized -ExecuteAtUtc ([DateTime]::MaxValue) -PairId $pairId -Coordinator $true
         $executeAt = [DateTime]::UtcNow.AddMilliseconds($script:EntryLeadMs)
+        $executeTicks27=[PairTiming27]::DeadlineAfter($script:EntryLeadMs)
+        $peerTicks27=$script:TimingPlan27.PeerDeadline($executeTicks27)
         $script:EntryStage19='peer commit'
         $peerCommit = Send-PeerRequest -Payload ([ordered]@{
             command = 'commit'
             executeAtUtc = $executeAt.AddMilliseconds($script:PeerOffsetMs).ToString('o')
+            executeAtTicks = [string]$peerTicks27
             pairId = $pairId
         }) -TimeoutMilliseconds 3000
         if (-not $peerCommit.ok) { throw "Peer commit failed: $($peerCommit.message)" }
         $script:EntryStage19='local commit'
-        Commit-LocalAction -PairId $pairId -ExecuteAtUtc $executeAt
+        Commit-LocalAction -PairId $pairId -ExecuteAtUtc $executeAt -ExecuteAtTicks $executeTicks27
     } catch {
         $failure = $_.Exception.Message
         $script:EntryFault = $true
@@ -1631,7 +1635,7 @@ function Process-AgentRequest {
                     [System.Globalization.CultureInfo]::InvariantCulture,
                     [System.Globalization.DateTimeStyles]::RoundtripKind
                 ).ToUniversalTime()
-                Commit-LocalAction -PairId ([string]$request.pairId) -ExecuteAtUtc $executeAt
+                Commit-LocalAction -PairId ([string]$request.pairId) -ExecuteAtUtc $executeAt -ExecuteAtTicks ([long]$request.executeAtTicks)
                 # Do not traverse UI Automation in the time-critical commit acknowledgement.
                 $script:PairCoordinatorActive = $true
                 $script:PairEverOpened = $false
@@ -1776,21 +1780,22 @@ function Receive-OneAgentRequest {
 function Run-ScheduledActionIfDue {
     if ($null -eq $script:ScheduledAction -or $script:Busy) { return }
     if ($script:ScheduledAction.ExecuteAtUtc -eq [DateTime]::MaxValue -and
-        ([DateTime]::UtcNow - $script:ScheduledAction.ArmedUtc).TotalSeconds -gt 10) {
+        (([Diagnostics.Stopwatch]::GetTimestamp()-$script:ScheduledAction.ArmedTicks)/[double][Diagnostics.Stopwatch]::Frequency) -gt 10) {
         $script:ScheduledAction = $null
         $script:Prepared = $false
         $script:EntryFault = $true
         $executionStatus.Text = 'ARM EXPIRED: prepare again.'
         return
     }
-    if ([DateTime]::UtcNow -lt $script:ScheduledAction.ExecuteAtUtc) { return }
+    if($script:ScheduledAction.ExecuteAtTicks){if([PairTiming27]::RemainingMs([long]$script:ScheduledAction.ExecuteAtTicks) -gt 0){return}}
+    elseif ([DateTime]::UtcNow -lt $script:ScheduledAction.ExecuteAtUtc) { return }
 
     $action = $script:ScheduledAction
     $script:ScheduledAction = $null
     $script:Busy = $true
     $script:RemoteCommandActive = $true
     try {
-        $lateMs = ([DateTime]::UtcNow - $action.ExecuteAtUtc).TotalMilliseconds
+        $lateMs = if($action.ExecuteAtTicks){-[PairTiming27]::RemainingMs([long]$action.ExecuteAtTicks)}else{([DateTime]::UtcNow - $action.ExecuteAtUtc).TotalMilliseconds}
         Write-PairLog "FIRE pair=$($action.PairId) side=$($action.Side) lateness=$([int]$lateMs)ms"
         if ($action.Side -ne 'CLOSE' -and $lateMs -gt 250) { throw 'Entry missed its execution deadline; late click blocked.' }
         Fire-ArmedChartTraderClick -ArmedClick $action.ArmedClick
@@ -2225,8 +2230,8 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.26'
-$script:AgentBuild = '16.0-preview.26.1'
+$script:ControlVersion = '16.0-preview.27'
+$script:AgentBuild = '16.0-preview.27'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2502,7 +2507,15 @@ function Invoke-ControlCommand {
         if (-not $pairEnabled.Checked) { throw 'PAIR MODE is required.' }
         # No replacement trading protocol: invoke the tested V10.4 paired entry function.
         $script:RemoteCommandActive = $true
-        try { Invoke-PairedEntry -LocalSide $side } catch { throw ('Entry stage '+$script:EntryStage19+': '+$_.Exception.Message) } finally { $script:RemoteCommandActive = $false }
+        $script:EntryStage19='initial checks'
+        try { Invoke-PairedEntry -LocalSide $side } catch {
+            $message27='Entry stage '+$script:EntryStage19+': '+$_.Exception.Message
+            if($script:EntryStage19 -ceq 'readiness check' -and -not $script:ScheduledAction -and -not $script:PairCoordinatorActive) {
+                $script:Prepared=$false;$script:ControlPreparedId=''
+                return @{ok=$false;message=$message27;errorCode='READINESS_BEFORE_ARM';entryNotSent=$true;prepareId=[string]$request.prepareId;bindingId=[string]$script:BoundPeer.bindingId}
+            }
+            throw $message27
+        } finally { $script:RemoteCommandActive = $false }
         $script:ControlPreparedId = ''
         return @{ok=$true; message='Pair entry accepted; monitor actual positions.'}
     }
@@ -2970,6 +2983,49 @@ $locateTimer261=New-Object Windows.Forms.Timer
 $locateTimer261.Interval=100;$locateTimer261.Add_Tick({Tick-LocateEdit261})
 $locateEdit261.Add_Click({try{Start-LocateEdit261}catch{$calibrationStatus20.Text=$_.Exception.Message;Stop-LocateEdit261}})
 $form.Add_FormClosed({Stop-LocateEdit261;$locateTimer261.Dispose()})
+
+# Entry timers use measured peer monotonic counters; wall clocks are diagnostics only.
+$script:TimingPlan27=$null
+function Measure-PairTiming {
+ $script:TimingPlan27=$null
+ for($pass27=1;$pass27 -le 2;$pass27++) {
+  try {
+   $samples27=New-Object 'System.Collections.Generic.List[TimingSample27]'
+   for($i27=0;$i27 -lt 3;$i27++) {
+    $reply27=Send-PeerRequest -Payload ([ordered]@{command='ping'}) -TimeoutMilliseconds 1500
+    if(-not $reply27.ok -or $reply27.timingProtocol -ne 27){throw 'Update both selected VM agents to Preview 27 for coordinated entry timing.'}
+    $sample27=New-Object TimingSample27
+    $sample27.StartTicks=[long]$reply27.clientStartTicks;$sample27.EndTicks=[long]$reply27.clientEndTicks;$sample27.CallStartTicks=[long]$reply27.callStartTicks
+    $sample27.LocalFrequency=[long]$reply27.clientFrequency;$sample27.PeerTicks=[long]$reply27.peerTicks;$sample27.PeerFrequency=[long]$reply27.peerFrequency
+    $sample27.StartUtc=[DateTime]::Parse([string]$reply27.clientStartUtc).ToUniversalTime();$sample27.EndUtc=[DateTime]::Parse([string]$reply27.clientEndUtc).ToUniversalTime();$sample27.PeerUtc=[DateTime]::Parse([string]$reply27.timestampUtc).ToUniversalTime()
+    $samples27.Add($sample27)
+   }
+   $script:TimingPlan27=[PairTiming27]::Evaluate($samples27.ToArray())
+   $script:PeerOffsetMs=$script:TimingPlan27.Sample.OffsetMs
+   $script:EntryLeadMs=$script:TimingPlan27.LeadMs
+   Write-PairLog "TIMING27 offset=$([int]$script:PeerOffsetMs)ms measuredRTT=$([int]$script:TimingPlan27.Sample.RoundTripMs)ms lead=$script:EntryLeadMs ms; monotonic entry timers"
+   return
+  } catch {
+   $reason27=$_.Exception.Message
+   Write-PairLog "TIMING27 check $pass27 failed before arm: $reason27"
+   if($pass27 -eq 2 -or $reason27 -like 'Update both*'){throw $reason27}
+   Start-Sleep -Milliseconds 150
+  }
+ }
+}
+function Commit-LocalAction {
+ param([string]$PairId,[DateTime]$ExecuteAtUtc,[long]$ExecuteAtTicks=0)
+ if($null -eq $script:ScheduledAction){throw 'No action is armed.'}
+ if($script:ScheduledAction.PairId -cne $PairId){throw 'Pair ID does not match the armed action.'}
+ if($script:ScheduledAction.ExecuteAtUtc -ne [DateTime]::MaxValue){throw 'Action already committed. Duplicate commit blocked.'}
+ if($ExecuteAtTicks -le 0){throw 'Monotonic entry deadline missing. Update both VM agents to Preview 27.'}
+ [PairTiming27]::ValidateCommit($ExecuteAtTicks)
+ $script:ScheduledAction | Add-Member -NotePropertyName ExecuteAtTicks -NotePropertyValue $ExecuteAtTicks -Force
+ $script:ScheduledAction.ExecuteAtUtc=$ExecuteAtUtc
+ Write-PairLog "COMMIT27 pair=$PairId ahead=$([int][PairTiming27]::RemainingMs($ExecuteAtTicks))ms"
+ $executionStatus.Text="$($script:ScheduledAction.Side) COMMITTED with verified entry timer"
+ $executionStatus.ForeColor=[System.Drawing.Color]::DarkOrange
+}
 
 [void]$form.ShowDialog()
 exit 0

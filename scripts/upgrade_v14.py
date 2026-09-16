@@ -32,4 +32,12 @@ def upgrade(source):
     start=source.index('    $rect =',source.index('function Prepare-Trade'))
     end=source.index('    $saved = $false',start)
     source=source[:start]+"    $modal = Open-CalibratedAtm26 -Handle $chartHandle -Root $chartRoot\n\n"+source[end:]
+    source=source.replace("    $executeAt = [DateTime]::UtcNow.AddMilliseconds($script:EntryLeadMs)", "    $executeAt = [DateTime]::UtcNow.AddMilliseconds($script:EntryLeadMs)\n        $executeTicks27=[PairTiming27]::DeadlineAfter($script:EntryLeadMs)\n        $peerTicks27=$script:TimingPlan27.PeerDeadline($executeTicks27)")
+    source=source.replace("executeAtUtc = $executeAt.AddMilliseconds($script:PeerOffsetMs).ToString('o')", "executeAtUtc = $executeAt.AddMilliseconds($script:PeerOffsetMs).ToString('o')\n            executeAtTicks = [string]$peerTicks27")
+    source=source.replace('Commit-LocalAction -PairId $pairId -ExecuteAtUtc $executeAt', 'Commit-LocalAction -PairId $pairId -ExecuteAtUtc $executeAt -ExecuteAtTicks $executeTicks27')
+    source=source.replace('Commit-LocalAction -PairId ([string]$request.pairId) -ExecuteAtUtc $executeAt', 'Commit-LocalAction -PairId ([string]$request.pairId) -ExecuteAtUtc $executeAt -ExecuteAtTicks ([long]$request.executeAtTicks)')
+    source=source.replace('        ArmedUtc = [DateTime]::UtcNow', '        ArmedUtc = [DateTime]::UtcNow\n        ArmedTicks = [Diagnostics.Stopwatch]::GetTimestamp()')
+    source=source.replace('([DateTime]::UtcNow - $script:ScheduledAction.ArmedUtc).TotalSeconds -gt 10', '(([Diagnostics.Stopwatch]::GetTimestamp()-$script:ScheduledAction.ArmedTicks)/[double][Diagnostics.Stopwatch]::Frequency) -gt 10')
+    source=source.replace('    if ([DateTime]::UtcNow -lt $script:ScheduledAction.ExecuteAtUtc) { return }', '    if($script:ScheduledAction.ExecuteAtTicks){if([PairTiming27]::RemainingMs([long]$script:ScheduledAction.ExecuteAtTicks) -gt 0){return}}\n    elseif ([DateTime]::UtcNow -lt $script:ScheduledAction.ExecuteAtUtc) { return }')
+    source=source.replace('        $lateMs = ([DateTime]::UtcNow - $action.ExecuteAtUtc).TotalMilliseconds', '        $lateMs = if($action.ExecuteAtTicks){-[PairTiming27]::RemainingMs([long]$action.ExecuteAtTicks)}else{([DateTime]::UtcNow - $action.ExecuteAtUtc).TotalMilliseconds}')
     return source

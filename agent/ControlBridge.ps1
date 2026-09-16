@@ -6,8 +6,8 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.26'
-$script:AgentBuild = '16.0-preview.26.1'
+$script:ControlVersion = '16.0-preview.27'
+$script:AgentBuild = '16.0-preview.27'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -283,7 +283,15 @@ function Invoke-ControlCommand {
         if (-not $pairEnabled.Checked) { throw 'PAIR MODE is required.' }
         # No replacement trading protocol: invoke the tested V10.4 paired entry function.
         $script:RemoteCommandActive = $true
-        try { Invoke-PairedEntry -LocalSide $side } catch { throw ('Entry stage '+$script:EntryStage19+': '+$_.Exception.Message) } finally { $script:RemoteCommandActive = $false }
+        $script:EntryStage19='initial checks'
+        try { Invoke-PairedEntry -LocalSide $side } catch {
+            $message27='Entry stage '+$script:EntryStage19+': '+$_.Exception.Message
+            if($script:EntryStage19 -ceq 'readiness check' -and -not $script:ScheduledAction -and -not $script:PairCoordinatorActive) {
+                $script:Prepared=$false;$script:ControlPreparedId=''
+                return @{ok=$false;message=$message27;errorCode='READINESS_BEFORE_ARM';entryNotSent=$true;prepareId=[string]$request.prepareId;bindingId=[string]$script:BoundPeer.bindingId}
+            }
+            throw $message27
+        } finally { $script:RemoteCommandActive = $false }
         $script:ControlPreparedId = ''
         return @{ok=$true; message='Pair entry accepted; monitor actual positions.'}
     }

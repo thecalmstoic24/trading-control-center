@@ -333,6 +333,43 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
         self.tick_until('Trading')
 
+    def test_before_arm_readiness_retry_requires_proof_and_rechecks_the_pair(self):
+        self.enable_fast22();original=self.fleet.transport
+        def transport(config,command,body=None,**kwargs):
+            if command=='entry':
+                self.agent.calls.append((config['id'],command,body))
+                pair=next(p for p in self.fleet.pairs.values() if config['id'] in p.pair)
+                return dict(ok=False,message='Entry stage readiness check: Timing unstable',errorCode='READINESS_BEFORE_ARM',entryNotSent=True,prepareId=body['prepareId'],bindingId=pair.binding_id)
+            return original(config,command,body,**kwargs)
+        self.fleet.transport=transport
+        self.add_start();self.tick_until('Error');row=self.queue.rows[0]
+        self.assertTrue(row['started']);self.assertTrue(row['entryNotSent'])
+        self.assertTrue(self.queue.snapshot()['rows'][0]['canRetryReadiness'])
+        count=sum(c[1]=='entry' for c in self.agent.calls)
+        for _ in range(4):self.queue.tick()
+        self.assertEqual(sum(c[1]=='entry' for c in self.agent.calls),count)
+        # Account mismatch and a scheduled action both prevent retry, even with proof.
+        self.agent.states['vm-right']['account']='Different'
+        with self.assertRaisesRegex(ValueError,'freshly verified Flat'):self.queue.command('retry-prepare',{'id':row['id']})
+        self.agent.states['vm-right']['account']='Sim101';self.agent.states['vm-right']['scheduled']=True
+        with self.assertRaisesRegex(ValueError,'freshly verified Flat'):self.queue.command('retry-prepare',{'id':row['id']})
+        self.agent.states['vm-right']['scheduled']=False
+        self.fleet.transport=original
+        self.queue.command('retry-prepare',{'id':row['id']})
+        self.assertNotIn('started',row);self.assertEqual(row['status'],'Queued');self.assertEqual(len(row['attempts']),1)
+        self.tick_until('Trading')
+        pair=self.fleet.get_pair(row['pairId'])
+        deadline=time.monotonic()+3
+        while pair.operation.locked() and time.monotonic()<deadline:time.sleep(.01)
+        self.assertEqual(sum(c[1]=='entry' for c in self.agent.calls),count+1)
+
+    def test_legacy_clock_error_is_classified_but_generic_uncertainty_is_not(self):
+        from pair_queue import retryable_entry
+        message='Entry did not complete normally: FN-THUH: Entry stage readiness check: Estimated VM clock difference exceeds 500 ms. Synchronize Windows time.'
+        self.assertTrue(retryable_entry({'message':message}))
+        self.assertFalse(retryable_entry({'message':'Entry timeout: clock difference exceeds 500 ms'}))
+        self.assertFalse(retryable_entry({'message':message+' Command outcome unknown.'}))
+
     def test_retry_preparation_rejects_any_prior_entry(self):
         self.add_start();row=self.queue.rows[0]
         row.update(status='Error',started='2026-09-15T01:00:00Z')

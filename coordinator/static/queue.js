@@ -109,7 +109,7 @@
     if(pending(r)){if(r.duplicateOf&&!r.dispatched)add('Start','start-one');add('Cancel','cancel');}
     if(r.status==='Removing')add('Cancel','cancel');
     if(r.status==='Error'){
-      if(!r.started)add('Retry','retry-prepare');
+      if(!r.started||r.canRetryReadiness)add('Retry','retry-prepare');
       else if(r.closed&&r.afterId)add('Retry sync','retry');
       add('Cancel','resolve');
     }

@@ -56,7 +56,9 @@ public sealed class ControlGateway11 : IDisposable {
     // Peer-to-peer calls use the same pinned TLS envelope as the coordinator.
     public static Task<string> Send(string host,int port,string pin,string credential,string command,string body,int timeout) {
         return Task.Run(delegate {
+            long callStart=Stopwatch.GetTimestamp();
             using(TcpClient c=new TcpClient()) {
+                c.NoDelay=true;
                 var connect=c.BeginConnect(host,port,null,null);
                 using(WaitHandle ready=connect.AsyncWaitHandle) {
                     if(!ready.WaitOne(command=="peer_ping" ? 5000 : 2500)) throw new IOException("Peer TCP connection timed out before this request was sent (port 8789)");
@@ -75,9 +77,16 @@ public sealed class ControlGateway11 : IDisposable {
                     using(StreamReader reader=new StreamReader(tls,new UTF8Encoding(false),false,1024,true))
                     using(StreamWriter writer=new StreamWriter(tls,new UTF8Encoding(false),1024,true)) {
                         writer.AutoFlush=true;
+                        long startTicks=Stopwatch.GetTimestamp(); DateTime startUtc=DateTime.UtcNow;
                         writer.WriteLine(credential);writer.WriteLine(Guid.NewGuid().ToString("N"));
                         writer.WriteLine(command);writer.WriteLine(body);
-                        return Line(reader,65536);
+                        string answer=Line(reader,65536);
+                        long endTicks=Stopwatch.GetTimestamp(); DateTime endUtc=DateTime.UtcNow;
+                        if(command=="peer_ping" && answer.StartsWith("{")) {
+                            string measurements="\"clientStartUtc\":\""+startUtc.ToString("o")+"\",\"clientEndUtc\":\""+endUtc.ToString("o")+"\",\"clientStartTicks\":"+startTicks+",\"clientEndTicks\":"+endTicks+",\"clientFrequency\":"+Stopwatch.Frequency+",\"callStartTicks\":"+callStart+",";
+                            answer=answer.Insert(1,measurements);
+                        }
+                        return answer;
                     }
                 }
             }
@@ -113,6 +122,7 @@ public sealed class ControlGateway11 : IDisposable {
         return difference==0;
     }
     private void Handle(TcpClient client) {
+        client.NoDelay=true;
         client.ReceiveTimeout=5000; client.SendTimeout=5000;
         using(SslStream tls=new SslStream(client.GetStream(),false)) {
             tls.ReadTimeout=5000; tls.WriteTimeout=5000;
@@ -125,7 +135,8 @@ public sealed class ControlGateway11 : IDisposable {
                 Guid parsed;
                 if(!Guid.TryParseExact(id,"N",out parsed)) throw new IOException("Invalid request ID");
                 if(command=="peer_ping") {
-                    writer.WriteLine("{\"ok\":true,\"version\":\"10.4\",\"timestampUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}");return;
+                    long ticks=Stopwatch.GetTimestamp();
+                    writer.WriteLine("{\"ok\":true,\"version\":\"10.4\",\"timingProtocol\":27,\"peerTicks\":"+ticks+",\"peerFrequency\":"+Stopwatch.Frequency+",\"timestampUtc\":\""+DateTime.UtcNow.ToString("o")+"\"}");return;
                 }
                 if(command=="peer_monitor") {
                     lock(gate) writer.WriteLine(Stopwatch.GetTimestamp()<peerFreshUntil ? peerCache : "{\"ok\":false,\"message\":\"Peer state stale\",\"sampleAgeMs\":999999}");
@@ -160,4 +171,45 @@ public sealed class ControlGateway11 : IDisposable {
         }
     }
     public void Dispose() { running=false; listener.Stop(); CancelQueued(); }
+}
+
+// Pure timing calculations are separated from networking and UI for deterministic tests.
+public sealed class TimingSample27 {
+ public long StartTicks,EndTicks,CallStartTicks,LocalFrequency,PeerTicks,PeerFrequency;
+ public DateTime StartUtc,EndUtc,PeerUtc;
+ public double RoundTripMs { get { return (EndTicks-StartTicks)*1000.0/LocalFrequency; } }
+ public double MidTicks { get { return StartTicks+(EndTicks-StartTicks)/2.0; } }
+ public double OffsetMs { get { return (PeerUtc-StartUtc).TotalMilliseconds-RoundTripMs/2; } }
+}
+public sealed class TimingPlan27 {
+ public TimingSample27 Sample;
+ public int LeadMs;
+ public long CreatedTicks;
+ public long PeerDeadline(long localDeadline) {
+  if((Stopwatch.GetTimestamp()-CreatedTicks)/(double)Stopwatch.Frequency>10) throw new InvalidOperationException("Timing sample expired; check readiness again.");
+  return checked((long)Math.Round(Sample.PeerTicks+(localDeadline-Sample.MidTicks)*Sample.PeerFrequency/Sample.LocalFrequency));
+ }
+}
+public static class PairTiming27 {
+ public static TimingPlan27 Evaluate(TimingSample27[] samples) {
+  if(samples==null || samples.Length<3) throw new InvalidOperationException("Three timing samples are required.");
+  TimingSample27 best=null;double maxCall=0;
+  foreach(TimingSample27 s in samples) {
+   if(s.LocalFrequency<=0 || s.PeerFrequency<=0 || s.StartTicks<=0 || s.PeerTicks<=0 || s.EndTicks<s.StartTicks || s.CallStartTicks>s.StartTicks) throw new InvalidOperationException("Invalid timing response.");
+   if(s.RoundTripMs>500) throw new InvalidOperationException("Peer timing response is too slow; check VM load or network.");
+   if(Math.Abs((s.EndUtc-s.StartUtc).TotalMilliseconds-s.RoundTripMs)>25) throw new InvalidOperationException("Windows time changed during measurement; rechecking is required.");
+   maxCall=Math.Max(maxCall,(s.EndTicks-s.CallStartTicks)*1000.0/s.LocalFrequency);
+   if(best==null || s.RoundTripMs<best.RoundTripMs)best=s;
+  }
+  if(best.RoundTripMs>150 || maxCall>1000) throw new InvalidOperationException("Timing uncertainty is too high; check VM load or network.");
+  foreach(TimingSample27 s in samples) {
+   if(s.LocalFrequency!=best.LocalFrequency || s.PeerFrequency!=best.PeerFrequency)throw new InvalidOperationException("Timer frequency changed.");
+   double predicted=best.PeerTicks+(s.MidTicks-best.MidTicks)*best.PeerFrequency/best.LocalFrequency;
+   if(Math.Abs(s.PeerTicks-predicted)*1000.0/best.PeerFrequency>100 || Math.Abs(s.OffsetMs-best.OffsetMs)>100)throw new InvalidOperationException("Peer timing is unstable; check VM load or clock changes.");
+  }
+  return new TimingPlan27 { Sample=best,LeadMs=(int)Math.Max(1500,4*maxCall+500),CreatedTicks=Stopwatch.GetTimestamp() };
+ }
+ public static long DeadlineAfter(int milliseconds) {return Stopwatch.GetTimestamp()+(long)(milliseconds*Stopwatch.Frequency/1000.0);}
+ public static double RemainingMs(long deadline) {return (deadline-Stopwatch.GetTimestamp())*1000.0/Stopwatch.Frequency;}
+ public static void ValidateCommit(long deadline) {double ahead=RemainingMs(deadline);if(ahead<100 || ahead>5000)throw new InvalidOperationException("Committed timer deadline must be 100 milliseconds to 5 seconds in the future.");}
 }

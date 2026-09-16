@@ -132,3 +132,10 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 .contract-settings{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px}.contract-settings label{display:inline-block}.contract-settings input{width:90px;display:inline-block}.contract-settings p{font-size:12px;margin:6px 0 0}
 
 #queue-toast{position:fixed;right:24px;bottom:24px;z-index:10000;padding:16px 22px;background:#163e59;color:white;border-radius:8px;box-shadow:0 4px 20px #0003;max-width:calc(100vw - 48px)}
+
+.trading-split{display:grid;grid-template-columns:minmax(0,var(--pair-share,75fr)) 10px minmax(0,var(--activity-share,25fr));align-items:start;gap:0}
+.trading-split>.queue-section,.trading-split>.activity{min-width:0;margin-top:0}
+.trading-split>.activity{overflow:hidden}.trading-split>.activity .section-title{flex-wrap:wrap}.trading-split .event{overflow-wrap:anywhere}
+#trading-divider{cursor:col-resize;align-self:stretch;min-height:180px;touch-action:none;border-left:2px solid var(--line);margin:0 4px}
+#trading-divider:hover,#trading-divider:focus{border-color:var(--cyan);outline:0}
+@media(max-width:850px){.trading-split{display:block}#trading-divider{display:none}.trading-split>.activity{margin-top:20px}}
