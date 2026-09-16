@@ -14,7 +14,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    const body=req.postDataJSON();writes.push({path:url.pathname,body});result={ok:true};
    if(url.pathname==='/api/queue/add'){
     assert.ok(Buffer.byteLength(req.postData())<16384,'Confirmation exceeded server limit');
-    queue.rows.push({id:'DRAFT-'+body.draftKey,key:body.draftKey,draft:body.draft,localDraft:true,status:'Queued',spec:{...body,names:{vm0:'FFF-TRINH',vm1:'FN-JASON'},masters:{vm0:'FFF-TRINH',vm1:'FN-JASON'}}});
+    const d=body.draft;queue.rows.push({id:'DRAFT-'+body.draftKey,key:body.draftKey,draft:d,localDraft:true,status:'Queued',spec:{...body,left:d.left?'left':null,right:d.right?'right':null,accounts:{left:d.left?.account,right:d.right?.account},quantities:{left:+d.leftQuantity,right:+d.rightQuantity},names:{left:'Unassigned VM',right:'Unassigned VM'},masters:{left:d.left?.master,right:d.right?.master}}});
    }
    if(url.pathname==='/api/queue/edit-draft'){const row=queue.rows.find(r=>r.id===body.id);queue.rows=queue.rows.filter(r=>r!==row);result={draft:row};}
   } else if(url.pathname==='/api/state')result={fleet,pairs:[],events:[],vmEvents,limits:{vms:50,pairs:20}};
@@ -42,11 +42,19 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const card=page.locator('.draft-card');await card.locator('[data-value-key=profit]').fill('350');await card.locator('[data-value-key=stopLoss]').fill('400');
  await card.getByRole('button',{name:'Confirm pair',exact:true}).click();
  await page.locator('#queue-table').getByRole('button',{name:'Edit',exact:true}).waitFor();
- const sent=writes.find(w=>w.path==='/api/queue/add').body;assert.equal(sent.ticker,'NQ');assert.equal(sent.quantities.vm0,1);assert.equal(sent.draft.left.metrics.Notes,undefined);assert.equal(sent.draft.left.metrics['Realized PnL'],-25);
+ const sent=writes.find(w=>w.path==='/api/queue/add').body;assert.equal(sent.deferVM,true);assert.equal(sent.ticker,'NQ');assert.equal(sent.quantities.vm0,1);assert.equal(sent.draft.left.metrics.Notes,undefined);assert.equal(sent.draft.left.metrics['Realized PnL'],-25);
  await page.locator('#queue-table').getByRole('button',{name:'Edit',exact:true}).click();await card.waitFor();
  assert.equal(await card.locator('[data-value-key=profit]').inputValue(),'350');assert.equal(await card.locator('[data-value-key=stopLoss]').inputValue(),'400');assert.equal(await card.locator('[data-value-key=leftQuantity]').inputValue(),'1');
+ // Confirm again with no matched/connected VMs; the account settings still reach the queue.
+ fleet.splice(0);await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fleet-updated',{detail:{fleet:[],pairs:[]}})));
+ await card.getByRole('button',{name:'Confirm pair',exact:true}).click();
+ await page.locator('#queue-table').getByRole('button',{name:'Edit',exact:true}).waitFor();
+ const unmatched=writes.filter(w=>w.path==='/api/queue/add').at(-1).body;
+ assert.equal(unmatched.deferVM,true);assert.equal(unmatched.left,null);assert.equal(unmatched.right,null);
+ assert.equal(unmatched.draft.left.account,'FFF236159');assert.equal(unmatched.draft.right.account,'FNTEST');
+ assert.equal(unmatched.draft.leftQuantity,'1');
  await page.setViewportSize({width:740,height:900});await page.locator('#tab-vms').click();assert.equal(await page.locator('#vms-divider').isVisible(),false);
  assert.ok((await page.locator('.vm-log-pane').boundingBox()).y>(await page.locator('.vm-list-pane').boundingBox()).y);
  assert.deepEqual(errors,[]);assert.ok(!writes.some(w=>w.path==='/api/action'));
- await browser.close();console.log('PASS: full-page width, VM 80/20 panel, resizing and persistence, timestamped activity, narrow-screen stacking, oversized-record confirmation and editable settings.');
+ await browser.close();console.log('PASS: full-page width, VM 80/20 panel, resizing and persistence, timestamped activity, narrow-screen stacking, oversized-record confirmation, editable settings and confirmation without VM matches.');
 })().catch(e=>{console.error(e);process.exit(1)});

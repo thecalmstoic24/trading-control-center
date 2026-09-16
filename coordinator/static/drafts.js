@@ -105,7 +105,7 @@
           const remove=make('button','×');remove.type='button';remove.className='quiet account-remove';remove.setAttribute('aria-label','Remove account '+item.account);
           remove.onclick=()=>{delete d[side];save();render();usage();};block.append(remove);
           const choices=chooseVM(item);
-          const note=make('small',!choices.length?'No registered VM lists this account yet. Refresh it in VMs.':!item.vm?'Multiple VMs match this account. Resolve its registration before confirming.':'');note.className='vm-match-note';block.append(note);
+          const note=make('small',!choices.length?'VM matching will run when the queue starts.':!item.vm?'Multiple VMs list this account. The queue will wait until one VM matches.':'');note.className='vm-match-note';block.append(note);
         }
         if(!item){
           const add=make('button','+ Add selected account');add.type='button';add.className='empty-add';add.onclick=e=>{e.stopPropagation();fillSlot(d,side);};block.append(add);
@@ -133,12 +133,11 @@
         e.preventDefault();if(inFlight.has(d.key)||problem(d))return;
         if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
         const left=d.left?.vm,right=d.right?.vm;
-        if((d.left&&!left)||(d.right&&!right)||left===right){message.textContent='Both accounts need an unambiguous match on two different registered VMs.';return;}
-        const [a,b]=d.ratio.split(':').map(Number);
+                const [a,b]=d.ratio.split(':').map(Number);
         if(Number(d.leftQuantity)*b!==Number(d.rightQuantity)*a){message.textContent='Adjust quantity to whole contracts matching the ratio.';return;}
         inFlight.add(d.key);disabled.disabled=true;confirm.textContent='Adding…';
         try{
-          await api('/api/queue/add',{localDraft:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+          await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
           drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
           window.dispatchEvent(new Event('queue-refresh'));
         }catch(err){d.error=err.message;save();}finally{inFlight.delete(d.key);render();usage();}
@@ -161,7 +160,7 @@
   window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];pairs=e.detail.pairs||[];
     for(const d of drafts)for(const side of ['left','right'])if(d[side]){
       const choices=chooseVM(d[side]),note=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .vm-match-note`);
-      if(note)note.textContent=!choices.length?'No registered VM lists this account yet. Refresh it in VMs.':!d[side].vm?'Multiple VMs match this account. Resolve its registration before confirming.':'';
+      if(note)note.textContent=!choices.length?'VM matching will run when the queue starts.':!d[side].vm?'Multiple VMs list this account. The queue will wait until one VM matches.':'';
     }usage();});
   window.addEventListener('queue-updated',e=>{
     queued=e.detail.rows||[];const keys=new Set(queued.map(r=>r.key));const old=drafts.length;drafts=drafts.filter(d=>!keys.has(d.key));

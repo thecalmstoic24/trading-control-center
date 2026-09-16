@@ -2,7 +2,7 @@ name: Windows release validation
 on:
   push:
     branches: [control-center-third-computer]
-    paths: ['agent/**', 'scripts/**', 'tests/**', '.github/workflows/validate.yml']
+    paths: ['agent/**', 'coordinator/**', 'scripts/**', 'tests/**', '.github/workflows/validate.yml']
 permissions:
   contents: read
 jobs:
@@ -24,6 +24,7 @@ jobs:
           }
           & ./tests/Test-Preview27.ps1
           & ./tests/Test-Preview28.ps1
+          & ./tests/Test-Manual-Sync.ps1
       - name: TLS timing, credentials and command transport
         shell: pwsh
         run: ./tests/Test-Gateway.ps1
@@ -42,6 +43,8 @@ jobs:
           node tests/test_trading_layout.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_draft_payload.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_vm_sync.cjs
           exit $LASTEXITCODE
 
       - name: Browser layout and confirmation regression

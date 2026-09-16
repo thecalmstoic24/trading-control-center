@@ -20,6 +20,84 @@ class FleetTests(unittest.TestCase):
             self.fleet.observe(slot)
         self.a=self.fleet.create_pair(*self.ids[:2])
         self.b=self.fleet.create_pair(*self.ids[2:])
+    def test_startup_refresh_once_per_agent_process_and_old_agents_unchanged(self):
+        slot='vm-left'
+        with patch.object(self.fleet,'refresh_vm') as refresh:
+            self.fleet.refresh_on_startup(slot);refresh.assert_not_called()
+            self.fake.states[slot]['agentSession']='a'*32;self.fleet.observe(slot)
+            self.fleet.refresh_on_startup(slot);refresh.assert_called_once_with(slot)
+            self.fleet.vm_refresh[slot]={'status':'complete'}
+            for _ in range(3):self.fleet.refresh_on_startup(slot)
+            self.assertEqual(refresh.call_count,1)
+            self.fake.states[slot]['agentSession']='b'*32;self.fleet.observe(slot)
+            self.fleet.refresh_on_startup(slot);self.assertEqual(refresh.call_count,2)
+
+    def test_startup_refresh_defers_active_busy_and_calibrating_vm(self):
+        slot='vm-left';self.fake.states[slot]['agentSession']='a'*32
+        pair=self.fleet.get_pair(self.a)
+        with patch.object(self.fleet,'refresh_vm') as refresh:
+            for field in ('busy','scheduled','calibrationRequired'):
+                self.fake.states[slot][field]=True;self.fleet.observe(slot)
+                self.fleet.refresh_on_startup(slot);refresh.assert_not_called()
+                self.fake.states[slot][field]=False
+            self.fleet.observe(slot);pair.active=True
+            self.fleet.refresh_on_startup(slot);refresh.assert_not_called()
+            pair.active=False;pair.prepared='prepared'
+            self.fleet.refresh_on_startup(slot);refresh.assert_not_called()
+            pair.prepared=None
+            self.fleet.refresh_on_startup(slot);refresh.assert_called_once_with(slot)
+
+    def test_startup_refresh_failure_backoff_and_inflight_dedup(self):
+        slot='vm-left';self.fake.states[slot]['agentSession']='a'*32;self.fleet.observe(slot)
+        with patch.object(self.fleet,'refresh_vm') as refresh:
+            self.fleet.refresh_on_startup(slot)
+            self.fleet.vm_refresh[slot]={'status':'running'}
+            for _ in range(3):self.fleet.refresh_on_startup(slot)
+            self.assertEqual(refresh.call_count,1)
+            self.fleet.vm_refresh[slot]={'status':'error'}
+            self.fleet.refresh_on_startup(slot);self.fleet.refresh_on_startup(slot)
+            self.assertEqual(refresh.call_count,1)
+            self.fleet.startup_refresh[slot]['retryAt']=0
+            self.fleet.refresh_on_startup(slot);self.assertEqual(refresh.call_count,2)
+
+    def test_vm_sync_targets_only_selected_agent_and_preserves_blank_account(self):
+        self.fake.states['vm-left'].update(manualSync=True,account='')
+        self.fake.calls.clear();reply=self.fleet.sync_vm('vm-left')
+        self.assertTrue(reply['ok'])
+        self.assertEqual([(slot,cmd) for slot,cmd,_ in self.fake.calls if cmd!='status'],[('vm-left','manual_sync')])
+        self.assertEqual(self.fake.states['vm-left']['account'],'')
+        self.assertTrue(any('Sync Airtable requested' in event['message'] for event in self.fleet.vm_events))
+        self.assertFalse(self.fleet.vm_sync_requests)
+
+    def test_vm_sync_can_request_deferral_on_busy_agent(self):
+        self.fake.states['vm-left'].update(manualSync=True,busy=True,pairActive=True)
+        self.fleet.get_pair(self.a).active=True
+        self.fleet.sync_vm('vm-left')
+        self.assertEqual(sum(command=='manual_sync' for _,command,_ in self.fake.calls),1)
+        self.assertTrue(self.fleet.get_pair(self.a).active)
+        self.assertFalse(any(command in ('prepare','entry','close') for _,command,_ in self.fake.calls))
+
+    def test_vm_sync_unsupported_disconnected_and_duplicate_requests(self):
+        with self.assertRaisesRegex(ValueError,'Update this VM'):self.fleet.sync_vm('vm-left')
+        self.fake.states['vm-left']['manualSync']=True
+        self.fake.fail.add(('vm-left','status'))
+        with self.assertRaisesRegex(ValueError,'disconnected'):self.fleet.sync_vm('vm-left')
+        self.fake.fail.clear();self.fleet.vm_sync_requests.add('vm-left')
+        self.assertIn('already',self.fleet.sync_vm('vm-left')['message'])
+        self.fleet.vm_sync_requests.clear();self.fake.states['vm-left']['manualSyncPending']=True
+        self.assertIn('already',self.fleet.sync_vm('vm-left')['message'])
+        self.assertFalse(any(command=='manual_sync' for _,command,_ in self.fake.calls))
+
+    def test_vm_sync_timeout_never_resends(self):
+        self.fake.states['vm-left']['manualSync']=True
+        original=self.fleet.get_pair(self.a).transport;attempts=[]
+        def transport(config,command,body=None,**kwargs):
+            if command=='manual_sync':attempts.append(command);raise TimeoutError('Lost reply')
+            return original(config,command,body,**kwargs)
+        self.fleet.get_pair(self.a).transport=transport
+        with self.assertRaises(TimeoutError):self.fleet.sync_vm('vm-left')
+        self.assertEqual(attempts,['manual_sync']);self.assertFalse(self.fleet.vm_sync_requests)
+
     def test_vm_refresh_updates_owned_shared_account_list(self):
         self.fake.states['vm-left']['accounts']=['Sim101','MFF-NEW']
         self.fleet.refresh_vm('vm-left')

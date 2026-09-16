@@ -6,8 +6,9 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.28'
-$script:AgentBuild = '16.0-preview.28'
+$script:AgentSession29 = [Guid]::NewGuid().ToString('N')
+$script:ControlVersion = '16.0-preview.29'
+$script:AgentBuild = '16.0-preview.29'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -74,6 +75,9 @@ function Get-ControlStatus {
     $state['accounts'] = @($script:Accounts14)
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
+    $state['manualSync'] = $true
+    $state['agentSession'] = $script:AgentSession29
+    $state['manualSyncPending'] = [bool](($script:Worker14 -and $script:WorkerMode14 -eq 'export') -or (Test-Path (Join-Path $controlDirectory 'sync-manual.json')))
     $state['singlePair'] = $true
     $state['skipResults'] = $true
     $state['backgroundExports'] = $true
@@ -112,6 +116,10 @@ function Invoke-ControlCommand {
         if ($Pending.Command -eq 'peer_close') { $script:ControlGateway.CancelQueued() }
         $request | Add-Member -NotePropertyName token -NotePropertyValue $secretInput.Text -Force
         return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
+    }
+    if ($Pending.Command -eq 'manual_sync') {
+        Request-ManualSync15
+        return @{ok=$true;message=$script:Sync14}
     }
     if ($Pending.Command -eq 'accounts') { Start-Worker14 -Mode 'accounts' -RefreshId ([string]$request.refreshId); return @{ok=$true;message='Reading account list.'} }
     if ($Pending.Command -eq 'skip_results') {

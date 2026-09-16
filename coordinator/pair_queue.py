@@ -24,6 +24,7 @@ from ratios import pair_amounts, validate_quantities
 PAIR_TABLE = 'tblHhpDgF7rYPQOaA'
 PENDING = {'Queued', 'Waiting'}
 TERMINAL = {'Complete', 'Cancelled', 'Removing'}
+RESULT_WAIT_SECONDS = 30
 
 
 def slots(spec):
@@ -149,6 +150,7 @@ class PairQueue:
             saved = json.loads(self.path.read_text()); self.rows = saved['rows']; self.next_id = saved['nextId']; self.history = saved.get('history', [])
             # A restart never resumes entry, even if a previous command response was lost.
             for row in self.rows:
+                row.pop('vmMatchRetryAt',None)
                 if row['status'] not in PENDING | TERMINAL:
                     row['status'] = 'Error'; row['message'] = 'Coordinator restarted. No entry will be retried. Review the pair in Trading.'
                     row['dirty'] = True
@@ -175,7 +177,8 @@ class PairQueue:
             row.update(status=status, message=message, dirty=True)
             if status in {'Complete','Cancelled'}: row.setdefault('completedUtc', now())
             self.save()
-        for slot in slots(row['spec']): self.fleet.vm_event(slot,row['id']+' · '+status+' · '+message)
+        for slot in slots(row['spec']):
+            if slot in self.fleet.catalog.config: self.fleet.vm_event(slot,row['id']+' · '+status+' · '+message)
 
     def sync(self, row):
         # Queue mutation and background sync are serialized by io.
@@ -191,7 +194,7 @@ class PairQueue:
                     raise ValueError('Invalid draft identity.')
                 existing = next((r for r in self.rows + self.history if r['key']==draft_key),None)
                 if existing: return existing['id']
-            spec = self.validate(body)
+            spec = self.validate(body, defer_vm=body.get("localDraft") is True and body.get("deferVM") is True)
             local = body.get('localDraft') is True
             remote = [] if local else self.store.records(PAIR_TABLE)
             maximum = max([int(r.get('fields', {}).get('Pair ID', '')[5:]) for r in remote
@@ -211,16 +214,34 @@ class PairQueue:
                 # Retain the durable item; refresh shows the saved item and sync error.
             return row['id']
 
-    def validate(self, body):
+    def validate(self, body, defer_vm=False):
+        if defer_vm:
+            draft=body.get('draft')
+            if not isinstance(draft,dict): raise ValueError('Account draft is required.')
+            body=copy.deepcopy(body)
+            body['accounts']={}; body['quantities']={}
+            for side in ('left','right'):
+                item=draft.get(side)
+                body[side]=side if item else None
+                if not item: continue
+                if not isinstance(item,dict) or not isinstance(item.get('account'),str) or not item['account'].strip():
+                    raise ValueError('Select an account for each populated side.')
+                body['accounts'][side]=item['account']
+                try: value=float(draft.get(side+'Quantity',''))
+                except (ValueError,TypeError): raise ValueError('Quantity must be a whole number from 1 to 1000.')
+                if not math.isfinite(value) or not value.is_integer(): raise ValueError('Quantity must be a whole number from 1 to 1000.')
+                body['quantities'][side]=int(value)
         left, right = body.get('left'), body.get('right')
-        with self.fleet.lock:
-            config = self.fleet.catalog.config
+        if defer_vm:
             members=slots(body)
-            if not members or len(set(members))!=len(members) or any(s not in config for s in members): raise ValueError('Choose one registered VM or two different registered VMs.')
-            if len(members)==1 and not self.fleet.view(members[0]).get('singlePair'): raise ValueError('Update the selected VM to Preview 23 for Single Pair.')
-            names = {s: self.fleet.catalog.name(s) for s in members}
-            available = {s: self.fleet.view(s)['accounts'] for s in members}
+            if not members: raise ValueError('Choose at least one account.')
+            names={s:'Unassigned VM' for s in members}
+            available={s:[body['accounts'][s]] for s in members}
+        else:
+            members, names, available = self.validate_vms(body)
         ticker = contracts.resolve(self.fleet.directory, body.get('ticker', ''))
+        # Trade amounts and Airtable identities are validated even before VM matching.
+
         if not re.fullmatch(r'[A-Z0-9][A-Z0-9 .\-/]{0,29}', ticker): raise ValueError('Enter a valid instrument.')
         direction = body.get('direction')
         if direction not in ('buy', 'sell'): raise ValueError('Select the pair direction.')
@@ -250,8 +271,51 @@ class PairQueue:
             if funds[0] and funds[0]==funds[1]: raise ValueError('Same fund: choose accounts from different funds.')
         if len(members)==2 and accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
         if len(members)==2: validate_quantities(dict(body, quantities=quantities), left, right)
-        return dict(**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
+        return dict(**({'vmMatchPending':True} if defer_vm else {}),**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
                     names=names,masters=masters,records=records,balances=balances,metrics=metrics,**amounts)
+
+    def validate_vms(self, body):
+        with self.fleet.lock:
+            config=self.fleet.catalog.config
+            members=slots(body)
+            if not members or len(set(members))!=len(members) or any(s not in config for s in members):
+                raise ValueError('Choose one registered VM or two different registered VMs.')
+            if len(members)==1 and not self.fleet.view(members[0]).get('singlePair'):
+                raise ValueError('Update the selected VM to Preview 23 for Single Pair.')
+            return members, {s:self.fleet.catalog.name(s) for s in members}, {s:self.fleet.view(s)['accounts'] for s in members}
+
+    def resolve_vms(self, row):
+        spec=row['spec']
+        if not spec.get('vmMatchPending'): return True
+        if time.monotonic()<row.get('vmMatchRetryAt',0): return False
+        row['vmMatchRetryAt']=time.monotonic()+5
+        try:
+            mapping={}
+            with self.fleet.lock:
+                views=[self.fleet.view(s) for s in self.fleet.catalog.config]
+            for side in slots(spec):
+                account=spec['accounts'][side]
+                matches=[v['id'] for v in views if account in v.get('accounts',[])]
+                if len(matches)!=1:
+                    reason='No registered VM lists' if not matches else 'Multiple registered VMs list'
+                    raise ValueError(reason+' account '+account+'. Refresh or correct the VM account lists; this pair will check again automatically.')
+                mapping[side]=matches[0]
+            if len(set(mapping.values()))!=len(mapping):
+                raise ValueError('Both accounts match the same VM. Two-account pairs require different VMs.')
+            resolved=copy.deepcopy(spec)
+            for side in ('left','right'): resolved[side]=mapping.get(side)
+            for field in ('accounts','quantities'): resolved[field]={mapping[s]:v for s,v in spec[field].items()}
+            # Revalidate account membership and settings before any reservation or command.
+            resolved=self.validate(resolved)
+        except ValueError as exc:
+            self.set_status(row,'Waiting','Waiting for VM matching: '+str(exc))
+            return False
+        row['spec']=resolved
+        row['fast22']=all(self.fleet.view(s).get('backgroundExports') for s in slots(resolved))
+        row.pop('vmMatchRetryAt',None)
+        row['dirty']=True
+        self.save()
+        return True
 
     def command(self, action, body):
         if action == 'add': return {'id': self.add(body)}
@@ -317,7 +381,7 @@ class PairQueue:
                 for row in self.rows:
                     row['dirty']=row['status']!='Removing'
                     if row['status']=='Error' and row.get('closed') and row.get('afterId') and row.get('pairId') in self.fleet.pairs:
-                        row.update(status='Awaiting results', deadline=time.time()+300, message='Retrying result verification only; no entry retry.')
+                        row.update(status='Awaiting results', deadline=time.time()+RESULT_WAIT_SECONDS, message='Retrying result verification only; no entry retry.')
                 self.message='Saved pair records will be synced again. No trade entry is retried.'
             elif action == 'retry-prepare':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
@@ -345,17 +409,7 @@ class PairQueue:
             elif action == 'skip-results':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or not (row['status']=='Awaiting results' or (row['status']=='Error' and row.get('closed'))): raise ValueError('Select a closed pair awaiting results.')
-                pair=self.fleet.get_pair(row['pairId'])
-                pair.refresh_both()
-                if not all(pair.view_agent(s).get('skipResults') for s in pair.pair): raise ValueError('Update participating agents to Preview 23 before skipping results.')
-                for s in pair.pair: pair.call(s,'skip_results',{'tradeId':row['afterId']},15)
-                pair.refresh_both()
-                deadline=time.monotonic()+3
-                while pair.sync_dispatch and time.monotonic()<deadline: time.sleep(.05)
-                if pair.sync_dispatch: raise ValueError('Export stopped. Wait for the current refresh to finish, then click Skip Results again.')
-                self.fleet.release_pair(row['pairId'])
-                row.update(released22=True,fast22=True,resultsSkipped=True,completedUtc=now())
-                self.set_status(row,'Complete','Results skipped; VMs released. Queued pairs continue.')
+                self.skip_results(row)
             elif action == 'resolve':
                 row = next((r for r in self.rows if r['id']==body.get('id')), None)
                 if not row or row['status'] != 'Error': raise ValueError('Select an interrupted pair.')
@@ -466,6 +520,30 @@ class PairQueue:
         for slot in slots(row['spec']): self.fleet.vm_event(slot,row['id']+' · '+row['releaseMessage'])
         self.save()
 
+    def skip_results(self, row, automatic=False):
+        pair=self.fleet.get_pair(row['pairId'])
+        if pair.active or pair.operation.locked() or any(j['status']=='running' for j in pair.jobs):
+            raise ValueError('Wait for trade closure and the current operation to finish.')
+        pair.refresh_both()
+        if not all(pair.view_agent(s).get('skipResults') for s in pair.pair):
+            raise ValueError('Update participating agents to Preview 23 or later to stop result exports.')
+        # The agent independently verifies the live chart is Flat before stopping
+        # only this trade's export. Cached status may be stale during that export.
+        requests=[pair.pool.submit(pair.call,s,'skip_results',{'tradeId':row['afterId']},15) for s in pair.pair]
+        errors=[]
+        for request in requests:
+            try: request.result()
+            except Exception as exc: errors.append(exc)
+        if errors: raise errors[0]
+        pair.refresh_both()
+        if pair.sync_dispatch:
+            raise ValueError('Export stop acknowledged; waiting for the in-flight refresh to finish.')
+        self.fleet.release_pair(row['pairId'], strict=True)
+        row.update(released22=True,fast22=True,resultsSkipped=True,completedUtc=now())
+        if automatic: row['resultsTimedOut']=True
+        message=('Results automatically skipped after 30 seconds' if automatic else 'Results skipped')
+        self.set_status(row,'Complete',message+'; VMs released. Queued pairs continue.')
+
     def receipt(self, pair, slot, identity):
         agent = pair.view_agent(slot)
         receipt = agent.get('syncReceipt') or {}
@@ -483,7 +561,7 @@ class PairQueue:
                 if row['status']=='Removing':
                     self.remove(row)
                     continue
-                if row.get('dirty') and not row.get('fast22'):
+                if row.get('dirty') and not row.get('fast22') and row['status']!='Awaiting results':
                     self.sync(row)
             # Advance every active pair, then reserve any eligible pending pairs.
             # Fleet ownership is checked under its lock before each reservation.
@@ -505,6 +583,8 @@ class PairQueue:
         spec = row['spec']; members = slots(spec); status=row['status']
         if status in PENDING:
             if not self.running or not row.get('dispatched'): return
+            if not self.resolve_vms(row): return
+            spec=row['spec']; members=slots(spec)
             with self.fleet.lock:
                 if any(s in self.fleet.owners for s in members) or any(
                         a != 'Sim101' and a in p.settings.get('accounts', {}).values()
@@ -594,13 +674,18 @@ class PairQueue:
                 row['entryNotSent']=bool(job.get('entryNotSent'))
                 raise ValueError(job['message'])
             if pair.closed_sequence <= row['closedSequence']: return
-            row['closed']=now(); row['deadline']=time.time()+(30 if row.get('fast22') else 300)
+            row['closed']=now(); row['deadline']=time.time()+RESULT_WAIT_SECONDS
             self.set_status(row,'Awaiting results','Waiting for confirmed post-trade exports.'); return
         if status=='Awaiting results':
-            if time.time()>row['deadline']:
-                if row.get('fast22'):
-                    self.set_status(row,'Awaiting results','CSV capture still pending. These VMs remain reserved until both snapshots are saved; other pairs continue.')
-                else: raise ValueError('Post-trade result export timed out. Pair retained for review; no next entry.')
+            if row.get('autoSkipRequested') or time.time()>=row['deadline']:
+                if time.time()<row.get('skipRetryAt',0): return
+                row['autoSkipRequested']=True
+                row['skipRetryAt']=time.time()+5
+                self.save()
+                try: self.skip_results(row,automatic=True)
+                except Exception as exc:
+                    self.set_status(row,'Awaiting results','30-second result timeout; automatic skip waiting for safe VM release: '+str(exc))
+                return
             for slot in members: pair.observe(slot)
             snaps={s:self.receipt(pair,s,row['afterId']) for s in members}
             if not all(snaps.values()) or pair.sync_dispatch: return
@@ -638,7 +723,9 @@ class PairQueue:
                     with self.lock:
                         row=next((r for r in self.rows if r['key']==snapshot['key']),None)
                         if row == snapshot:
-                            row['dirty']=False;row['message']='Results saved to Airtable.';self.save()
+                            row['dirty']=False
+                            if not row.get('resultsSkipped'): row['message']='Results saved to Airtable.'
+                            self.save()
                     self.planning.refresh()
                 except Exception as exc:
                     with self.lock: self.message='Background result upload pending: '+str(exc)

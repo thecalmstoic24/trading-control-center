@@ -32,9 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.28'
+VERSION = '16.0-preview.29'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
-AGENT_VERSIONS = {'16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+AGENT_VERSIONS = {'16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -377,7 +377,7 @@ class Center:
                     stopLoss=s.get('stopLoss'), profit=s.get('profit'),
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
-                    snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''),
+                    snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''), agentSession=s.get('agentSession',''), manualSync=bool(s.get('manualSync')), manualSyncPending=bool(s.get('manualSyncPending')),
                     calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
@@ -680,6 +680,8 @@ class Fleet:
         self.retired = []
         self.releasing = set()
         self.vm_refresh = {}
+        self.vm_sync_requests = set()
+        self.startup_refresh = {}
         self.persist = persist
         self.transport = transport
         self.started = False
@@ -974,6 +976,60 @@ class Fleet:
         center.observe(slot)
         with self.lock: self.record_vm_activity(self.view(slot))
 
+    def refresh_on_startup(self, slot):
+        # One account refresh per authenticated process session. Defer while trading/busy.
+        with self.lock:
+            view=self.view(slot)
+            boot=view.get('agentSession','')
+            if not view.get('online') or not isinstance(boot,str) or not re.fullmatch('[a-f0-9]{32}',boot): return
+            state=self.startup_refresh.get(slot)
+            if not state or state['boot']!=boot:
+                state={'boot':boot,'requested':False,'done':False,'retryAt':0}
+                self.startup_refresh[slot]=state
+            if state['done']: return
+            refresh=self.vm_refresh.get(slot,{})
+            if state['requested']:
+                if refresh.get('status')=='running': return
+                if refresh.get('status')=='complete': state['done']=True; return
+                state.update(requested=False,retryAt=time.monotonic()+30)
+            if time.monotonic()<state['retryAt'] or refresh.get('status')=='running': return
+            owner=self.pairs.get(self.owners.get(slot))
+            if owner and (owner.active or owner.prepared or owner.sync_dispatch or owner.operation.locked()): return
+            if view.get('calibrationRequired') or not self.catalog.account_discovery_idle(view): return
+            try:
+                self.refresh_vm(slot)
+                state['requested']=True
+                self.vm_event(slot,'Agent started; automatically refreshing this VM’s accounts.')
+            except ValueError as exc:
+                state['retryAt']=time.monotonic()+30
+                self.vm_event(slot,'Startup refresh deferred: '+str(exc))
+
+    def sync_vm(self, slot):
+        with self.lock:
+            if slot not in self.catalog.config: raise ValueError('Choose a registered VM.')
+            if slot in self.vm_sync_requests: return {'ok':True,'message':'Sync request is already being sent.'}
+            self.vm_sync_requests.add(slot)
+            owner=self.owners.get(slot)
+            center=self.pairs[owner] if owner else self.catalog
+        try:
+            center.observe(slot)
+            view=center.view_agent(slot)
+            if not view.get('online'): raise ValueError('This VM is disconnected. Reconnect its agent before syncing.')
+            if not view.get('manualSync'): raise ValueError('Update this VM agent to enable Sync Airtable from the dashboard.')
+            if view.get('manualSyncPending'):
+                return {'ok':True,'message':'Sync Airtable is already running or queued on this VM.'}
+            # Exactly the local button workflow; busy agents defer it. Never retry a lost acknowledgement.
+            result=center.call(slot,'manual_sync',{},15)
+            message=result.get('message') or 'Sync Airtable requested. Follow VM Activity for progress.'
+            self.vm_event(slot,'Sync Airtable requested: '+message)
+            center.observe(slot)
+            return {'ok':True,'message':message}
+        except Exception as exc:
+            self.vm_event(slot,'Sync Airtable request failed: '+str(exc))
+            raise
+        finally:
+            with self.lock: self.vm_sync_requests.discard(slot)
+
     def refresh_vm(self, slot):
         with self.lock:
             if slot not in self.catalog.config: raise ValueError('Choose a registered VM.')
@@ -1027,9 +1083,13 @@ class Fleet:
                         and not any(cached.get(k) for k in ('busy','scheduled','pendingVerification','closing','pairActive')))
 
     def loop(self, slot):
+        last_probe=0
         while not self.stop.is_set():
-            if not self.idle_snapshot_held(slot):
+            # Even a held idle snapshot needs a periodic restart/connection probe.
+            if not self.idle_snapshot_held(slot) or time.monotonic()-last_probe>=5:
                 self.observe(slot)
+                last_probe=time.monotonic()
+            self.refresh_on_startup(slot)
             self.stop.wait(1)
 
     def start(self):
@@ -1132,6 +1192,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/planning/refresh':
                 self.server.planning.refresh(body.get('token'))
                 self.reply(202, {'ok':True})
+            elif self.path == '/api/vm-sync':
+                self.reply(202, self.server.center.sync_vm(body.get('id')))
             elif self.path == '/api/vm-refresh':
                 self.server.center.refresh_vm(body.get('id'))
                 self.reply(202, {'ok':True})

@@ -57,6 +57,80 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def deferred_body(self, single=None):
+        original=self.store.records
+        records=[{'id':'rec'+str(i),'fields':{'id':account,'Master Account':master,'CurrentBalance':50000}}
+                 for i,(account,master) in enumerate([('MFF-A','MFF-TEST'),('FN-B','FN-TEST')])]
+        self.store.records=lambda table: records if table==TABLE else original(table)
+        draft=dict(key='d'*32,ticker='NQ',direction='buy',ratio='2:1',leftQuantity='2',rightQuantity='1',
+                   stopLoss='100',profit='200',left={'account':'MFF-A','vm':'old-wrong'},right={'account':'FN-B','vm':''})
+        if single: draft.pop('right' if single=='left' else 'left')
+        return dict(self.body,localDraft=True,deferVM=True,draftKey=draft['key'],draft=draft,ticker='NQ',ratio='2:1')
+
+    def match_deferred(self):
+        for slot,account in [('vm-left','MFF-A'),('vm-right','FN-B')]:
+            self.agent.states[slot].update(accounts=['Sim101',account],singlePair=True,backgroundExports=True)
+            self.fleet.observe(slot)
+
+    def test_confirm_unmatched_without_vm_calls_persists_and_deduplicates(self):
+        body=self.deferred_body(); self.agent.calls.clear()
+        identity=self.queue.add(body)
+        self.assertEqual(self.queue.add(body),identity)
+        self.assertEqual(len(self.queue.rows),1)
+        self.assertEqual(self.agent.calls,[])
+        row=self.queue.rows[0]
+        self.assertTrue(row['spec']['vmMatchPending'])
+        self.assertEqual(row['spec']['accounts'],{'left':'MFF-A','right':'FN-B'})
+        self.assertEqual(row['spec']['ticker'],'NQ DEC26')
+        restored=PairQueue(self.fleet,Planning(),self.store)
+        self.assertEqual(restored.rows[0]['spec'],row['spec'])
+        self.queue.tick(); self.assertEqual(self.agent.calls,[])
+
+    def test_missing_match_waits_and_later_resolves_exact_accounts_before_prepare(self):
+        import contracts
+        self.queue.add(self.deferred_body());self.queue.command('start',{});self.agent.calls.clear()
+        self.queue.tick();row=self.queue.rows[0]
+        self.assertEqual(row['status'],'Waiting');self.assertIn('No registered VM',row['message'])
+        self.assertEqual(self.agent.calls,[]);self.assertFalse(self.fleet.pairs)
+        self.match_deferred();contracts.save(self.fleet.directory,'MAR27');row['vmMatchRetryAt']=0
+        self.queue.tick()
+        self.assertEqual(row['status'],'Preparing',row['message'])
+        self.assertEqual(row['spec']['accounts'],{'vm-left':'MFF-A','vm-right':'FN-B'})
+        self.assertEqual(row['spec']['quantities'],{'vm-left':2,'vm-right':1})
+        self.assertEqual(row['spec']['ticker'],'NQ DEC26')
+        self.assertFalse(any(cmd=='entry' for _,cmd,_ in self.agent.calls))
+
+    def test_ambiguous_and_same_vm_matches_wait_without_reservation(self):
+        self.queue.add(self.deferred_body());self.queue.command('start',{});self.match_deferred()
+        row=self.queue.rows[0]
+        self.agent.states['vm-right']['accounts'].append('MFF-A');self.fleet.observe('vm-right');self.agent.calls.clear()
+        self.queue.tick();self.assertIn('Multiple registered VMs',row['message']);self.assertFalse(self.fleet.pairs)
+        self.agent.states['vm-left']['accounts']=['Sim101'];self.fleet.observe('vm-left');row['vmMatchRetryAt']=0
+        self.queue.tick();self.assertIn('same VM',row['message']);self.assertFalse(self.fleet.pairs)
+        self.assertFalse(any(cmd in ('prepare','entry','bind_peer') for _,cmd,_ in self.agent.calls))
+
+    def test_deferred_confirmation_still_validates_quantities_funds_and_accounts(self):
+        body=self.deferred_body()
+        body['draft']['leftQuantity']='1.5'
+        with self.assertRaisesRegex(ValueError,'whole number'):self.queue.add(body)
+        body['draft']['leftQuantity']='3'
+        with self.assertRaisesRegex(ValueError,'ratio'):self.queue.add(body)
+        body['draft']['leftQuantity']='2';body['draft']['right']['account']='MISSING'
+        with self.assertRaisesRegex(ValueError,'exact Airtable'):self.queue.add(body)
+        body['draft']['right']['account']='MFF-A'
+        with self.assertRaisesRegex(ValueError,'Same fund'):self.queue.add(body)
+        self.assertFalse(self.queue.rows)
+
+    def test_deferred_single_pairs_resolve_either_side(self):
+        for side in ('left','right'):
+            body=self.deferred_body(single=side);body['draftKey']=('a' if side=='left' else 'b')*32
+            self.queue.add(body);self.match_deferred();row=self.queue.rows[-1]
+            self.assertTrue(self.queue.resolve_vms(row))
+            self.assertEqual(row['spec'][side],'vm-'+side)
+            self.assertIsNone(row['spec']['right' if side=='left' else 'left'])
+            self.assertEqual(len(row['spec']['accounts']),1)
+        self.assertFalse(self.fleet.pairs)
+
     def test_contract_month_pins_confirmed_pair_and_survives_reload(self):
         import contracts
         self.queue.add(dict(self.body,ticker='NQ',localDraft=True,draft={'key':'a'*32,'ticker':'NQ'}))
@@ -275,13 +349,73 @@ class QueueTests(unittest.TestCase):
         finally:
             self.queue.close();finish.set();self.queue.result_thread.join(2)
 
-    def test_fast_missing_csv_after_30_seconds_retains_vms(self):
-        self.enable_fast22();pair=self.entered();self.agent.skip_receipt=True
+    def awaiting_missing_results(self):
+        self.enable_fast22()
+        for state in self.agent.states.values():state['skipResults']=True
+        pair=self.entered();self.agent.skip_receipt=True
         self.flat(pair);self.tick_until('Awaiting results')
-        row=self.queue.rows[0];row['deadline']=time.time()-1;self.queue.tick()
-        self.assertEqual(row['status'],'Awaiting results')
-        self.assertIn(row['pairId'],self.fleet.pairs)
-        self.assertIn('CSV capture still pending',row['message'])
+        while pair.sync_dispatch:time.sleep(.01)
+        return self.queue.rows[0],pair
+
+    def test_missing_results_auto_skip_after_30_seconds_starts_next_pair(self):
+        row,pair=self.awaiting_missing_results()
+        self.assertGreater(row['deadline']-time.time(),25)
+        self.assertLessEqual(row['deadline']-time.time(),30)
+        self.queue.add(self.body);self.queue.command('start',{})
+        self.queue.tick();self.assertEqual(row['status'],'Awaiting results')
+        self.assertFalse(any(c[1]=='skip_results' for c in self.agent.calls))
+        row['deadline']=time.time()-1;self.queue.tick()
+        self.assertEqual(row['status'],'Complete');self.assertTrue(row['resultsTimedOut'])
+        self.assertTrue(row['resultsSkipped']);self.assertIn('completedUtc',row)
+        self.assertEqual(row.get('results',{}),{})
+        self.assertNotIn(row['pairId'],self.fleet.pairs)
+        self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+        self.assertEqual(sum(c[1]=='skip_results' for c in self.agent.calls),2)
+        self.queue.tick();self.assertEqual(sum(c[1]=='skip_results' for c in self.agent.calls),2)
+
+    def test_auto_skip_failed_ack_keeps_vms_and_retries_without_entry(self):
+        row,pair=self.awaiting_missing_results()
+        entries=sum(c[1]=='entry' for c in self.agent.calls)
+        self.agent.fail.add(('vm-right','skip_results'));row['deadline']=time.time()-1
+        self.queue.tick()
+        self.assertEqual(row['status'],'Awaiting results');self.assertIn(row['pairId'],self.fleet.pairs)
+        self.assertIn('automatic skip waiting',row['message'])
+        self.agent.fail.clear();row['skipRetryAt']=0;self.queue.tick()
+        self.assertEqual(row['status'],'Complete')
+        self.assertEqual(sum(c[1]=='entry' for c in self.agent.calls),entries)
+
+    def test_auto_skip_waits_for_refresh_then_releases_while_queue_paused(self):
+        row,pair=self.awaiting_missing_results();self.queue.command('pause',{})
+        pair.sync_dispatch=1;row['deadline']=time.time()-1;self.queue.tick()
+        self.assertEqual(row['status'],'Awaiting results');self.assertIn(row['pairId'],self.fleet.pairs)
+        pair.sync_dispatch=0;row['skipRetryAt']=0;self.queue.tick()
+        self.assertEqual(row['status'],'Complete');self.assertFalse(self.queue.running)
+
+    def test_auto_skip_rejects_pending_action_even_after_export_stop(self):
+        row,pair=self.awaiting_missing_results()
+        self.agent.states['vm-right']['scheduled']=True;row['deadline']=time.time()-1
+        self.queue.tick()
+        self.assertEqual(row['status'],'Awaiting results');self.assertIn(row['pairId'],self.fleet.pairs)
+        self.assertFalse(row.get('resultsSkipped'))
+        self.agent.states['vm-right']['scheduled']=False;row['skipRetryAt']=0;self.queue.tick()
+        self.assertEqual(row['status'],'Complete')
+
+    def test_auto_skip_does_not_wait_for_airtable_upload(self):
+        row,pair=self.awaiting_missing_results();self.store.fail=True
+        row['deadline']=time.time()-1;self.queue.tick()
+        self.assertEqual(row['status'],'Complete');self.assertNotIn(row['pairId'],self.fleet.pairs)
+        self.assertTrue(row['dirty'])
+
+    def test_nonfast_result_wait_also_uses_30_seconds(self):
+        for state in self.agent.states.values():state['skipResults']=True
+        pair=self.entered();self.agent.skip_receipt=True;self.flat(pair);self.tick_until('Awaiting results')
+        while pair.sync_dispatch:time.sleep(.01)
+        row=self.queue.rows[0]
+        self.assertGreater(row['deadline']-time.time(),25)
+        self.assertLessEqual(row['deadline']-time.time(),30)
+        self.store.fail=True  # Airtable cannot delay the timeout on legacy result paths.
+        row['deadline']=time.time()-1;self.queue.tick()
+        self.assertEqual(row['status'],'Complete');self.assertTrue(row['resultsTimedOut'])
 
     def test_duplicate_canceled_history_has_new_identity_and_no_entry(self):
         self.queue.add(self.body);source=copy.deepcopy(self.queue.rows[0])

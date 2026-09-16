@@ -151,3 +151,5 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 
 #vms-divider,#trading-divider{margin:0;border:0;background:linear-gradient(to right,transparent 4px,var(--line) 4px,var(--line) 6px,transparent 6px)}
 #vms-divider:hover,#vms-divider:focus,#trading-divider:hover,#trading-divider:focus{background:linear-gradient(to right,transparent 3px,var(--cyan) 3px,var(--cyan) 7px,transparent 7px)}
+
+.vm-row-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}.vm-row-actions button{white-space:nowrap}

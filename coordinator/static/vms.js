@@ -1,12 +1,18 @@
 'use strict';
 (() => {
  const el=id=>document.getElementById(id),node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
- let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),selected=new Set();
+ let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),syncPending=new Set(),selected=new Set();
  async function refresh(id){
    if(pending.has(id))return;pending.add(id);render();
    try{await api('/api/vm-refresh',{id});await poll();}
    catch(e){el('vms-message').textContent=e.message;}
    finally{pending.delete(id);render();}
+ }
+ async function syncAirtable(id){
+   if(syncPending.has(id))return;syncPending.add(id);render();
+   try{const result=await api('/api/vm-sync',{id});el('vms-message').textContent=result.message||'Sync Airtable requested. Follow VM Activity for progress.';await poll();}
+   catch(e){el('vms-message').textContent=e.message;}
+   finally{syncPending.delete(id);render();}
  }
  let sorting={field:'name',direction:1};
  try{const saved=JSON.parse(localStorage.getItem('vm-sort-v1'));if(saved&&['name','connection','position','availability'].includes(saved.field)&&[1,-1].includes(saved.direction))sorting=saved;}catch(_){}
@@ -29,10 +35,16 @@
      const busy=pending.has(vm.id)||vm.refresh?.status==='running';
      const error=pairError(vm),label=availability(vm);
      const availabilityLabel=node('span',label);availabilityLabel.className='vm-availability '+(error||vm.refresh?.status==='error'||!vm.online?'vm-error':vm.pairId?'vm-paired':label==='Ready · Available'?'vm-available':'vm-error');line.append(availabilityLabel);
-     const button=node('button',busy?'Refreshing…':'Refresh');button.disabled=busy;button.onclick=()=>refresh(vm.id);line.append(button);row.append(line);
+     const button=node('button',busy?'Refreshing…':'Refresh');button.disabled=busy;button.onclick=()=>refresh(vm.id);
+     const actions=node('div');actions.className='vm-row-actions';actions.append(button);
+     const syncing=syncPending.has(vm.id)||vm.manualSyncPending;
+     const syncButton=node('button',syncing?'Sync requested…':'Sync Airtable');
+     syncButton.disabled=syncing||!vm.online||!vm.manualSync;syncButton.setAttribute('aria-label','Sync Airtable for '+vm.name);
+     syncButton.title=!vm.manualSync?'Update this VM agent to enable remote sync.':syncing?'Sync is running or queued; follow VM Activity.':'Run Sync Airtable Now on this VM. Waits if trading automation is busy.';
+     syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);line.append(actions);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
      const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);row.append(details);
-     row.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));list.append(row);
+     row.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));list.append(row);
    }
    list.scrollTop=scroll;
    if(!fleet.length)list.append(node('p','No registered VMs yet. Choose Register VM to add one.'));

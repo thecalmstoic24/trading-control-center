@@ -1,0 +1,13 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+class Element{constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.dataset={};this.scrollTop=0;}append(...n){this.children.push(...n);}replaceChildren(...n){this.children=n;}setAttribute(k,v){this[k]=v;}}
+const elements=new Map(),listeners=new Map(),calls=[];let reject=false,resolveRequest;
+const context={document:{getElementById(id){if(!elements.has(id))elements.set(id,new Element('div'));return elements.get(id);},createElement:t=>new Element(t)},localStorage:{getItem(){return null;},setItem(){}},window:{addEventListener:(n,f)=>listeners.set(n,f)},api:async(path,body)=>{calls.push({path,body});if(reject)throw Error('Agent disconnected');return await new Promise(resolve=>{resolveRequest=resolve;});},poll:async()=>{}};
+vm.runInNewContext(fs.readFileSync('coordinator/static/vms.js','utf8'),context);
+const fleet=[{id:'left',name:'LEFT',manualSync:true,online:true,fresh:true,position:'Flat',accounts:['Sim101']},{id:'old',name:'OLD',online:true}];
+const emit=()=>listeners.get('fleet-updated')({detail:{fleet}});
+function actions(id){return elements.get('vms-list').children.find(r=>r.dataset.vm===id).children[0].children.find(e=>e.className==='vm-row-actions').children;}
+(async()=>{emit();assert.equal(actions('left')[0].textContent,'Refresh');assert.equal(actions('left')[1].textContent,'Sync Airtable');assert.equal(actions('old')[1].disabled,true);
+const pending=actions('left')[1].onclick();assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/vm-sync');assert.equal(calls[0].body.id,'left');assert.equal(actions('left')[1].disabled,true);await actions('left')[1].onclick();assert.equal(calls.length,1);
+resolveRequest({ok:true,message:'Exporting NinjaTrader Accounts...'});await pending;assert.equal(actions('left')[1].disabled,false);assert.match(elements.get('vms-message').textContent,/Exporting/);
+fleet[0].manualSyncPending=true;emit();assert.equal(actions('left')[1].disabled,true);fleet[0].manualSyncPending=false;emit();reject=true;await actions('left')[1].onclick();assert.equal(elements.get('vms-message').textContent,'Agent disconnected');assert.equal(actions('left')[1].disabled,false);
+fleet[0].online=false;emit();assert.equal(actions('left')[1].disabled,true);assert.ok(calls.every(c=>c.path==='/api/vm-sync'));console.log('PASS: adjacent Sync button, selected VM routing, duplicate-click prevention, request acknowledgement, pending/offline/old-agent states and errors.');})().catch(e=>{console.error(e);process.exit(1)});

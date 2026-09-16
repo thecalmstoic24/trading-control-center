@@ -28,6 +28,18 @@ try {
  $script:PairCoordinatorActive=$false
  Start-ManualSync15
  Check ($requests.Count -eq ($count+1)) 'Queued request must run when automation releases desktop'
+ # Dashboard command dispatches the identical local-button workflow.
+ $script:AgentStarted=$true
+ $bridgeAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../agent/ControlBridge.ps1'),[ref]$tokens,[ref]$errors)
+ $fn=$bridgeAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ControlCommand'},$true)
+ Invoke-Expression $fn.Extent.Text
+ $count=$requests.Count
+ $reply=Invoke-ControlCommand -Pending ([pscustomobject]@{Command='manual_sync';Body='{}'})
+ Check ($reply.ok -and $requests.Count -eq ($count+1) -and $requests[-1].Fresh) 'Remote button did not invoke fresh manual export'
+ $script:PairCoordinatorActive=$true;$count=$requests.Count
+ $reply=Invoke-ControlCommand -Pending ([pscustomobject]@{Command='manual_sync';Body='{}'})
+ Check ($reply.ok -and $requests.Count -eq $count -and (Test-Path (Join-Path $directory 'sync-manual.json'))) 'Remote sync failed to defer while trading'
+ $script:PairCoordinatorActive=$false
  # Execute real worker-launch function with process/UI stubs: no chart-flat assertion for exports.
  $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-Worker14'},$true)
  $workerFunction=$fn.Extent.Text.Replace('$PSScriptRoot',("'"+$PSScriptRoot.Replace("'","''")+"'"))
