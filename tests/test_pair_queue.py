@@ -112,10 +112,74 @@ class QueueTests(unittest.TestCase):
         while pair.operation.locked():time.sleep(.01)
         self.queue.fail(first,'test preparation error')
         self.queue.add(self.body);self.queue.command('start',{});self.queue.tick()
-        self.assertEqual(self.queue.rows[1]['status'],'Waiting')
+        self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+        self.assertTrue(first['errorReleased']);self.assertEqual(first['status'],'Error')
         self.queue.command('resolve',{'id':first['id']})
         self.assertTrue(self.queue.running);self.assertIn('completedUtc',first)
         self.queue.tick();self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+
+    def failed_reserved_pair(self):
+        self.enable_fast22();self.add_start();self.queue.tick()
+        row=self.queue.rows[-1];pair=self.fleet.get_pair(row['pairId'])
+        while pair.operation.locked():time.sleep(.01)
+        self.queue.fail(row,'Preparation failed')
+        return row,pair
+
+    def test_error_auto_release_blocks_stale_busy_scheduled_or_open_vm(self):
+        for field,value in [('scheduled',True),('busy',True),('pendingVerification',True),('pairActive',True)]:
+            with self.subTest(field=field):
+                row,pair=self.failed_reserved_pair()
+                self.agent.states['vm-right'][field]=value
+                self.queue.release_error(row)
+                self.assertIn(row['pairId'],self.fleet.pairs)
+                self.assertFalse(row.get('errorReleased'))
+                self.agent.states['vm-right'][field]='Flat' if field=='position' else False
+                row['releaseCheckAt']=0;self.queue.release_error(row)
+                self.assertTrue(row['errorReleased'])
+        row,pair=self.failed_reserved_pair();self.agent.fail.add(('vm-right','status'))
+        self.queue.release_error(row);self.assertIn(row['pairId'],self.fleet.pairs)
+
+    def test_error_auto_release_retains_observed_position_even_after_flat(self):
+        row,pair=self.failed_reserved_pair();self.agent.states['vm-right']['position']='Long'
+        self.queue.release_error(row);self.assertFalse(row.get('errorReleased'))
+        self.agent.states['vm-right']['position']='Flat';row['releaseCheckAt']=0
+        self.queue.release_error(row);self.assertFalse(row.get('errorReleased'))
+
+    def test_error_auto_release_never_clears_uncertain_entry_even_if_flat(self):
+        row,pair=self.failed_reserved_pair();row['started']='2026-09-16T12:00:00Z'
+        self.queue.release_error(row)
+        self.assertIn(row['pairId'],self.fleet.pairs);self.assertFalse(row.get('errorReleased'))
+        row['entryNotSent']=True;pair.opened_ids.add('vm-left')
+        self.queue.release_error(row);self.assertFalse(row.get('errorReleased'))
+
+    def test_error_release_rechecks_after_unbind(self):
+        row,pair=self.failed_reserved_pair();original=pair.transport
+        def changed(config,command,body=None,**kwargs):
+            result=original(config,command,body,**kwargs)
+            if command=='unbind_peer':self.agent.states[config['id']]['scheduled']=True
+            return result
+        pair.transport=changed;self.queue.release_error(row)
+        self.assertIn(row['pairId'],self.fleet.pairs);self.assertFalse(row.get('errorReleased'))
+
+    def test_retry_released_error_waits_for_new_owner(self):
+        row,pair=self.failed_reserved_pair();row.update(started='2026-09-16T12:00:00Z',entryNotSent=True)
+        self.queue.release_error(row);self.assertTrue(row['errorReleased'])
+        self.queue.add(self.body);self.queue.command('start',{});self.queue.tick()
+        next_row=self.queue.rows[1];self.assertEqual(next_row['status'],'Preparing')
+        next_owner=next_row['pairId']
+        self.queue.command('retry-prepare',{'id':row['id']});self.queue.tick()
+        self.assertEqual(row['status'],'Waiting');self.assertIn(next_owner,self.fleet.pairs)
+
+    def test_vm_activity_is_bounded_deduplicated_and_identifies_vm(self):
+        self.fleet.state();count=len(self.fleet.vm_events);self.fleet.state()
+        self.assertEqual(len(self.fleet.vm_events),count)
+        self.agent.states['vm-left']['message']='Sync completed'
+        self.fleet.observe('vm-left')
+        event=self.fleet.state()['vmEvents'][0]
+        self.assertEqual(event['vm'],'vm-left');self.assertEqual(event['message'],'Sync completed')
+        self.assertIn('utc',event)
+        for n in range(250):self.fleet.vm_event('vm-left',str(n))
+        self.assertEqual(len(self.fleet.vm_events),200)
 
     def test_skip_results_releases_and_keeps_queue_running(self):
         self.enable_fast22()
@@ -342,7 +406,8 @@ class QueueTests(unittest.TestCase):
                 return dict(ok=False,message='Entry stage readiness check: Timing unstable',errorCode='READINESS_BEFORE_ARM',entryNotSent=True,prepareId=body['prepareId'],bindingId=pair.binding_id)
             return original(config,command,body,**kwargs)
         self.fleet.transport=transport
-        self.add_start();self.tick_until('Error');row=self.queue.rows[0]
+        self.add_start();self.queue.rows[0]['releaseCheckAt']=time.time()+3600
+        self.tick_until('Error');row=self.queue.rows[0]
         self.assertTrue(row['started']);self.assertTrue(row['entryNotSent'])
         self.assertTrue(self.queue.snapshot()['rows'][0]['canRetryReadiness'])
         count=sum(c[1]=='entry' for c in self.agent.calls)

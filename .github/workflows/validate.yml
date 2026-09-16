@@ -23,6 +23,7 @@ jobs:
             if($errors){throw ($errors | Out-String)}
           }
           & ./tests/Test-Preview27.ps1
+          & ./tests/Test-Preview28.ps1
       - name: TLS timing, credentials and command transport
         shell: pwsh
         run: ./tests/Test-Gateway.ps1
@@ -39,4 +40,17 @@ jobs:
           node tests/test_queue_display.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_trading_layout.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_draft_payload.cjs
+          exit $LASTEXITCODE
+
+      - name: Browser layout and confirmation regression
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/tcc-browser" playwright@1.51.1 --ignore-scripts --no-audit --no-fund
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $env:NODE_PATH="$env:RUNNER_TEMP/tcc-browser/node_modules"
+          node "$env:NODE_PATH/playwright/cli.js" install chromium
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_preview28_browser.cjs
           exit $LASTEXITCODE

@@ -175,6 +175,7 @@ class PairQueue:
             row.update(status=status, message=message, dirty=True)
             if status in {'Complete','Cancelled'}: row.setdefault('completedUtc', now())
             self.save()
+        for slot in slots(row['spec']): self.fleet.vm_event(slot,row['id']+' · '+status+' · '+message)
 
     def sync(self, row):
         # Queue mutation and background sync are serialized by io.
@@ -293,7 +294,7 @@ class PairQueue:
                 self.rows.remove(row);self.save()
                 return {'draft':row}
             if action in ('start','resume'):
-                # Failed rows retain their VM reservations, but do not stop unrelated rows.
+                # Safe errored reservations are released by tick; uncertain entries stay protected.
                 for row in self.rows:
                     if action=='start' and row['status'] in PENDING:
                         if row.get('localDraft'):
@@ -323,7 +324,7 @@ class PairQueue:
                 if not row or row['status']!='Error' or (row.get('started') and not retryable_entry(row)):
                     raise ValueError('Retry preparation is only available before any entry was requested.')
                 identity=row.get('pairId')
-                if row.get('started'):
+                if row.get('started') and not row.get('errorReleased'):
                     if identity not in self.fleet.pairs: raise ValueError('Reconnect and verify this pair before retrying; its live reservation is unavailable.')
                     checked=self.fleet.get_pair(identity)
                     if checked.operation.locked() or checked.sync_dispatch or any(j['status']=='running' for j in checked.jobs): raise ValueError('Wait for the existing operation before retrying.')
@@ -336,7 +337,7 @@ class PairQueue:
                         raise ValueError('Wait for the existing operation and verify positions before retrying.')
                     self.fleet.release_pair(identity)
                 row.setdefault('attempts',[]).append({'started':row.get('started'),'message':row.get('message'),'retriedUtc':now(),'entryNotSent':retryable_entry(row)})
-                for key in ('pairId','phase','job','before','beforeId','afterId','requested','deadline','refreshId','started','closed','closedSequence','entryNotSent','checked22'):
+                for key in ('pairId','phase','job','before','beforeId','afterId','requested','deadline','refreshId','started','closed','closedSequence','entryNotSent','checked22','errorReleased','releaseCheckAt','releaseMessage'):
                     row.pop(key,None)
                 row.update(status='Queued',dispatched=True,dirty=True,message='Retry requested. Rechecking account, preparation and timing before a new entry. Settings retained.')
                 self.running=True
@@ -438,6 +439,29 @@ class PairQueue:
         with self.lock: self.message='Pair failed; continuing with eligible queued pairs. '+str(error)
         self.set_status(row, 'Error', str(error))
 
+    def release_error(self, row):
+        identity=row.get('pairId')
+        if row.get('errorReleased') or identity not in self.fleet.pairs: return
+        if row.get('started') and not retryable_entry(row) and not row.get('closed'): return
+        if time.time() < row.get('releaseCheckAt',0): return
+        row['releaseCheckAt']=time.time()+5
+        pair=self.fleet.get_pair(identity)
+        # No unknown entry is cleared merely because a chart currently says Flat.
+        if pair.active or (pair.opened_ids and not row.get('closed')): return
+        if pair.operation.locked() or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs): return
+        try:
+            pair.refresh_both()
+            agents=pair.state()['agents']
+            if not all(pair.safe_flat(a) for a in agents): return
+            if row.get('started') and not all(pair.target_matches(a) for a in agents): return
+            self.fleet.release_pair(identity, strict=True)
+        except (ValueError, KeyError) as exc:
+            row['releaseMessage']=str(exc)
+            return
+        row.update(errorReleased=True,dirty=True,releaseMessage='VMs verified idle and Flat; released for waiting pairs.')
+        for slot in slots(row['spec']): self.fleet.vm_event(slot,row['id']+' · '+row['releaseMessage'])
+        self.save()
+
     def receipt(self, pair, slot, identity):
         agent = pair.view_agent(slot)
         receipt = agent.get('syncReceipt') or {}
@@ -463,6 +487,8 @@ class PairQueue:
             for row in active:
                 try: self.advance(row)
                 except Exception as exc: self.fail(row, exc)
+            for row in self.rows[:]:
+                if row['status']=='Error': self.release_error(row)
             if not self.running: return
             for row in self.rows[:]:
                 if row['status'] not in PENDING or not row.get('dispatched'): continue

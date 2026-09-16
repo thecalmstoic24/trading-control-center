@@ -9,7 +9,7 @@
   function usage(){
     const map={};const mark=(account,status)=>{if(!account)return;const u=map[account]||(map[account]={used:true,status:''});if(status==='Pairing'||!u.status)u.status=status;};
     for(const d of drafts)for(const side of ['left','right'])mark(d[side]?.account,'');
-    for(const r of queued){if(['Complete','Cancelled'].includes(r.status))continue;for(const a of Object.values(r.spec.accounts||{}))mark(a,['Trading','Awaiting results'].includes(r.status)?'Pairing':'Queue');}
+    for(const r of queued){if(['Complete','Cancelled'].includes(r.status)||r.errorReleased)continue;for(const a of Object.values(r.spec.accounts||{}))mark(a,['Trading','Awaiting results'].includes(r.status)?'Pairing':'Queue');}
     for(const p of pairs){if(p.closedSequence>0&&!p.active&&!p.prepared)continue;for(const a of Object.values(p.settings?.accounts||{}))mark(a,'Pairing');}
     window.dispatchEvent(new CustomEvent('account-usage',{detail:map}));
   }
@@ -138,7 +138,7 @@
         if(Number(d.leftQuantity)*b!==Number(d.rightQuantity)*a){message.textContent='Adjust quantity to whole contracts matching the ratio.';return;}
         inFlight.add(d.key);disabled.disabled=true;confirm.textContent='Adding…';
         try{
-          await api('/api/queue/add',{localDraft:true,draft:JSON.parse(JSON.stringify(d)),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+          await api('/api/queue/add',{localDraft:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
           drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
           window.dispatchEvent(new Event('queue-refresh'));
         }catch(err){d.error=err.message;save();}finally{inFlight.delete(d.key);render();usage();}

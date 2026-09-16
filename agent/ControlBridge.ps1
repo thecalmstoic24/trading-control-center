@@ -6,8 +6,8 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.27'
-$script:AgentBuild = '16.0-preview.27'
+$script:ControlVersion = '16.0-preview.28'
+$script:AgentBuild = '16.0-preview.28'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -350,7 +350,7 @@ $controlTimer.Add_Tick({
 })
 $form.Add_Shown({
     $area17=[System.Windows.Forms.Screen]::FromControl($form).WorkingArea
-    $form.Location=[Drawing.Point]::new([Math]::Max($area17.Left,$area17.Right-$form.Width-12),[Math]::Max($area17.Top,$area17.Bottom-$form.Height-12))
+    $form.Location=[Drawing.Point]::new($area17.Left+12,[Math]::Max($area17.Top,$area17.Bottom-$form.Height-12))
     try {
         $certificate = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $script:ControlIdentity.Thumbprint)
         $credential = [System.Net.NetworkCredential]::new('', $script:ControlIdentity.Token).Password

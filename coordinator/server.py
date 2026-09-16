@@ -32,9 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.27'
+VERSION = '16.0-preview.28'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
-AGENT_VERSIONS = {'16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+AGENT_VERSIONS = {'16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -684,6 +684,9 @@ class Fleet:
         self.transport = transport
         self.started = False
         self.global_events = deque(maxlen=50)
+        self.vm_events = deque(maxlen=200)
+        self.vm_activity_state = {}
+        self.vm_event_sequence = 0
         self.index_path = self.directory / 'pairs-v13.json'
         if self.index_path.exists():
             records = json.loads(self.index_path.read_text())
@@ -788,7 +791,7 @@ class Fleet:
             pair.event('Pair created. Prepare & Verify is required before entry.')
             return identity
 
-    def release_pair(self, identity):
+    def release_pair(self, identity, strict=False):
         with self.lock:
             pair = self.get_pair(identity)
             if identity in self.releasing or not pair.operation.acquire(blocking=False):
@@ -802,6 +805,8 @@ class Fleet:
             pair.refresh_both()
             agents = pair.state()['agents']
             def releasable(items):
+                if strict:
+                    return (not pair.active and all(pair.safe_flat(a) for a in items))
                 return (any(pair.release_flat(a) for a in items)
                         and all(pair.release_flat(a) or (not a['fresh'] and not any(a[k] for k in ('busy','scheduled','pending','closing'))) for a in items))
             if not releasable(agents):
@@ -930,15 +935,44 @@ class Fleet:
                 state['id'] = identity
                 state['name'] = ' / '.join(pair.name(slot) for slot in pair.pair)
                 states.append(state)
+            fleet=[self.view(slot) for slot in self.catalog.config]
+            for view in fleet: self.record_vm_activity(view)
             return {'version':VERSION, 'pairs':states, 'limits':{'vms':MAX_VMS,'pairs':MAX_PAIRS},
-                    'fleet':[self.view(slot) for slot in self.catalog.config],
+                    'fleet':fleet, 'vmEvents':list(self.vm_events),
                     'events':list(self.global_events), 'serverTime':time.time()}
+
+    def vm_event(self, slot, message):
+        with self.lock:
+            self.vm_event_sequence += 1
+            self.vm_events.appendleft(dict(id=self.vm_event_sequence, utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+                vm=slot, name=self.catalog.name(slot), message=str(message)[:600]))
+
+    def record_vm_activity(self, view):
+        slot=view['id']
+        values={
+            'connection': 'Connected' if view['online'] else 'Disconnected',
+            'position': 'Position: '+str(view.get('position','Unknown')),
+            'calibration': 'Calibration required' if view.get('calibrationRequired') else 'Calibration ready',
+            'accounts': view.get('accountMessage',''),
+            'sync': view.get('sync',''),
+            'message': view.get('message',''),
+            'preparation': 'Prepared' if view.get('prepared') else '',
+            'busy': 'VM operation running' if view.get('busy') else '',
+            'pair': 'Assigned to pair' if view.get('pairId') else 'VM reservation free',
+            'refresh': view.get('refresh',{}).get('message',''),
+        }
+        with self.lock:
+            previous=self.vm_activity_state.get(slot,{})
+            for key,value in values.items():
+                if value and value!=previous.get(key): self.vm_event(slot,value)
+            self.vm_activity_state[slot]=values
 
     def observe(self, slot):
         with self.lock:
             owner = self.owners.get(slot)
             center = self.pairs[owner] if owner else self.catalog
         center.observe(slot)
+        with self.lock: self.record_vm_activity(self.view(slot))
 
     def refresh_vm(self, slot):
         with self.lock:
@@ -1064,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state())
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/drafts.js':'drafts.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:

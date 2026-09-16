@@ -1,4 +1,4 @@
-﻿# Optional, VM-local fallback. Automatic UI Automation calibration remains the default.
+﻿# Optional, VM-local fallback. Preview 24 preset calibration remains the default.
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
