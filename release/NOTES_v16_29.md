@@ -22,6 +22,6 @@ If a VM is disconnected, busy, still closing, or an export request remains in fl
 
 ## Validation
 
-230 Python regressions and targeted JavaScript tests passed locally. Windows PowerShell 5.1, TLS command dispatch, saved calibration and Chromium confirmation checks are required before publishing the installer. No live NinjaTrader orders or broker fills were tested.
+230 Python regressions and targeted JavaScript tests passed locally. Windows PowerShell 5.1, TLS command dispatch, saved calibration and Chromium confirmation checks passed in Windows validation run 35144494758. All 27 packaged files matched the tested source and the payload checksum was verified. No live NinjaTrader orders or broker fills were tested.
 
 Suggest Pairs remains pending the user's suggestion types and rules.
