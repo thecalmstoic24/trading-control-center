@@ -1,9 +1,17 @@
 $ErrorActionPreference='Stop'
-Add-Type -Path (Join-Path $PSScriptRoot '../agent/ControlGateway.cs')
+$gatewaySource=Get-Content (Join-Path $PSScriptRoot '../agent/ControlGateway.cs') -Raw
+# Expose swallowed server-side TLS exceptions only inside this test assembly.
+$gatewaySource=$gatewaySource.Replace('public sealed class ControlGateway11 : IDisposable {','public sealed class ControlGateway11 : IDisposable { public static string TestError;')
+$gatewaySource=$gatewaySource.Replace('catch {} finally { c.Close();','catch (Exception e) { TestError=e.ToString(); } finally { c.Close();')
+Add-Type -TypeDefinition $gatewaySource
 # Test certificate exists only in memory. This test never contacts a VM or NinjaTrader.
 $rsa=[Security.Cryptography.RSA]::Create(2048)
 $request=[Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=localhost',$rsa,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
 $certificate=$request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-1),[DateTimeOffset]::UtcNow.AddDays(1))
+# Schannel needs a persisted private-key handle; production uses the Windows certificate store.
+$temporary=$certificate
+$certificate=[Security.Cryptography.X509Certificates.X509Certificate2]::new($temporary.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx),'',[Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet -bor [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet)
+$temporary.Dispose()
 $hash=[Security.Cryptography.SHA256]::Create()
 $pin=([BitConverter]::ToString($hash.ComputeHash($certificate.RawData))).Replace('-','').ToLowerInvariant()
 $credential='b'*64
@@ -11,7 +19,7 @@ $gateway=[ControlGateway11]::new(18789,$certificate,$credential)
 function Check($Condition,$Message){if(-not $Condition){throw $Message}}
 function Call($Command,$PinValue=$pin,$TokenValue=$credential){
     $task=[ControlGateway11]::Send('127.0.0.1',18789,$PinValue,$TokenValue,$Command,'{}',1500)
-    return ($task.GetAwaiter().GetResult() | ConvertFrom-Json)
+    try { return ($task.GetAwaiter().GetResult() | ConvertFrom-Json) } catch { throw ('TLS test '+$Command+': '+$_.Exception.Message+'; server: '+[ControlGateway11]::TestError) }
 }
 try {
     $gateway.Start()
