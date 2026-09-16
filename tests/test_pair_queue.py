@@ -510,6 +510,13 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(calls,[(PAIR_TABLE,'DELETE',{'records[]':'recOwn'})])
         self.assertEqual(records[0]['id'],'recOther')
 
+    def test_start_count_excludes_already_dispatched_pairs(self):
+        self.queue.add(self.body);self.queue.add(self.body)
+        self.assertEqual(self.queue.command('start',{})['startedCount'],2)
+        self.assertEqual(self.queue.command('start',{})['startedCount'],0)
+        self.queue.add(self.body)
+        self.assertEqual(self.queue.command('start',{})['startedCount'],1)
+
     def test_start_dispatches_batch_new_plans_wait_for_next_start(self):
         self.queue.add(self.body);self.queue.add(self.body)
         self.queue.command('start',{})

@@ -39,6 +39,7 @@ try {
  $script:refreshTimer | Add-Member ScriptMethod Stop {}
  $script:refreshTimer | Add-Member ScriptMethod Start {}
  $script:ControlIdentity=@{Name='Test VM'}
+ $script:SkippedResults23=@{}
  Start-Worker14 -Mode export -TradeId ('b'*32) -FreshExport
  $request=Get-Content (Join-Path $directory 'worker-request.json') -Raw | ConvertFrom-Json
  Check ($request.FreshExport -and $request.Mode -eq 'export') 'Fresh export flag lost at worker boundary'

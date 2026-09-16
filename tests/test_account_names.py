@@ -11,6 +11,26 @@ class AccountNames(unittest.TestCase):
    self.assertEqual(account_id(name),name)
  def test_collision_is_not_selectable(self):
   self.assertEqual(account_list(['BX-M123','BX-M123!Bulenox','Sim101']),['Sim101'])
+ def test_mt_discovery_and_full_trading_label(self):
+  clean='BX-MT123456'
+  for suffix in ['', '!Bulenox', '!Bulenox!Bulenox', '|Bulenox', '|Bulenox|Bulenox', '|Bulenox!Bulenox']:
+   with self.subTest(suffix=suffix):
+    raw=clean+suffix
+    self.assertEqual(account_id(raw),clean)
+    self.assertEqual(account_list(['Sim101',raw]),['Sim101',clean])
+    self.assertEqual(trading_name(clean,['Sim101',raw]),raw)
+ def test_mt_duplicates_missing_and_distinct_m_account(self):
+  mt='BX-MT123456';m='BX-M123456'
+  names=[mt+'|Bulenox',m+'|Bulenox']
+  self.assertEqual(account_list(names),[mt,m])
+  self.assertEqual(trading_name(mt,names),names[0])
+  self.assertEqual(trading_name(m,names),names[1])
+  self.assertEqual(account_list([mt,mt+'!Bulenox','Sim101']),['Sim101'])
+  for names in [[m+'|Bulenox'],[mt,mt+'|Bulenox']]:
+   with self.assertRaises(ValueError):trading_name(mt,names)
+ def test_mt_unrelated_suffixes_unchanged(self):
+  for name in ['BX-MT123!Other','BX-MT123!bulenox','BX-MT123!Bulenox!Other','BX-MTX123!Bulenox']:
+   self.assertEqual(account_id(name),name)
 
 class PipeSuffixTests(unittest.TestCase):
     def test_reported_labels(self):

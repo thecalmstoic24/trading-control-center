@@ -29,4 +29,7 @@ def upgrade(source):
     end=source.index('    [PairedVmAgentNativeV10]::SetForegroundWindow',start)
     source=source[:start]+"    $chartHandle = Get-CalibratedChart20\n"+source[end:]
     source=source.replace('    [PairedVmAgentNativeV10]::ShowWindow($Snapshot.Handle, 9) | Out-Null', '    $null=Get-CalibratedChart20')
+    start=source.index('    $rect =',source.index('function Prepare-Trade'))
+    end=source.index('    $saved = $false',start)
+    source=source[:start]+"    $modal = Open-CalibratedAtm26 -Handle $chartHandle -Root $chartRoot\n\n"+source[end:]
     return source

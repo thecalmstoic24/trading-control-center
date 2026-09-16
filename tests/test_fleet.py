@@ -32,6 +32,52 @@ class FleetTests(unittest.TestCase):
         self.fleet.get_pair(self.a).active=True
         with self.assertRaises(ValueError): self.fleet.refresh_vm('vm-left')
         self.assertFalse(any(c[1]=='accounts' for c in self.fake.calls))
+    def wait_vm_refresh(self, slot):
+        deadline=time.monotonic()+4
+        while self.fleet.vm_refresh[slot]['status']=='running' and time.monotonic()<deadline:
+            time.sleep(.01)
+        return self.fleet.vm_refresh[slot]
+    def test_blank_chart_account_refresh_completes_without_selecting_or_trading(self):
+        slot='vm-left'
+        self.fake.states[slot].update(account='',accounts=['Sim101','BX-M123'],accountMessage='2 matched accounts')
+        self.fleet.vm_refresh[slot]={'status':'error','message':'Previous refresh failure'}
+        self.fake.calls.clear()
+        self.fleet.refresh_vm(slot)
+        result=self.wait_vm_refresh(slot)
+        self.assertEqual(result['status'],'complete',result)
+        self.assertIn('BX-M123',self.fleet.view(slot)['accounts'])
+        self.assertEqual(self.fake.states[slot]['account'],'')
+        self.assertEqual([command for _,command,_ in self.fake.calls if command!='status'],['accounts'])
+    def test_blank_chart_refresh_rejects_stale_nonflat_or_busy_state(self):
+        slot='vm-left'
+        baseline=dict(self.fake.states[slot],account='')
+        for changes in ({'ok':False},{'sampleAgeMs':999999},{'position':'1 L'},
+                        {'position':'Unknown'},{'busy':True},{'scheduled':True},
+                        {'pendingVerification':True},{'closing':True},{'pairActive':True}):
+            with self.subTest(changes=changes):
+                # Each case is independent; observing a position above marks the pair active.
+                self.fleet.get_pair(self.a).active=False
+                self.fleet.get_pair(self.a).opened_ids.clear()
+                self.fake.states[slot]=dict(baseline,**changes)
+                self.fake.calls.clear()
+                self.fleet.refresh_vm(slot)
+                result=self.wait_vm_refresh(slot)
+                self.assertEqual(result['status'],'error',result)
+                self.assertFalse(any(command=='accounts' for _,command,_ in self.fake.calls))
+    def test_blank_account_discovery_does_not_weaken_trade_or_close_checks(self):
+        slot='vm-left';center=self.fleet.get_pair(self.a)
+        self.fake.states[slot]['account']=''
+        center.observe(slot)
+        view=center.view_agent(slot)
+        self.assertTrue(center.account_discovery_idle(view))
+        self.assertFalse(center.safe_flat(view))
+        center.wait_refresh_idle(slot,timeout=.1,allow_unselected_account=True)
+        with self.assertRaisesRegex(ValueError,'could not verify an idle VM'):
+            center.wait_refresh_idle(slot,timeout=.01)
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(ValueError,'fresh Flat'):
+            center.prepare(dict(ticker='NQ DEC26',stopLoss=100,profit=200),center.generation)
+        self.assertFalse(any(command in ('prepare','bind_peer','entry') for _,command,_ in self.fake.calls))
     def tearDown(self):
         self.fleet.shutdown()
         for center in [self.fleet.catalog,*self.fleet.pairs.values(),*self.fleet.retired]:

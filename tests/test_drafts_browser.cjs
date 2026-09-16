@@ -90,7 +90,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await first.locator('[data-field=ratio]').selectOption('3:4');
  await first.locator('[data-field=leftQuantity]').fill('1');
  assert.equal(await first.getByRole('button',{name:'Confirm pair',exact:true}).isDisabled(),true);
- assert.match(await first.locator('.draft-notice').textContent(),/whole contracts/);
+ assert.match(await first.locator('.draft-notice').textContent(),/fractional contracts/);
  await first.locator('[data-field=leftQuantity]').fill('30');
  await first.locator('[data-field=ratio]').selectOption('1:1');
  await first.locator('[data-field=ticker]').selectOption('NQ SEP26');

@@ -3,12 +3,22 @@
   const el=id=>document.getElementById(id), node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   let fleet=[],data={rows:[]},busy=false,resizing=false,detailId='';const duplicateKeys=new Map();
   let sortColumn=10,sortDirection=-1;
-  const selected=new Set();let mutating=false;
+  const selected=new Set();let mutating=false,toastTimer;
+  function toast(count){const box=el('queue-toast');clearTimeout(toastTimer);box.textContent=count?`${count} ${count===1?'pair':'pairs'} started in the queue successfully.`:'No new pairs to start.';box.hidden=false;toastTimer=setTimeout(()=>{box.hidden=true;},5000);}
+  const centralDay=value=>{const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);return ['year','month','day'].map(t=>parts.find(p=>p.type===t).value).join('-');};
+  function tradingRows(){
+    const rows=[...data.rows.filter(r=>!planned(r)),...(data.history||[])],select=el('trading-date'),value=select.value||'today';
+    const dateOf=r=>centralDay(r.completedUtc||r.synced||r.cancelled||'');
+    const dates=[...new Set(rows.map(dateOf).filter(Boolean))].sort().reverse();select.replaceChildren();
+    for(const [v,label] of [['today','Today (Central Time)'],['all','All dates'],...dates.map(d=>[d,d])]){const option=node('option',label);option.value=v;select.append(option);}select.value=value;if(!select.value)select.value='today';
+    const day=select.value==='today'?centralDay(Date.now()):select.value;
+    return rows.filter(r=>!['Complete','Cancelled'].includes(r.status)||select.value==='all'||dateOf(r)===day);
+  }
   const pending=r=>['Queued','Waiting'].includes(r.status);
   const dollars=v=>v===undefined?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
   async function action(name,body={}){
     if(mutating)return;mutating=true;render();
-    try{await api('/api/queue/'+name,body);await poll();if(name==='start')el('tab-trading').click();}
+    try{const result=await api('/api/queue/'+name,body);if(name==='start')toast(result.startedCount||0);await poll();}
     catch(e){data.message=e.message;el('queue-status').textContent=el('trading-queue-status').textContent=e.message;}
     finally{mutating=false;render();}
   }
@@ -27,7 +37,7 @@
     el('queue-status').textContent=el('trading-queue-status').textContent=(data.running?'Running · ':'Paused · ')+data.message;
     const valid=new Set(data.rows.filter(removable).map(r=>r.id));for(const id of selected)if(!valid.has(id))selected.delete(id);
     renderTable('queue-table',data.rows.filter(planned),true);
-    renderTable('trading-queue-table',[...data.rows.filter(r=>!planned(r)),...(data.history||[])],false);
+    renderTable('trading-queue-table',tradingRows(),false);
     const activity=el('queue-activity');activity.replaceChildren();
     for(const r of [...data.rows,...(data.history||[])].slice().reverse()){
       if(!r.message)continue;const item=node('div');item.className='event';item.append(node('span',r.id+' · '+r.status+' · '+r.message));activity.append(item);
@@ -113,7 +123,7 @@
     }
   }
   function renderDetail(){
-    const host=el('compact-pair'),rows=[...data.rows.filter(r=>!planned(r)),...(data.history||[])];host.replaceChildren();
+    const host=el('compact-pair'),rows=tradingRows();host.replaceChildren();
     const r=rows.find(r=>r.id===detailId)||rows[rows.length-1];host.hidden=!r;if(!r)return;
     const s=r.spec,label=r.status==='Awaiting results'?'Trade closed · Syncing results':r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
     host.append(node('h3',r.id+' · '+s.ticker+' · '+label));
@@ -149,6 +159,7 @@
     try{await api('/api/queue/add',body);el('queue-dialog').close();await poll();}catch(err){el('queue-form-status').textContent=err.message;}finally{el('queue-save').disabled=false;}
   };
   for(const [id,isPlanning] of [['queue-remove-selected',true],['trading-remove-selected',false]])el(id).onclick=()=>action('remove-selected',{ids:data.rows.filter(r=>planned(r)===isPlanning&&removable(r)&&selected.has(r.id)).map(r=>r.id)});
+  el('trading-date').onchange=()=>render();
   el('trading-refresh').onclick=()=>action('refresh');
   el('trading-resume').onclick=()=>action('resume');el('trading-pause').onclick=()=>action('pause');el('trading-retry').onclick=()=>action('retry');
   el('queue-start').onclick=()=>action('start');el('queue-pause').onclick=()=>action('pause');el('queue-retry').onclick=()=>action('retry');

@@ -276,6 +276,7 @@ class PairQueue:
         if action == 'pause':
             with self.lock: self.running=False; self.message='Paused. Open trades continue to be monitored.'
             return {'ok':True}
+        started_count=0
         with self.io, self.lock:
             if action == 'edit-draft':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
@@ -292,6 +293,7 @@ class PairQueue:
                             number=max(self.next_id,maximum+1);self.next_id=number+1
                             row.update(id=f'PAIR-{number:04d}',localDraft=False,dirty=True)
                             self.save()
+                        if not row.get('dispatched'): started_count+=1
                         row['dispatched']=True
                         row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']))
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
@@ -380,7 +382,7 @@ class PairQueue:
                     for i,r in enumerate(self.rows): r['order']=i+1; r['dirty']=True
             else: raise ValueError('Unknown queue action.')
             self.save()
-        return {'ok':True}
+        return {'ok':True, 'startedCount':started_count}
 
     def refresh_remote(self):
         # Called under io + lock. Never interpret a failed read as an empty table.

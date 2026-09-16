@@ -130,3 +130,5 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 .realized-pnl{color:var(--text);white-space:nowrap}
 
 .contract-settings{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px}.contract-settings label{display:inline-block}.contract-settings input{width:90px;display:inline-block}.contract-settings p{font-size:12px;margin:6px 0 0}
+
+#queue-toast{position:fixed;right:24px;bottom:24px;z-index:10000;padding:16px 22px;background:#163e59;color:white;border-radius:8px;box-shadow:0 4px 20px #0003;max-width:calc(100vw - 48px)}

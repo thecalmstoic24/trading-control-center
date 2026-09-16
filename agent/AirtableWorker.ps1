@@ -2,7 +2,7 @@
 # First run prompts for a token, validates access, and saves it encrypted for this Windows user/PC.
 param([string]$RequestPath,[string]$ResultPath)
 function Get-AccountId16([string]$Name) {
- if($Name -cmatch '^(BX-?M?\d+)(?:[!|]Bulenox)+$') { return $Matches[1] }
+ if($Name -cmatch '^(BX-?(?:MT|M)?\d+)(?:[!|]Bulenox)+$') { return $Matches[1] }
  return $Name
 }
 function Get-AccountMatches16($Names, $Records, [string]$Master) {
@@ -53,6 +53,9 @@ public class NTDesktop {
  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,StringBuilder text,int count);
  public static string Title(IntPtr h) { var text=new StringBuilder(2048); GetWindowText(h,text,text.Capacity); return text.ToString(); }
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int cmd);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h,int x,int y,int width,int height,bool repaint);
  public delegate bool EnumProc(IntPtr h,IntPtr extra);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback,IntPtr extra);
@@ -197,6 +200,77 @@ function InvokeControl($element) {
  if(-not $element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { throw 'This control does not expose InvokePattern. Send the error text for adjustment.' }
  $pattern.Invoke()
 }
+function GetAccountsRect([IntPtr]$Handle) {
+ $nativeRect=New-Object NTDesktop+RECT
+ if(-not [NTDesktop]::GetWindowRect($Handle,[ref]$nativeRect)) { throw 'Cannot read Accounts window coordinates.' }
+ return [pscustomobject]@{Left=$nativeRect.L;Top=$nativeRect.T;Width=($nativeRect.R-$nativeRect.L);Height=($nativeRect.B-$nativeRect.T)}
+}
+function GetAccountsDisplay([IntPtr]$Handle) {
+ $screen=[System.Windows.Forms.Screen]::FromHandle($Handle)
+ $area=$screen.WorkingArea
+ try { $dpi=[NTDesktop]::GetDpiForWindow($Handle) } catch { $dpi=0 }
+ return [pscustomobject]@{Name=$screen.DeviceName;Left=$area.Left;Top=$area.Top;Width=$area.Width;Height=$area.Height;Dpi=$dpi}
+}
+function SameAccountsRect($A,$B) {
+ return ($null -ne $A -and $null -ne $B -and $A.Left -eq $B.Left -and $A.Top -eq $B.Top -and $A.Width -eq $B.Width -and $A.Height -eq $B.Height)
+}
+function NewAccountsLayout($Cfg,$Display) {
+ # Keep the original grid offsets whenever they fit; do not scale the UI or screen.
+ $width=[Math]::Min([int]$Cfg.Width,[int]$Display.Width)
+ $height=[Math]::Min([int]$Cfg.Height,[int]$Display.Height)
+ if($width -lt 640 -or $height -lt 480) { throw 'The available screen area is too small for Accounts export (minimum 640 x 480). Increase the VM resolution.' }
+ $left=[Math]::Max([int]$Display.Left,[Math]::Min([int]$Cfg.Left,[int]$Display.Left+[int]$Display.Width-$width))
+ $top=[Math]::Max([int]$Display.Top,[Math]::Min([int]$Cfg.Top,[int]$Display.Top+[int]$Display.Height-$height))
+ return [pscustomobject]@{Left=$left;Top=$top;Width=$width;Height=$height;X=[Math]::Min([int]$Cfg.X,$width-80);Y=[Math]::Min([int]$Cfg.Y,$height-100)}
+}
+function GetAccountsLayoutKey([IntPtr]$Handle,$Cfg,$Display) {
+ $process=Get-Process -Id ([NTDesktop]::ProcessId($Handle))
+ return (@(1,$Handle.ToInt64(),$process.Id,$process.StartTime.ToUniversalTime().Ticks,$Display.Name,$Display.Left,$Display.Top,$Display.Width,$Display.Height,$Display.Dpi,$Cfg.Left,$Cfg.Top,$Cfg.Width,$Cfg.Height,$Cfg.X,$Cfg.Y) -join '|')
+}
+function PrepareAccountsLayout([IntPtr]$Handle,$Cfg) {
+ $cacheFile=Join-Path $state 'accounts-layout-v1.json'
+ $display=GetAccountsDisplay $Handle
+ $key=GetAccountsLayoutKey $Handle $Cfg $display
+ $rect=GetAccountsRect $Handle
+ $restore=([NTDesktop]::IsIconic($Handle) -or [NTDesktop]::IsZoomed($Handle))
+ $cached=$null
+ try { if(Test-Path -LiteralPath $cacheFile) { $cached=Get-Content -LiteralPath $cacheFile -Raw | ConvertFrom-Json } } catch { $cached=$null }
+ $reuse=($null -ne $cached -and $cached.Key -ceq $key -and -not $restore -and (SameAccountsRect $rect $cached.Layout))
+ if($reuse) {
+  $layout=$cached.Layout
+  # Treat the persisted file as untrusted: never click outside the verified window.
+  $reuse=($layout.X -gt 0 -and $layout.Y -gt 0 -and $layout.X -lt $rect.Width-20 -and $layout.Y -lt $rect.Height-40 -and $rect.Left -ge $display.Left -and $rect.Top -ge $display.Top -and $rect.Left+$rect.Width -le $display.Left+$display.Width -and $rect.Top+$rect.Height -le $display.Top+$display.Height)
+ }
+ if(-not $reuse) {
+  $layout=NewAccountsLayout $Cfg $display
+  if($restore) { [void][NTDesktop]::ShowWindow($Handle,9); $rect=GetAccountsRect $Handle }
+  if(-not (SameAccountsRect $rect $layout)) {
+   if(-not [NTDesktop]::MoveWindow($Handle,$layout.Left,$layout.Top,$layout.Width,$layout.Height,$true)) { throw 'Could not move/resize the Accounts window.' }
+   # Poll only after an actual change; ordinary exports have no layout sleep.
+   for($i=0;$i -lt 12;$i++) {
+    $rect=GetAccountsRect $Handle
+    if(SameAccountsRect $rect $layout) { break }
+    Start-Sleep -Milliseconds 50
+   }
+   if(-not (SameAccountsRect $rect $layout)) { throw "Accounts did not reach the screen-fitting layout. Actual X=$($rect.Left), Y=$($rect.Top), Width=$($rect.Width), Height=$($rect.Height). No export click sent." }
+  }
+  Log "Prepared Accounts layout Width=$($layout.Width), Height=$($layout.Height). It will be reused on later exports."
+ } else { Log 'Reusing verified Accounts layout; no restore, resize, or layout wait.' }
+ if([NTDesktop]::GetForegroundWindow() -ne $Handle) {
+  [void][NTDesktop]::SetForegroundWindow($Handle)
+  for($i=0;$i -lt 12 -and [NTDesktop]::GetForegroundWindow() -ne $Handle;$i++) { Start-Sleep -Milliseconds 50 }
+ }
+ if([NTDesktop]::GetForegroundWindow() -ne $Handle) { throw 'Could not activate Accounts. Bring it forward and retry.' }
+ if(-not (SameAccountsRect (GetAccountsRect $Handle) $layout)) { throw 'Accounts moved during export preparation. Retry sync.' }
+ return [pscustomobject]@{Key=$key;Layout=$layout;CacheFile=$cacheFile;NeedsSave=(-not $reuse)}
+}
+function SaveAccountsLayout($Prepared) {
+ if(-not $Prepared.NeedsSave) { return }
+ try {
+  @{Key=$Prepared.Key;Layout=$Prepared.Layout} | ConvertTo-Json | Set-Content -LiteralPath ($Prepared.CacheFile+'.tmp') -Encoding UTF8
+  Move-Item -LiteralPath ($Prepared.CacheFile+'.tmp') -Destination $Prepared.CacheFile -Force
+ } catch { Log 'Could not save the Accounts layout cache. This export can continue.' }
+}
 function ExportAccounts($cfg) {
  $script:stage='Locate Accounts window'
  Log 'Looking only for NinjaTrader: Control Center - Accounts'
@@ -206,27 +280,14 @@ function ExportAccounts($cfg) {
  if($matches.Count -gt 1) { throw 'Multiple Control Center - Accounts windows were found. This version needs one Accounts window; charts and other NinjaTrader windows can stay open.' }
  $window = $matches[0]
  $handle = [IntPtr]$window.Current.NativeWindowHandle
- $script:stage='Restore Accounts window'
+ $script:stage='Prepare Accounts window'
  if(-not $cfg -or -not $cfg.Width -or -not $cfg.Height) { throw 'The built-in window layout is invalid.' }
- [void][NTDesktop]::ShowWindow($handle,9)
- Start-Sleep -Milliseconds 300
- $left=20; $top=20
- if($null -ne $cfg.Left) { $left=[int]$cfg.Left }
- if($null -ne $cfg.Top) { $top=[int]$cfg.Top }
- if(-not [NTDesktop]::MoveWindow($handle,$left,$top,[int]$cfg.Width,[int]$cfg.Height,$true)) { throw 'Could not move/resize the Accounts window.' }
- [void][NTDesktop]::SetForegroundWindow($handle)
- Start-Sleep -Milliseconds 600
- if([NTDesktop]::GetForegroundWindow() -ne $handle) { throw 'Could not activate Accounts. Bring it forward and retry.' }
- $nativeRect=New-Object NTDesktop+RECT
- if(-not [NTDesktop]::GetWindowRect($handle,[ref]$nativeRect)) { throw 'Cannot verify restored window coordinates.' }
- $rect=[pscustomobject]@{Left=$nativeRect.L; Top=$nativeRect.T; Width=($nativeRect.R-$nativeRect.L); Height=($nativeRect.B-$nativeRect.T)}
- if($rect.Left -ne $cfg.Left -or $rect.Top -ne $cfg.Top -or $rect.Width -ne $cfg.Width -or $rect.Height -ne $cfg.Height) { throw "Window coordinates were not restored exactly. Actual X=$($rect.Left), Y=$($rect.Top), Width=$($rect.Width), Height=$($rect.Height). Check display scaling and monitor layout." }
+ $prepared=PrepareAccountsLayout $handle $cfg
+ $rect=$prepared.Layout
  if(-not (AccountsIdentity $window).Eligible) { throw 'Accounts tab identity was lost after resizing.' }
- Log 'Verified window X=954 Y=6 Width=964 Height=1148.' 
- if($cfg.X -le 0 -or $cfg.Y -le 0 -or $cfg.X -ge $rect.Width -or $cfg.Y -ge $rect.Height) { throw 'Saved grid point is outside Accounts. Run Setup again.' }
  $script:stage='Open Export menu'
- $x = [int]($rect.Left+$cfg.X)
- $y = [int]($rect.Top+$cfg.Y)
+ $x = [int]($rect.Left+$rect.X)
+ $y = [int]($rect.Top+$rect.Y)
  if(-not [NTDesktop]::SetCursorPos($x,$y)) { throw 'Cannot move cursor to saved grid point.' }
  $clickPoint=New-Object NTDesktop+POINT
  if(-not [NTDesktop]::GetCursorPos([ref]$clickPoint) -or $clickPoint.X -ne $x -or $clickPoint.Y -ne $y) { throw 'Cursor did not reach the saved location.' }
@@ -258,6 +319,8 @@ function ExportAccounts($cfg) {
   elseif($unique.Count -gt 1) { throw 'More than one Export menu item is near the click. Close the popup and retry.' }
  }
  if($null -eq $export) { throw 'Export menu item was not found in the popup near the Accounts click.' }
+ # Cache only a layout whose click actually found the Accounts Export menu.
+ SaveAccountsLayout $prepared
  InvokeControl $export
  $script:stage='Locate native Export As dialog'
  $dialogHandle=[IntPtr]::Zero

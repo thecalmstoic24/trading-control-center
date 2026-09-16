@@ -45,7 +45,7 @@
     if(!button)return;
     button.disabled=!!error||(!d.left&&!d.right)||inFlight.has(d.key);
     button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':(!d.left||!d.right)?'Confirm Single Pair':'Confirm pair';
-    card.querySelector('.draft-notice').textContent=error==='Invalid quantity'?'Invalid quantity: whole contracts only. Adjust quantity or use MNQ.':d.notice||'';
+    card.querySelector('.draft-notice').textContent=error==='Invalid quantity'?(d.notice||'Invalid quantity: whole contracts only. Adjust quantity or ratio.'):d.notice||'';
   }
   let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
@@ -119,12 +119,10 @@
       }
       const footer=make('div');footer.className='draft-footer';disabled.append(footer);
       const instrumentLabel=make('label','Instrument'),instrument=make('select');instrument.dataset.field='ticker';
-      for(const value of [...new Set(['NQ','MNQ',d.ticker])]){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
+      const companion=d.ticker.replace(/^(?:MNQ|NQ)(?= |$)/,root=>root==='NQ'?'MNQ':'NQ');
+      for(const value of [...new Set(['NQ','MNQ',d.ticker,companion])]){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
       instrument.onchange=()=>{
-        const next=instrument.value,scale=next.split(' ')[0]===d.ticker.split(' ')[0]?1:/^MNQ(?: |$)/.test(next)?10:0.1;
-        const l=Number(d.leftQuantity)*scale,r=Number(d.rightQuantity)*scale;
-        if(!Number.isInteger(l)||!Number.isInteger(r)){d.notice='Cannot convert to whole NQ contracts. Adjust quantities first.';instrument.value=d.ticker;card.querySelector('.draft-notice').textContent=d.notice;return;}
-        d.ticker=next;d.leftQuantity=String(l);d.rightQuantity=String(r);d.notice='';save();render();
+        PairRatio.setInstrument(d,instrument.value);save();render();
       };instrumentLabel.append(instrument);footer.append(instrumentLabel);
       const confirm=make('button',inFlight.has(d.key)?'Adding…':'Confirm pair');confirm.type='submit';confirm.disabled=!d.left||!d.right;footer.append(confirm);
       const remove=make('button','Remove');remove.className='quiet';remove.type='button';remove.onclick=()=>{drafts=drafts.filter(x=>x!==d);save();render();usage();};footer.append(remove);

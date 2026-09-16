@@ -1,4 +1,4 @@
-# Appended before ShowDialog by scripts/build_package.py. Core V10.4 functions remain intact.
+﻿# Appended before ShowDialog by scripts/build_package.py. Core V10.4 functions remain intact.
 # Load in script scope so later timer callbacks retain these functions.
 . (Join-Path $PSScriptRoot '..\install\Private-Network.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'ControlGateway.cs')
@@ -6,7 +6,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.24'
+$script:ControlVersion = '16.0-preview.26'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath

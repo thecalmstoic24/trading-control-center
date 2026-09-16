@@ -32,8 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.25'
-AGENT_VERSIONS = {'16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+VERSION = '16.0-preview.26'
+# Agent protocol remains at Preview 24; retain older accepted release labels too.
+AGENT_VERSIONS = {'16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -202,7 +203,7 @@ class Center:
         (self.directory / 'entry-unresolved.json').unlink(missing_ok=True)
         self.event(message)
 
-    def wait_refresh_idle(self, slot, timeout=130):
+    def wait_refresh_idle(self, slot, timeout=130, allow_unselected_account=False):
         deadline = time.monotonic() + timeout
         while not self.stop.is_set() and time.monotonic() < deadline:
             self.observe(slot)
@@ -210,7 +211,8 @@ class Center:
                 agent = self.view_agent(slot)
                 if self.active:
                     raise ValueError('Pair activity changed; automatic refresh stopped.')
-                if self.safe_flat(agent):
+                ready = self.account_discovery_idle(agent) if allow_unselected_account else self.safe_flat(agent)
+                if ready:
                     return
                 if agent['fresh'] and agent['position'] != 'Flat':
                     raise ValueError('Position is no longer Flat; automatic refresh stopped.')
@@ -375,6 +377,12 @@ class Center:
         return (agent['fresh'] and bool(agent['account'])
                 and agent['position'] == 'Flat' and not agent['scheduled'] and not agent['busy']
                 and not agent['pairActive'] and not agent['pending'] and not agent.get('closing'))
+
+    def account_discovery_idle(self, agent):
+        # Listing dropdown options does not require an existing selection.
+        # Keep this separate from trade/close verification, which needs an account.
+        return (agent['fresh'] and agent['position'] == 'Flat'
+                and not any(agent.get(k) for k in ('scheduled', 'busy', 'pairActive', 'pending', 'closing')))
 
     def release_flat(self, agent):
         # A retained pairActive flag is cleared by an authenticated unbind after local Flat readback.
@@ -932,13 +940,13 @@ class Fleet:
             try:
                 center.observe(slot)
                 with center.lock:
-                    if not center.safe_flat(center.view_agent(slot)):
-                        raise ValueError('VM must report fresh, idle Flat before account discovery.')
+                    if not center.account_discovery_idle(center.view_agent(slot)):
+                        raise ValueError('Account refresh needs fresh Flat chart data and no trading, sync, or closing operation. A blank Account box is allowed.')
                     center.discovery_until=time.monotonic()+130
                 center.call(slot,'accounts',{},15)
                 # The worker publishes its account list asynchronously.
                 center.stop.wait(1)
-                center.wait_refresh_idle(slot)
+                center.wait_refresh_idle(slot, allow_unselected_account=True)
                 with center.lock:
                     view=center.view_agent(slot)
                     if not view.get('accounts'): raise ValueError('No account list returned. Check Airtable setup on this VM.')

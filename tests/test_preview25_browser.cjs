@@ -69,7 +69,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await card.locator('[data-value-key=profit]').inputValue(),'200');
  assert.equal(await card.locator('[data-field=ticker]').inputValue(),'NQ MAR27');
  await card.locator('[data-field=ticker]').selectOption('NQ');assert.equal(await card.locator('[data-value-key=leftQuantity]').inputValue(),'1');
- await card.locator('[data-field=ticker]').selectOption('MNQ');assert.equal(await card.locator('[data-value-key=leftQuantity]').inputValue(),'10');
+ await card.locator('[data-field=ticker]').selectOption('MNQ');assert.equal(await card.locator('[data-value-key=leftQuantity]').inputValue(),'1');
  await card.getByRole('button',{name:'Confirm Single Pair',exact:true}).click();await page.locator('#queue-start').click();
  await page.locator('#trading-panel').waitFor({state:'visible'});assert.match(await table.innerText(),/PAIR-0004/);
  assert.equal(queue.rows.find(r=>r.id==='PAIR-0004').spec.ticker,'MNQ JUN27');assert.deepEqual(errors,[]);await browser.close();console.log('Preview 25 browser: contract persistence, root selection, pinned editing, quantity conversion; sorting, live realized P&L, smaller metrics; Single Pair, editable drafts, drawdown, status colors, Central Time and persistent column resizing passed.');

@@ -68,6 +68,18 @@ class Tests(unittest.TestCase):
                 self.center.prepare(dict(ticker='NQ SEP26',stopLoss=100,profit=200,accounts={'vm-left':clean}),0)
         self.assertFalse(any(c[1] in ('prepare','bind_peer') for c in self.fake.calls))
 
+    def test_bulenox_mt_preserves_id_and_original_trading_label(self):
+        clean='BX-MT123456';raw=clean+'|Bulenox!Bulenox'
+        self.fake.states['vm-left']['accounts']=['Sim101','BX-M123456|Bulenox',raw]
+        self.center.prepare(dict(ticker='NQ DEC26',stopLoss=100,profit=200,accounts={'vm-left':clean}),0)
+        self.assertEqual(self.fake.states['vm-left']['account'],raw)
+        peer=next(body for slot,command,body in self.fake.calls if slot=='vm-right' and command=='bind_peer')
+        self.assertEqual(peer['peerAccount'],raw)
+        view=self.center.view_agent('vm-left')
+        self.assertEqual(view['account'],clean)
+        self.assertIn(clean,view['accounts']);self.assertIn('BX-M123456',view['accounts'])
+        self.assertTrue(self.center.state()['canEnter'])
+
     def test_peer_preflight_failure_sends_no_entry_or_close(self):
         self.prepare();self.fake.fail.add(('vm-right','peer_check'))
         with self.assertRaisesRegex(ValueError,'no entry sent'):

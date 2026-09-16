@@ -442,28 +442,7 @@ function Prepare-Trade {
         throw "Chart Trader order quantity verification failed. Expected $LockedQuantity, found '$readMainQuantity'."
     }
 
-    $rect = [PairedVmAgentNativeV10]::ReadWindowRect($chartHandle)
-    $atmSelector = Find-UiaById -Root $chartRoot -AutomationId 'ChartTraderControlATMStrategySelector'
-    if ($null -eq $atmSelector) { throw 'ATM Strategy box was not found.' }
-    $atmBounds = $atmSelector.Current.BoundingRectangle
-    $hoverX = [int]($atmBounds.Left + ($atmBounds.Width / 2))
-    $hoverY = [int]($atmBounds.Top + ($atmBounds.Height / 2))
-    $editX = $rect[0] + $EditRelativeX
-    $editY = $rect[1] + $EditRelativeY
-
-    $modal = $null
-    for ($attempt = 1; $attempt -le 2 -and $null -eq $modal; $attempt++) {
-        [PairedVmAgentNativeV10]::SetForegroundWindow($chartHandle) | Out-Null
-        [PairedVmAgentNativeV10]::SetCursorPos($hoverX, $hoverY) | Out-Null
-        Start-Sleep -Milliseconds 400
-        [PairedVmAgentNativeV10]::SetCursorPos($editX, $editY) | Out-Null
-        Start-Sleep -Milliseconds 400
-        [PairedVmAgentNativeV10]::LeftClick()
-        $modal = Wait-ForParametersWindow -TimeoutMilliseconds 2000
-    }
-    if ($null -eq $modal) {
-        throw 'Custom Strategy Parameters did not open after two careful attempts. The saved Edit-button position may no longer match the window.'
-    }
+    $modal = Open-CalibratedAtm26 -Handle $chartHandle -Root $chartRoot
 
     $saved = $false
     try {
@@ -2246,7 +2225,7 @@ $script:ControlGateway = $null
 $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
-$script:ControlVersion = '16.0-preview.24'
+$script:ControlVersion = '16.0-preview.26'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2748,6 +2727,62 @@ function Get-CalibratedChart20 {
   return $h
  } catch {$script:CalibrationRequired20=$true;throw 'Calibration required. Chart changed or is unavailable. Click Calibrate Chart 1, then Retry preparation.'}
 }
+# Resolve the actual UI Automation Edit button once; preparation reuses the element.
+$script:AtmEdit26=$null
+$script:AtmEditBounds26=$null
+$script:AtmSelectorBounds26=$null
+function Find-AtmEdit26($Root,$Bounds) {
+ $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)
+ $candidates26=@()
+ foreach($element in $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)) {
+  $c=$element.Current;$b=$c.BoundingRectangle
+  if($c.IsOffscreen -or -not $c.IsEnabled -or $b.Width -le 0 -or $b.Height -le 0){continue}
+  if($c.Name -notmatch '(?i)^edit(?:\s|$)' -and $c.AutomationId -notmatch '(?i)(atm.*edit|edit.*atm)'){continue}
+  # Constrain the match to the ATM selector area, excluding unrelated chart buttons.
+  if($b.Right -lt $Bounds.Left -or $b.Left -gt ($Bounds.Right+80) -or $b.Bottom -lt ($Bounds.Top-30) -or $b.Top -gt ($Bounds.Bottom+60)){continue}
+  $candidates26+=,$element
+ }
+ if($candidates26.Count -ne 1){throw 'Cannot identify a unique ATM Edit button. Select an ATM template, then click Calibrate Chart 1.'}
+ return $candidates26[0]
+}
+function Initialize-AtmEdit26($Handle,$Root) {
+ $script:AtmEdit26=$null
+ $selector=Find-UiaById -Root $Root -AutomationId 'ChartTraderControlATMStrategySelector'
+ if($null -eq $selector){throw 'ATM Strategy box was not found. Enable Chart Trader and calibrate again.'}
+ [void][PairedVmAgentNativeV10]::SetForegroundWindow($Handle)
+ $b=$selector.Current.BoundingRectangle
+ [void][PairedVmAgentNativeV10]::SetCursorPos([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2))
+ Start-Sleep -Milliseconds 450
+ $button=Find-AtmEdit26 -Root $Root -Bounds $b
+ $null=$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+ $script:AtmEditBounds26=$button.Current.BoundingRectangle
+ $script:AtmSelectorBounds26=$b
+ $script:AtmEdit26=$button
+}
+function Open-CalibratedAtm26($Handle,$Root) {
+ $null=Get-CalibratedChart20
+ if($null -eq $script:AtmEdit26){throw 'ATM Edit calibration required. Click Calibrate Chart 1, then Retry preparation.'}
+ $selector=Find-UiaById -Root $Root -AutomationId 'ChartTraderControlATMStrategySelector'
+ if($null -eq $selector){throw 'ATM Strategy box is unavailable. Calibrate Chart 1 again.'}
+ $b=$selector.Current.BoundingRectangle
+ if(-not $b.Equals($script:AtmSelectorBounds26)){throw 'Chart Trader layout changed. Click Calibrate Chart 1, then Retry preparation.'}
+ for($attempt=1;$attempt -le 2;$attempt++) {
+  [void][PairedVmAgentNativeV10]::SetForegroundWindow($Handle)
+  [void][PairedVmAgentNativeV10]::SetCursorPos([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2))
+  Start-Sleep -Milliseconds 400
+  try {
+   $c=$script:AtmEdit26.Current
+   if($c.IsOffscreen -or -not $c.IsEnabled -or -not $c.BoundingRectangle.Equals($script:AtmEditBounds26)){throw 'Edit changed.'}
+   if([PairedVmAgentNativeV10]::GetForegroundWindow() -ne $Handle){throw 'Chart is not foreground.'}
+   # Invoke the verified control instead of clicking a saved screen coordinate.
+   $invoke=$script:AtmEdit26.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+   $invoke.Invoke()
+  } catch {throw 'ATM Edit control changed or is unavailable. Click Calibrate Chart 1, then Retry preparation.'}
+  $modal=Wait-ForParametersWindow -TimeoutMilliseconds 2000
+  if($null -ne $modal){return $modal}
+ }
+ throw 'Strategy Parameters did not open. Click Calibrate Chart 1, then Retry preparation.'
+}
 function Calibrate-Chart20 {
  if($script:Busy -or $script:Worker14 -or $script:ScheduledAction -or $script:PairCoordinatorActive -or $script:PendingVerification -or $script:CloseCheck){throw 'Wait until this agent is idle before calibration.'}
  $windows=[PairedVmAgentNativeV10]::FindWindows($WindowTitlePrefix)
@@ -2762,8 +2797,10 @@ function Calibrate-Chart20 {
  $script:CalibratedBounds20=[PairedVmAgentNativeV10]::ReadWindowRect($h)
  Invalidate-Preparation
  $script:ControlPreparedId=''
+ # Chart tracking remains usable if Edit calibration needs an ATM template selected.
+ Initialize-AtmEdit26 -Handle $h -Root ([System.Windows.Automation.AutomationElement]::FromHandle($h))
  $script:CalibrationRequired20=$false
- $calibrationStatus20.Text='Chart 1 calibrated.'
+ $calibrationStatus20.Text='Chart 1 and ATM Edit calibrated.'
 }
 $form.ClientSize=New-Object Drawing.Size(460,348)
 $calibrate20=New-Object Windows.Forms.Button

@@ -27,4 +27,4 @@ def validate_quantities(body, left, right):
     a, b = map(int, body['ratio'].split(':'))
     q = body['quantities']
     if q[left]*b != q[right]*a:
-        raise ValueError('Quantities must be whole contracts matching the selected ratio. Use MNQ or adjust quantity.')
+        raise ValueError('Quantities must be whole contracts matching the selected ratio. Adjust quantity or ratio.')
