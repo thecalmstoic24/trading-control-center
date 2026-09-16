@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot '../agent/ControlGateway.cs')
 function Check($value,$message){if(-not $value){throw $message}}
 function Reject([scriptblock]$action,$message){$failed=$false;try{& $action}catch{$failed=$true};Check $failed $message}
