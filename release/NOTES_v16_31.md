@@ -21,4 +21,4 @@ The VMs list now identifies a blank account box rather than showing Ready, and w
 
 ## Validation
 
-237 Python regressions passed locally. Windows PowerShell guard tests, authenticated TLS command transport, production HTTP assets, and browser tests are required before the updater pointer is advanced. Browser checks cover sorted Shift-selection, Select All, card values/notes, bulk partial failures, retry without duplicate drafts, and no queue-start request from bulk confirmation. No live NinjaTrader orders were submitted in validation.
+237 Python regressions passed locally. Windows run 35187960171 passed all PowerShell guard tests, authenticated TLS command transport, production HTTP assets, and browser checks. All 28 packaged files were verified against uploaded source, including the generated agent. Browser checks cover sorted Shift-selection, Select All, card values/notes, bulk partial failures, retry without duplicate drafts, and no queue-start request from bulk confirmation. No live NinjaTrader orders were submitted in validation.
