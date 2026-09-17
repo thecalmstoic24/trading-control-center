@@ -44,7 +44,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const before=(await header.getByRole('columnheader',{name:'firm',exact:true}).boundingBox()).width;
  await header.getByRole('separator',{name:'Resize firm',exact:true}).focus();await page.keyboard.press('ArrowRight');
  for(const h of await page.locator('#planning-table tbody .planning-column-header').all())assert.ok((await h.getByRole('columnheader',{name:'firm',exact:true}).boundingBox()).width>=before+9);
- await header.getByRole('columnheader',{name:'CurrentBalance',exact:true}).dragTo(header.getByRole('columnheader',{name:'id',exact:true}));
+ await header.getByRole('columnheader',{name:'CurrentBalance',exact:true}).dragTo(header.getByRole('columnheader',{name:/^id/}));
  assert.deepEqual(await page.locator('#planning-table tbody .planning-column-header').first().locator('th').allTextContents(),['Select','CurrentBalance','Pair status','id ↑','firm']);
  await page.reload();await page.locator('#tab-planning').click();await page.locator('.fund-heading').first().waitFor();
  assert.equal(await page.locator('#planning-group-fund').getAttribute('aria-pressed'),'true');

@@ -110,6 +110,7 @@
       th.ondragover=e=>{if(Array.from(e.dataTransfer.types).includes('application/x-planning-column'))e.preventDefault();};
       th.ondrop=e=>{e.preventDefault();moveColumn(e.dataTransfer.getData('application/x-planning-column'),c.name);};hr.append(th);
     }
+    for(const th of hr.children)th.scope='col';
     return hr;
   }
   function renderTable(){
