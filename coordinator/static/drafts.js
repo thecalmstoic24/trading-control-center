@@ -12,6 +12,28 @@
     for(const r of queued){if(['Complete','Cancelled'].includes(r.status)||r.errorReleased)continue;for(const a of Object.values(r.spec.accounts||{}))mark(a,['Trading','Awaiting results'].includes(r.status)?'Pairing':'Queue');}
     for(const p of pairs){if(p.closedSequence>0&&!p.active&&!p.prepared)continue;for(const a of Object.values(p.settings?.accounts||{}))mark(a,'Pairing');}
     window.dispatchEvent(new CustomEvent('account-usage',{detail:map}));
+    return map;
+  }
+  let suggesting=false;
+  async function suggestPairs(){
+    if(suggesting)return;
+    const button=el('suggest-pairs'),status=el('suggestion-status');
+    suggesting=true;button.disabled=true;button.textContent='Suggesting…';
+    try{
+      if(el('suggestion-strategy').value!==PairSuggestions.STRATEGY)throw Error('Choose a supported strategy.');
+      const pool=window.planningSelection.suggestionPool(),blockedBefore=Object.keys(usage());
+      const [state,queue]=await Promise.all([api('/api/state'),api('/api/queue')]);
+      if(window.planningSelection.suggestionPool().viewKey!==pool.viewKey)throw Error('The Planning view changed. Click Suggest pairs again.');
+      fleet=state.fleet||[];pairs=state.pairs||[];queued=queue.rows||[];
+      const result=PairSuggestions.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())]);
+      const additions=result.pairs.map(pair=>PairSuggestions.draft(pair,crypto.randomUUID().replaceAll('-','')));
+      for(const d of additions){chooseVM(d.left);chooseVM(d.right);drafts.push(d);}
+      if(additions.length){save();render();usage();}
+      status.textContent=additions.length+' suggested pair'+(additions.length===1?'':'s')+' added from '+pool.scope+'. Review and confirm each card. '+result.skipped.length+' account(s) not used.';
+      const list=el('suggestion-skipped-list');list.replaceChildren();
+      for(const item of result.skipped)list.append(make('li',item.account+' · '+item.reason));
+      el('suggestion-skipped').hidden=!result.skipped.length;
+    }catch(e){status.textContent=e.message;}finally{suggesting=false;button.disabled=false;button.textContent='Suggest pairs';}
   }
   function candidates(account){return fleet.filter(v=>(v.accounts||v.lastKnown?.accounts||[]).includes(account));}
   function chooseVM(item){const list=candidates(item.account);if(!list.some(v=>v.id===item.vm))item.vm='';if(!item.vm&&list.length===1)item.vm=list[0].id;return list;}
@@ -35,6 +57,11 @@
   }
   const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
   function problem(d){
+    if(d.suggestion?.strategy===PairSuggestions.STRATEGY&&d.left&&d.right){
+      const a=PairSuggestions.firm(d.left.metrics),b=PairSuggestions.firm(d.right.metrics);
+      if(!a||!b)return 'Missing firm';
+      if(a===b)return 'Same fund';
+    }
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
     const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
     if(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a)return 'Invalid quantity';
@@ -45,7 +72,7 @@
     if(!button)return;
     button.disabled=!!error||(!d.left&&!d.right)||inFlight.has(d.key);
     button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':(!d.left||!d.right)?'Confirm Single Pair':'Confirm pair';
-    card.querySelector('.draft-notice').textContent=error==='Invalid quantity'?(d.notice||'Invalid quantity: whole contracts only. Adjust quantity or ratio.'):d.notice||'';
+    card.querySelector('.draft-notice').textContent=error==='Missing firm'?'Both suggested accounts need a firm. Refresh Planning.':error==='Invalid quantity'?(d.notice||'Invalid quantity: whole contracts only. Adjust quantity or ratio.'):d.notice||'';
   }
   let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
@@ -75,6 +102,10 @@
     drafts.forEach(d=>{
       const card=make('form');card.className='draft-card';card.dataset.key=d.key;
       const disabled=make('fieldset');disabled.disabled=inFlight.has(d.key);card.append(disabled);
+      if(d.suggestion?.strategy===PairSuggestions.STRATEGY){
+        const label=make('p','Beta suggestion · '+d.suggestion.reason);label.className='suggestion-reason';disabled.append(label);
+        const note=make('small','Calculated from the Planning snapshot. Review any edits before confirming.');disabled.append(note);
+      }
       const accountsGrid=make('div');accountsGrid.className='draft-pair-grid';disabled.append(accountsGrid);
       for(const side of ['left','right']){
         if(side==='right'){
@@ -99,6 +130,10 @@
         };
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
+        if(item&&d.suggestion){
+          const company=make('small','Firm: '+(PairSuggestions.firm(item.metrics)||'Missing'));company.className='suggestion-firm';block.append(company);
+          const dd=make('small','RealDrawdown: '+(typeof item.metrics?.RealDrawdown==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(item.metrics.RealDrawdown):'—'));dd.className='suggestion-drawdown';block.append(dd);
+        }
         const metrics=make('div');metrics.className='draft-metrics';updateMetrics(metrics,item);block.append(metrics);
         const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
@@ -152,10 +187,17 @@
       const item=d[side],row=rows.get(item?.record);if(!row)continue;
       item.balance=row.fields.CurrentBalance??null;item.metrics=row.fields;
       const cell=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .draft-metrics`);
-      if(cell)updateMetrics(cell,item);
+      if(cell){
+        updateMetrics(cell,item);
+        if(d.suggestion){const block=cell.closest('.draft-account');block.querySelector('.suggestion-firm').textContent='Firm: '+(PairSuggestions.firm(item.metrics)||'Missing');
+          block.querySelector('.suggestion-drawdown').textContent='RealDrawdown: '+(typeof item.metrics?.RealDrawdown==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(item.metrics.RealDrawdown):'—');
+          validateCard(cell.closest('form'),d);
+        }
+      }
     }
     save();
   });
+  el('suggest-pairs').onclick=suggestPairs;
   el('draft-left').onclick=()=>add('left');el('draft-right').onclick=()=>add('right');
   window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];pairs=e.detail.pairs||[];
     for(const d of drafts)for(const side of ['left','right'])if(d[side]){

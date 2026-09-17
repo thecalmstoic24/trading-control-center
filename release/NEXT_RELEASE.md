@@ -1,5 +1,5 @@
-# Remaining work after Preview 29
+# Remaining work after Preview 30
 
-Suggest Pairs: named suggestion types with separately saved rules, using current Planning/Airtable accounts to create editable Build Pairs drafts. Await the user's types and matching rules. Do not confirm or start trades automatically.
+Planning Strategy → Non-consistency tests is a beta suggestion feature. User review and individual confirmation remain required.
 
-Preview 29 includes deferred VM matching until queue execution, once-per-agent-start account refresh, per-VM Sync Airtable, and automatic 30-second Awaiting Results cleanup with verified VM release.
+Future suggestion types and separate rules await the user's instructions. A separate RealDrawdown buffer remains undecided. Do not add it silently or auto-confirm/start suggested trades.

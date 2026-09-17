@@ -45,6 +45,8 @@ jobs:
           node tests/test_draft_payload.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_vm_sync.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_suggestions.cjs
           exit $LASTEXITCODE
 
       - name: Browser layout and confirmation regression
@@ -56,4 +58,6 @@ jobs:
           node "$env:NODE_PATH/playwright/cli.js" install chromium
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_preview28_browser.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_suggestions_browser.cjs
           exit $LASTEXITCODE

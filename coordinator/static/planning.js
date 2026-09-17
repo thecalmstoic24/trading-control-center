@@ -40,7 +40,11 @@
   if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay};return;}
   const el=id=>document.getElementById(id);
   const selected=new Set();let usage={};
-  window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();renderTable();}};
+  window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();renderTable();},suggestionPool:()=>{
+    if(!data.updatedAt||data.busy||data.error||el('planning-view').disabled)throw Error('Load or refresh the Planning view successfully before suggesting pairs.');
+    const checked=data.rows.filter(r=>selected.has(r.id));
+    return {rows:checked.length?checked:data.rows,scope:checked.length?'checked accounts':'current Airtable view',viewKey};
+  }};
   window.addEventListener('account-usage',e=>{usage=e.detail;decorate();});
   function decorate(){
     for(const tr of el('planning-table').querySelectorAll('tbody tr[data-record]')){

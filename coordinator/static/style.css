@@ -153,3 +153,10 @@ main.vm-view{height:calc(100dvh - 91px);min-height:400px;display:flex;flex-direc
 #vms-divider:hover,#vms-divider:focus,#trading-divider:hover,#trading-divider:focus{background:linear-gradient(to right,transparent 3px,var(--cyan) 3px,var(--cyan) 7px,transparent 7px)}
 
 .vm-row-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}.vm-row-actions button{white-space:nowrap}
+
+/* Optional beta suggestions, scoped to the Planning builder. */
+.suggestion-beta{border:1px solid #b8cde0;background:#f0f7fc;border-radius:8px;padding:12px;margin-bottom:14px}
+.suggestion-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}.suggestion-controls label{flex:1;min-width:180px}.suggestion-controls select{width:100%}
+.beta-tag{font-size:.7rem;border-radius:4px;background:#dae5fa;color:#284775;padding:2px 5px;margin-left:5px}
+.suggestion-beta p{font-size:.8rem;margin:8px 0 0}.suggestion-beta ul{padding-left:18px;max-height:180px;overflow:auto;font-size:.78rem}
+.suggestion-reason{font-size:.82rem;color:#264d72;background:#eff6fc;padding:8px;border-radius:5px}.suggestion-firm,.suggestion-drawdown{display:block;margin:4px 0}
