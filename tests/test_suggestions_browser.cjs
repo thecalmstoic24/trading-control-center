@@ -95,7 +95,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
  await cards.nth(2).locator('[data-value-key=profit]').fill('0');
  rejectAccount=await cards.nth(1).locator('[data-side=left] > p').first().textContent();
  await page.locator('#draft-add-all').click();
- await page.waitForFunction(()=>document.querySelector('#draft-message').textContent.includes('1 pair added to queue.'));
+ await page.locator('#draft-message').filter({hasText:'1 pair added to queue. 2 draft(s) remain'}).waitFor();
  assert.equal(writes.length,2);assert.ok(writes.every(w=>w.path==='/api/queue/add'));
  assert.equal(await cards.count(),2);assert.match(await page.locator(`[data-key="${invalidKey}"] .draft-error`).textContent(),/valid positive/);
  assert.match(await page.locator('#draft-list').textContent(),/Test account rejected/);
