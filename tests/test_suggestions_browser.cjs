@@ -1,6 +1,7 @@
 const {chromium}=require('playwright');
 const {spawn}=require('node:child_process');
 let assetServer;
+async function waitCount(locator,expected){const deadline=Date.now()+30000;while(Date.now()<deadline){if(await locator.count()===expected)return;await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(await locator.count(),expected);}
 const path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
  assetServer=spawn('python',['-u',path.join(__dirname,'http_assets_server.py')],{stdio:['ignore','pipe','inherit']});
@@ -52,7 +53,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
  const manual=page.locator('.draft-card').first();await manual.locator('[data-value-key=profit]').fill('777');await manual.locator('[data-value-key=stopLoss]').fill('333');
  const original=await manual.locator('[data-side=left] > p').first().textContent();
  await page.locator('#suggestion-strategy').selectOption('non-consistency-tests');assert.equal(await page.locator('.draft-card').count(),1);
- await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.includes('2 suggested pairs'));
+ await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:'2 suggested pairs'}).waitFor();
  assert.deepEqual(writes,[]);assert.equal(await page.locator('.draft-card').count(),3);assert.equal(await page.locator('#planning-panel').isVisible(),true);
  assert.equal(await manual.locator('[data-value-key=profit]').inputValue(),'777');assert.equal(await manual.locator('[data-value-key=stopLoss]').inputValue(),'333');assert.equal(await manual.locator('[data-side=left] > p').first().textContent(),original);
  const first=page.locator('.draft-card').nth(1);assert.match(await first.locator('.suggestion-reason').textContent(),/FFF236159.*one winning trade/);
@@ -66,23 +67,23 @@ const path=require('node:path'),assert=require('node:assert/strict');
  assert.equal(await first.locator('[data-field=ticker]').inputValue(),'NQ');assert.equal(await first.locator('[data-field=ratio]').inputValue(),'1:1');
  for(const card of await page.locator('.draft-card').all())if(await card.locator('.suggestion-firm').count()){const firms=await card.locator('.suggestion-firm').allTextContents();assert.notEqual(firms[0],firms[1]);}
  assert.match(await page.locator('#suggestion-skipped-list').textContent(),/FFF892070.*one price tick/);
- await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.startsWith('0 suggested'));
+ await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:/^0 suggested/}).waitFor();
  assert.equal(await page.locator('.draft-card').count(),3);assert.deepEqual(writes,[]);
  await first.locator('[data-value-key=profit]').fill('650');assert.equal(await first.locator('[data-value-key=rightStopLoss]').inputValue(),'650');
- await first.getByRole('button',{name:'Confirm pair',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===2);
+ await first.getByRole('button',{name:'Confirm pair',exact:true}).click();await waitCount(page.locator('.draft-card'),2);
  assert.equal(writes.length,1);assert.equal(writes[0].path,'/api/queue/add');assert.equal(writes[0].body.profit,650);assert.equal(writes[0].body.draft.suggestion.strategy,'non-consistency-tests');assert.equal(writes[0].body.deferVM,true);
  assert.notEqual(writes[0].body.draft.left.metrics.firm,writes[0].body.draft.right.metrics.firm);
- await page.reload();await page.locator('#tab-planning').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===2);
+ await page.reload();await page.locator('#tab-planning').click();await waitCount(page.locator('.draft-card'),2);
  assert.equal(await page.locator('.suggestion-reason').count(),1);assert.equal(writes.length,1);
  await page.setViewportSize({width:740,height:900});assert.ok(await page.locator('#suggest-pairs').isVisible());
  await context.close();
  // Only explicitly checked accounts are considered; same-firm lists never produce a card.
  queue={rows:[],history:[],running:false,message:'Paused'};writes=[];({page,context}=await open());
  for(const id of ['FFF236159','FFF993110'])await page.getByRole('checkbox',{name:'Select '+id,exact:true}).check();
- await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.startsWith('0 suggested'));
+ await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:/^0 suggested/}).waitFor();
  assert.equal(await page.locator('.draft-card').count(),0);
  await page.getByRole('checkbox',{name:'Select FFF993110',exact:true}).uncheck();await page.getByRole('checkbox',{name:'Select FN19087',exact:true}).check();
- await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===1);
+ await page.locator('#suggest-pairs').click();await waitCount(page.locator('.draft-card'),1);
  assert.match(await page.locator('.draft-card').textContent(),/FFF236159/);assert.match(await page.locator('.draft-card').textContent(),/FN19087/);assert.deepEqual(writes,[]);
  // A firm change in refreshed data disables confirmation without altering manual trade behavior.
  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:[{id:'recFN19087',fields:{id:'FN19087',firm:'FFF',CurrentBalance:50000,stop:48000,'Trailing max drawdown':999,RealDrawdown:1500}}]})));
@@ -90,7 +91,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
  await context.close();
  // Batch confirmation preserves invalid/rejected drafts, and never starts the queue.
  queue={rows:[],history:[],running:false,message:'Paused'};writes=[];({page,context}=await open());
- await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===3);
+ await page.locator('#suggest-pairs').click();await waitCount(page.locator('.draft-card'),3);
  const cards=page.locator('.draft-card');const invalidKey=await cards.nth(2).getAttribute('data-key');
  await cards.nth(2).locator('[data-value-key=profit]').fill('0');
  rejectAccount=await cards.nth(1).locator('[data-side=left] > p').first().textContent();
@@ -101,11 +102,11 @@ const path=require('node:path'),assert=require('node:assert/strict');
  assert.match(await page.locator('#draft-list').textContent(),/Test account rejected/);
  assert.equal(queue.running,false);rejectAccount='';
  await page.locator(`[data-key="${invalidKey}"] [data-value-key=profit]`).fill('100');
- await page.locator('#draft-add-all').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===0);
+ await page.locator('#draft-add-all').click();await waitCount(page.locator('.draft-card'),0);
  assert.equal(queue.rows.length,3);assert.equal(new Set(queue.rows.map(r=>r.key)).size,3);assert.equal(queue.running,false);
  await context.close();
  // A failed Planning snapshot cannot generate drafts from stale data.
- error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.includes('refresh the Planning view'));
+ error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:'refresh the Planning view'}).waitFor();
  assert.equal(await page.locator('.draft-card').count(),0);assert.deepEqual(writes,[]);
  assert.deepEqual(errors,[]);await context.close();await browser.close();assetServer.kill();
  console.log('PASS: click-only beta drafts, manual settings retained, closest-one-win priority, firm checks, checked/current-view pools, double-click/reload exclusions, tiny drawdown, editable amounts, one manual confirmation only and no execution writes.');
