@@ -106,7 +106,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
  assert.equal(queue.rows.length,3);assert.equal(new Set(queue.rows.map(r=>r.key)).size,3);assert.equal(queue.running,false);
  await context.close();
  // A failed Planning snapshot cannot generate drafts from stale data.
- error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:'refresh the Planning view'}).waitFor();
+ writes=[];error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.locator('#suggestion-status').filter({hasText:'refresh the Planning view'}).waitFor();
  assert.equal(await page.locator('.draft-card').count(),0);assert.deepEqual(writes,[]);
  assert.deepEqual(errors,[]);await context.close();await browser.close();assetServer.kill();
  console.log('PASS: click-only beta drafts, manual settings retained, closest-one-win priority, firm checks, checked/current-view pools, double-click/reload exclusions, tiny drawdown, editable amounts, one manual confirmation only and no execution writes.');
