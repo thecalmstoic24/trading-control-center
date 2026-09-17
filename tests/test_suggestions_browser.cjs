@@ -1,6 +1,10 @@
 const {chromium}=require('playwright');
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {spawn}=require('node:child_process');
+let assetServer;
+const path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
+ assetServer=spawn('python',['-u',path.join(__dirname,'http_assets_server.py')],{stdio:['ignore','pipe','inherit']});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('HTTP fixture startup timed out')),20000);assetServer.once('error',reject);assetServer.once('exit',code=>reject(new Error('HTTP fixture exited: '+code)));assetServer.stdout.once('data',()=>{clearTimeout(timer);resolve();});});
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  const row=(id,firm,values={})=>({id:'rec'+id,fields:{id,firm,'Master Account':firm+'-TEST',CurrentBalance:50000,RealDrawdown:1500,CurrentProfit:0,ProfitTarget:3000,Consistency:0,CurrentPnL:0,...values}});
  const fn=(id,values={})=>row(id,'FN',{ProfitTarget:2500,Consistency:.4,largestProfitDay:900,...values});
@@ -22,8 +26,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    else if(url.pathname==='/api/queue')result=queue;
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
    if(result)return route.fulfill({json:result});
-   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
-   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+   // Serve HTML and scripts through the production handler, including its allowlist.
+   await route.continue();
   });
   await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-planning').click();await page.getByRole('checkbox',{name:'Select FFF236159',exact:true}).waitFor();return {page,context};
  }
@@ -67,6 +71,6 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  // A failed Planning snapshot cannot generate drafts from stale data.
  error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.includes('refresh the Planning view'));
  assert.equal(await page.locator('.draft-card').count(),0);assert.deepEqual(writes,[]);
- assert.deepEqual(errors,[]);await context.close();await browser.close();
+ assert.deepEqual(errors,[]);await context.close();await browser.close();assetServer.kill();
  console.log('PASS: click-only beta drafts, manual settings retained, closest-one-win priority, firm checks, checked/current-view pools, double-click/reload exclusions, tiny drawdown, editable amounts, one manual confirmation only and no execution writes.');
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(e=>{if(assetServer)assetServer.kill();console.error(e);process.exit(1)});
