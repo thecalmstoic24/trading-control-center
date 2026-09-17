@@ -62,6 +62,7 @@
       if(!a||!b)return 'Missing firm';
       if(a===b)return 'Same fund';
     }
+    const suggestionProblem=PairSuggestions.validateDraft(d);if(suggestionProblem)return suggestionProblem;
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
     const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
     if(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a)return 'Invalid quantity';
@@ -72,7 +73,7 @@
     if(!button)return;
     button.disabled=!!error||(!d.left&&!d.right)||inFlight.has(d.key);
     button.textContent=inFlight.has(d.key)?'Adding…':error==='Same fund'?'Same fund':(!d.left||!d.right)?'Confirm Single Pair':'Confirm pair';
-    card.querySelector('.draft-notice').textContent=error==='Missing firm'?'Both suggested accounts need a firm. Refresh Planning.':error==='Invalid quantity'?(d.notice||'Invalid quantity: whole contracts only. Adjust quantity or ratio.'):d.notice||'';
+    card.querySelector('.draft-notice').textContent=error==='Missing firm'?'Both suggested accounts need a firm. Refresh Planning.':error==='Invalid quantity'?(d.notice||'Invalid quantity: whole contracts only. Adjust quantity or ratio.'):error||d.notice||'';
   }
   let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
@@ -173,6 +174,7 @@
   }
   async function enqueue(d){
     if(inFlight.has(d.key))return false;
+    const issue=problem(d);if(issue){d.error=issue;save();render();return false;}
     if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
     const left=d.left?.vm,right=d.right?.vm;
     inFlight.add(d.key);render();

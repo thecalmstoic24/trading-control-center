@@ -1,7 +1,7 @@
 'use strict';
 // Beta: calculations and editable drafts only. No network or execution calls.
 (() => {
- const STRATEGY='non-consistency-tests', TICK_CENTS=1000, MAX_CENTS=10000000;
+ const STRATEGY='non-consistency-tests', REVISION=33, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
  const money=c=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(c/100);
  function number(value,name){
   if(typeof value==='string'&&/^-?\d+(?:\.\d+)?$/.test(value.trim()))value=Number(value);
@@ -22,26 +22,39 @@
   const f=row.fields||{},id=typeof f.id==='string'?f.id.trim():'';
   if(!id||!row.id)throw Error('Missing account ID or Airtable record.');
   const company=firm(f);if(!company)throw Error('Missing or ambiguous firm.');
-  const drawdown=cents(f.RealDrawdown,'RealDrawdown'),profit=cents(f.CurrentProfit,'CurrentProfit'),target=cents(f.ProfitTarget,'ProfitTarget');
+  const drawdown=cents(f.RealDrawdown,'RealDrawdown'),target=cents(f.ProfitTarget,'ProfitTarget');
+  const current=cents(f.CurrentBalance,'CurrentBalance'),opening=cents(f.InitialBalance,'InitialBalance');
+  const websiteBalance=cents(f.balance,'balance'),websiteProfit=cents(f.CurrentProfit,'CurrentProfit');
+  const today=cents(f['Realized PnL'],'Realized PnL'),balanceChange=current-opening;
+  if(Math.min(current,opening,websiteBalance)<=0)throw Error('Balance fields must be positive.');
+  if(Math.abs(balanceChange-today)>1)throw Error('Daily P&L mismatch: CurrentBalance minus InitialBalance is '+money(balanceChange)+', but Realized PnL is '+money(today)+'. Check today’s opening balance, flat positions, fees and sync before suggesting.');
+  // balance and CurrentProfit must be from the SAME website snapshot. Anchor the
+  // website profit to today's frozen opening balance, then apply today's change.
+  // Never treat InitialBalance (day opening) as the original account size.
+  const openingProfit=websiteProfit-(websiteBalance-opening);
+  const profit=openingProfit+balanceChange;
   if(target<=0)throw Error('ProfitTarget must be positive.');
   const raw=f.Consistency, consistency=raw==null||(typeof raw==='string'&&!raw.trim())?0:number(raw,'Consistency');
   if(consistency<0||consistency>=1)throw Error('Consistency must be a decimal from 0 to below 1, for example 0.40.');
   let required=target,allowance=Infinity;
   if(consistency>0){
-   const today=cents(f.CurrentPnL,'CurrentPnL'),largest=cents(f.largestProfitDay,'largestProfitDay');
+   const largest=cents(f.largestProfitDay,'largestProfitDay');
    if(largest<0)throw Error('largestProfitDay cannot be negative.');
    required=Math.max(target,Math.ceil(Math.max(largest,today)/consistency-1e-7));
    allowance=Math.max(0,Math.floor(required*consistency-5000-today+1e-7));
   }
+  if(required>target+MAX_OVERSHOOT)throw Error('Consistency requires more than the allowed $100 above ProfitTarget. Review this account separately.');
+  const headroom=Math.max(0,target+MAX_OVERSHOOT-profit);
   const remaining=Math.max(0,required-profit),loss=Math.min(MAX_CENTS,floorTick(Math.max(0,drawdown)));
   if(!remaining)throw Error('Profit requirement already reached.');
-  if(loss<TICK_CENTS)throw Error('RealDrawdown is below one price tick for 2 NQ ($10), before costs.');
-  if(floorTick(allowance)<TICK_CENTS)throw Error('No remaining consistency allowance for 2 NQ today.');
-  return {id,firm:company,row,drawdown,remaining,allowance,loss,required};
+  if(loss<MIN_GAIN)throw Error('RealDrawdown cannot support a partner’s $100 minimum profit, before costs.');
+  if(floorTick(allowance)<MIN_GAIN)throw Error('Remaining consistency allowance is below the $100 minimum profit today.');
+  if(floorTick(headroom)<MIN_GAIN)throw Error('Less than $100 fits within the maximum target overshoot.');
+  return {id,firm:company,row,drawdown,remaining,allowance,loss,required,headroom,profit,today,openingProfit};
  }
  function gainAgainst(a,b){
   // Round remaining profit UP to reach the target, but never round a risk cap up.
-  return Math.min(ceilTick(a.remaining),floorTick(a.allowance),b.loss,MAX_CENTS);
+  return Math.min(Math.max(MIN_GAIN,ceilTick(a.remaining)),floorTick(a.allowance),b.loss,floorTick(a.headroom),MAX_CENTS);
  }
  function suggest(rows,excluded=[],random=Math.random){
   if(rows.length>1000)throw Error('Select at most 1,000 accounts for this beta suggestion batch.');
@@ -58,7 +71,7 @@
   const edges=[];
   for(let i=0;i<accounts.length;i++)for(let j=i+1;j<accounts.length;j++){
    const a=accounts[i],b=accounts[j];if(a.firm===b.firm)continue;
-   const gainA=gainAgainst(a,b),gainB=gainAgainst(b,a);if(Math.min(gainA,gainB)<TICK_CENTS)continue;
+   const gainA=gainAgainst(a,b),gainB=gainAgainst(b,a);if(Math.min(gainA,gainB)<MIN_GAIN)continue;
    const finishA=gainA>=a.remaining,finishB=gainB>=b.remaining;
    const priority=finishA||finishB?0:1;
    const distance=priority===0?Math.min(finishA?a.remaining:Infinity,finishB?b.remaining:Infinity):Math.min(a.remaining,b.remaining);
@@ -81,8 +94,25 @@
   const item=a=>({account:a.id,master:String(a.row.fields['Master Account']||''),record:a.row.id,balance:a.row.fields.CurrentBalance??null,metrics:{...a.row.fields},vm:''});
   return {key,ticker:'NQ',direction:'buy',ratio:'1:1',leftQuantity:'2',rightQuantity:'2',
    left:item(pair.a),right:item(pair.b),profit:String(pair.gainA/100),stopLoss:String(pair.gainB/100),rightProfit:String(pair.gainB/100),rightStopLoss:String(pair.gainA/100),
-   suggestion:{strategy:STRATEGY,reason:pair.reason}};
+   suggestion:{strategy:STRATEGY,revision:REVISION,reason:pair.reason}};
  }
- const api={STRATEGY,TICK_CENTS,firm,account,gainAgainst,suggest,draft};
+ function validateDraft(d){
+  if(d.suggestion?.strategy!==STRATEGY)return '';
+  if(d.suggestion.revision!==REVISION)return 'Older suggestion: remove it and click Suggest pairs again.';
+  if(!d.left||!d.right)return 'Suggested pairs need both accounts. Remove and suggest again.';
+  try{
+   const a=account({id:d.left.record,fields:{...d.left.metrics,id:d.left.account}}),b=account({id:d.right.record,fields:{...d.right.metrics,id:d.right.account}});
+   if(a.firm===b.firm)return 'Same fund';
+   for(const [own,partner,gainValue,lossValue] of [[a,b,d.profit,d.stopLoss],[b,a,d.rightProfit,d.rightStopLoss]]){
+    const gain=cents(gainValue,'Profit'),loss=cents(lossValue,'Stop loss');
+    if(gain<MIN_GAIN)return 'Suggested profit must be at least $100 on both sides.';
+    if(gain>own.allowance)return own.id+': profit exceeds today’s consistency allowance. Refresh Planning and suggest again.';
+    if(gain>own.headroom)return own.id+': profit exceeds ProfitTarget by more than $100. Refresh Planning and suggest again.';
+    if(gain>partner.drawdown||loss>own.drawdown)return own.id+': suggested amounts exceed RealDrawdown. Refresh Planning and suggest again.';
+   }
+  }catch(e){return e.message;}
+  return '';
+ }
+ const api={STRATEGY,REVISION,TICK_CENTS,MIN_GAIN,MAX_OVERSHOOT,firm,account,gainAgainst,suggest,draft,validateDraft};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else window.PairSuggestions=api;
 })();

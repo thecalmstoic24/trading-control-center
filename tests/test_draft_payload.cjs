@@ -5,3 +5,7 @@ const draft={key:'a'.repeat(32),ticker:'NQ',ratio:'1:1',direction:'buy',leftQuan
 const clean=context.compactPairDraft(draft);assert.ok(Buffer.byteLength(JSON.stringify({draft:clean}))<4000);assert.equal(clean.left.metrics['Realized PnL'],-25);assert.equal(clean.left.metrics.notes,undefined);assert.equal(clean.error,undefined);assert.equal(clean.ticker,'NQ');assert.equal(clean.leftQuantity,'1');assert.equal(clean.rightStopLoss,'350');assert.equal(clean.left.vm,'left');assert.equal(clean.left.account,draft.left.account);assert.equal(clean.left.record,'recA');assert.equal(clean.extra,undefined);
 const single=context.compactPairDraft({...draft,right:null});assert.equal(single.right,undefined);assert.ok(single.left);
 assert.equal(draft.left.metrics.notes.length,40000);console.log('PASS: large Airtable records stay below request limit; editable quantities, targets and displayed metrics retained; single pairs supported.');
+
+context.PairSuggestions=require('../coordinator/static/suggestions.js');
+const suggested={...draft,suggestion:{strategy:'non-consistency-tests',revision:33,reason:'test'},left:{...draft.left,metrics:{...metrics,firm:'FFF',InitialBalance:52500,balance:52600,CurrentProfit:2600,ProfitTarget:3000,Consistency:0}}};
+const packed=context.compactPairDraft(suggested);assert.equal(packed.suggestion.revision,33);assert.equal(packed.left.metrics.InitialBalance,52500);assert.equal(packed.left.metrics.balance,52600);assert.equal(packed.left.metrics['Realized PnL'],-25);assert.ok(Buffer.byteLength(JSON.stringify(packed))<8000);
