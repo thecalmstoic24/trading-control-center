@@ -35,4 +35,4 @@ Amounts are totals for the two contracts. Calculations use the current Planning 
 
 ## Validation
 
-230 Python regressions and the suggestion/legacy JavaScript tests passed locally. Windows and Chromium release validation must pass before advancing the updater. Agent file hashes are checked against Preview 29, and packaged files are checked against uploaded source. No live NinjaTrader orders or broker fills were tested.
+230 Python regressions and the suggestion/legacy JavaScript tests passed locally. Windows, TLS, calibration, legacy browser and beta-suggestion Chromium validation passed in run 35181028214. All VM-agent file hashes match Preview 29, and all 28 packaged files match uploaded source. No live NinjaTrader orders or broker fills were tested.
