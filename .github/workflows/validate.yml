@@ -37,6 +37,9 @@ jobs:
       - name: Production HTTP asset regression
         shell: pwsh
         run: python -m unittest discover -s tests -p test_static_assets.py
+      - name: Queue registration removal regression
+        shell: pwsh
+        run: python -m unittest discover -s tests -p test_pair_queue.py
       - name: JavaScript regressions
         shell: pwsh
         run: |

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'coordinator'))
 from pair_queue import PairQueue, PairStore, PAIR_TABLE, TABLE, trade_result
@@ -57,6 +58,66 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def test_remove_vm_preserves_history_and_other_registrations(self):
+        key=self.queue.add(self.body)
+        row=self.queue.rows[0];row['status']='Complete'
+        before=copy.deepcopy(row);self.agent.calls.clear()
+        result=self.queue.remove_vm('vm-left')
+        self.assertTrue(result['ok'])
+        self.assertNotIn('vm-left',self.fleet.catalog.config)
+        self.assertIn('vm-right',self.fleet.catalog.config)
+        self.assertNotIn('vm-left',self.fleet.catalog.observations)
+        self.assertEqual(row,before)
+        self.assertEqual(self.agent.calls,[])
+
+    def test_remove_vm_blocks_pending_queue_and_owned_errors(self):
+        self.queue.add(self.body)
+        for status in ('Queued','Waiting','Preparing','Awaiting results'):
+            self.queue.rows[0]['status']=status
+            with self.assertRaisesRegex(ValueError,'still uses'):self.queue.remove_vm('vm-left')
+        self.queue.rows[0]['status']='Error'
+        self.fleet.create_pair('vm-left','vm-right')
+        with self.assertRaisesRegex(ValueError,'Release'):self.queue.remove_vm('vm-left')
+        self.assertIn('vm-left',self.fleet.catalog.config)
+
+    def test_remove_vm_blocks_operations_and_last_known_exposure(self):
+        for cache in (self.fleet.vm_refresh,self.fleet.vm_default):
+            cache['vm-left']={'status':'running'}
+            with self.assertRaisesRegex(ValueError,'operation'):self.queue.remove_vm('vm-left')
+            cache.clear()
+        self.fleet.vm_sync_requests.add('vm-left')
+        with self.assertRaisesRegex(ValueError,'operation'):self.queue.remove_vm('vm-left')
+        self.fleet.vm_sync_requests.clear()
+        for field,value in [('position','Long'),('busy',True),('scheduled',True),('pairActive',True),('pendingVerification',True),('manualSyncPending',True)]:
+            old=self.fleet.catalog.last_good['vm-left'].copy()
+            self.fleet.catalog.last_good['vm-left'][field]=value
+            with self.assertRaisesRegex(ValueError,'last reported'):self.queue.remove_vm('vm-left')
+            self.fleet.catalog.last_good['vm-left']=old
+
+    def test_remove_offline_vm_and_register_again(self):
+        config=self.fleet.catalog.config['vm-left'].copy()
+        self.agent.fail.add(('vm-left','status'));self.fleet.observe('vm-left')
+        self.queue.remove_vm('vm-left')
+        self.fleet.observe('vm-left');self.fleet.refresh_on_startup('vm-left')
+        self.assertNotIn('vm-left',self.fleet.catalog.observations)
+        import base64
+        self.fleet.enroll('vm-left',base64.b64encode(json.dumps(config).encode()).decode())
+        self.agent.fail.clear();self.fleet.observe('vm-left')
+        self.assertTrue(self.fleet.view('vm-left')['online'])
+
+    def test_remove_vm_persistence_failure_and_queue_mutex(self):
+        self.queue.io.acquire()
+        try:
+            with self.assertRaisesRegex(ValueError,'processing'):self.queue.remove_vm('vm-left')
+        finally:self.queue.io.release()
+        self.fleet.persist=True
+        with patch.object(module,'protect',side_effect=lambda data:data), patch.object(module,'atomic_write',side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):self.queue.remove_vm('vm-left')
+        self.assertIn('vm-left',self.fleet.catalog.config)
+        with patch.object(module,'protect',side_effect=lambda data:data):self.queue.remove_vm('vm-left')
+        saved=json.loads((self.fleet.directory/'connections.dpapi').read_bytes())
+        self.assertNotIn('vm-left',saved);self.assertIn('vm-right',saved)
+
     def enable_default_account(self):
         original=self.agent.__call__
         for state in self.agent.states.values():state['defaultAccountSelection']=True

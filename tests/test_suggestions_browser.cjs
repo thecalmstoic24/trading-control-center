@@ -75,6 +75,14 @@ const path=require('node:path'),assert=require('node:assert/strict');
  assert.notEqual(writes[0].body.draft.left.metrics.firm,writes[0].body.draft.right.metrics.firm);
  await page.reload();await page.locator('#tab-planning').click();await waitCount(page.locator('.draft-card'),2);
  assert.equal(await page.locator('.suggestion-reason').count(),1);assert.equal(writes.length,1);
+ // Clearing drafts requires confirmation, preserves queue, and persists across reload.
+ page.once('dialog',dialog=>dialog.dismiss());await page.locator('#draft-remove-all').click();
+ assert.equal(await page.locator('.draft-card').count(),2);
+ const queuedBefore=JSON.stringify(queue),writesBefore=writes.length;
+ page.once('dialog',dialog=>dialog.accept());await page.locator('#draft-remove-all').click();
+ assert.equal(await page.locator('.draft-card').count(),0);assert.equal(JSON.stringify(queue),queuedBefore);assert.equal(writes.length,writesBefore);
+ await page.reload();await page.locator('#tab-planning').click();assert.equal(await page.locator('.draft-card').count(),0);
+ assert.equal(await page.locator('#draft-remove-all').isDisabled(),true);
  await page.setViewportSize({width:740,height:900});assert.ok(await page.locator('#suggest-pairs').isVisible());
  await context.close();
  // Only explicitly checked accounts are considered; same-firm lists never produce a card.

@@ -32,9 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.31'
+VERSION = '16.0-preview.32'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
-AGENT_VERSIONS = {'16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+AGENT_VERSIONS = {'16.0-preview.31','16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -1020,11 +1020,13 @@ class Fleet:
             owner = self.owners.get(slot)
             center = self.pairs[owner] if owner else self.catalog
         center.observe(slot)
-        with self.lock: self.record_vm_activity(self.view(slot))
+        with self.lock:
+            if slot in self.catalog.config: self.record_vm_activity(self.view(slot))
 
     def refresh_on_startup(self, slot):
         # One account refresh per authenticated process session. Defer while trading/busy.
         with self.lock:
+            if slot not in self.catalog.config: return
             view=self.view(slot)
             boot=view.get('agentSession','')
             if not view.get('online') or not isinstance(boot,str) or not re.fullmatch('[a-f0-9]{32}',boot): return
@@ -1049,6 +1051,38 @@ class Fleet:
             except ValueError as exc:
                 state['retryAt']=time.monotonic()+30
                 self.vm_event(slot,'Startup refresh deferred: '+str(exc))
+
+    def remove_vm(self, slot):
+        """Forget a registration, never issue a remote close or uninstall command."""
+        with self.lock, self.catalog.lock:
+            if not isinstance(slot, str) or slot not in self.catalog.config:
+                raise ValueError('Choose a registered VM.')
+            if slot in self.owners:
+                raise ValueError('Release this VM from its pair before removing it.')
+            if (self.vm_refresh.get(slot, {}).get('status') == 'running'
+                    or self.vm_default.get(slot, {}).get('status') == 'running'
+                    or slot in self.vm_sync_requests):
+                raise ValueError('Wait for this VM operation to finish before removing it.')
+            view = self.view(slot)
+            states = [view, view.get('lastKnown', {})]
+            if any(s.get('position') not in (None, '', 'Flat', 'Unknown') or any(
+                    s.get(k) for k in ('busy', 'scheduled', 'pending', 'pendingVerification',
+                                      'closing', 'pairActive', 'prepared', 'manualSyncPending')) for s in states):
+                raise ValueError('This VM last reported a position or unfinished operation. Verify it is idle and Flat before removing it.')
+            updated = dict(self.catalog.config)
+            name = updated.pop(slot)['name']
+            # Persist first: failure must leave the live registration intact.
+            if self.persist:
+                atomic_write(self.directory / 'connections.dpapi', protect(json.dumps(updated).encode()))
+            self.vm_event(slot, 'VM registration removed from Control Center.')
+            self.catalog.config.pop(slot)
+            for cache in (self.catalog.observations, self.catalog.last_good, self.catalog.last_positions,
+                          self.catalog.account_refresh, self.vm_refresh, self.vm_default,
+                          self.startup_refresh, self.vm_activity_state):
+                cache.pop(slot, None)
+            # In-flight observations check config before saving. Retain their poll lock.
+            self.threads.pop(slot, None)
+            return {'ok': True, 'message': name + ' removed. Its agent and trade history are unchanged.'}
 
     def sync_vm(self, slot):
         with self.lock:
@@ -1132,6 +1166,8 @@ class Fleet:
     def loop(self, slot):
         last_probe=0
         while not self.stop.is_set():
+            with self.lock:
+                if slot not in self.catalog.config or self.threads.get(slot) is not threading.current_thread(): return
             # Even a held idle snapshot needs a periodic restart/connection probe.
             if not self.idle_snapshot_held(slot) or time.monotonic()-last_probe>=5:
                 self.observe(slot)
@@ -1239,6 +1275,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/planning/refresh':
                 self.server.planning.refresh(body.get('token'))
                 self.reply(202, {'ok':True})
+            elif self.path == '/api/vm-remove':
+                self.reply(200, self.server.queue.remove_vm(body.get('id')))
             elif self.path == '/api/vm-sync':
                 self.reply(202, self.server.center.sync_vm(body.get('id')))
             elif self.path == '/api/vm-refresh':

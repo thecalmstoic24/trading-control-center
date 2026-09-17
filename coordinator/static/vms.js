@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const el=id=>document.getElementById(id),node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
- let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),syncPending=new Set(),selected=new Set();
+ let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),syncPending=new Set(),removing=new Set(),selected=new Set();
  async function refresh(id){
    if(pending.has(id))return;pending.add(id);render();
    try{await api('/api/vm-refresh',{id});await poll();}
@@ -13,6 +13,14 @@
    try{const result=await api('/api/vm-sync',{id});el('vms-message').textContent=result.message||'Sync Airtable requested. Follow VM Activity for progress.';await poll();}
    catch(e){el('vms-message').textContent=e.message;}
    finally{syncPending.delete(id);render();}
+ }
+ async function removeVM(vm){
+   if(removing.has(vm.id))return;
+   if(!window.confirm('Remove '+vm.name+' from Control Center? This removes its saved connection, not its VM agent, Airtable accounts, or trade history. A disconnected VM must be checked separately for open trades.'))return;
+   removing.add(vm.id);render();
+   try{const result=await api('/api/vm-remove',{id:vm.id});selected.delete(vm.id);open.delete(vm.id);fleet=fleet.filter(v=>v.id!==vm.id);el('vms-message').textContent=result.message;await poll();}
+   catch(e){el('vms-message').textContent=e.message;}
+   finally{removing.delete(vm.id);render();}
  }
  let sorting={field:'name',direction:1};
  try{const saved=JSON.parse(localStorage.getItem('vm-sort-v1'));if(saved&&['name','connection','position','availability'].includes(saved.field)&&[1,-1].includes(saved.direction))sorting=saved;}catch(_){}
@@ -43,12 +51,14 @@
      const syncButton=node('button',syncing?'Sync requested…':'Sync Airtable');
      syncButton.disabled=syncing||!vm.online||!vm.manualSync;syncButton.setAttribute('aria-label','Sync Airtable for '+vm.name);
      syncButton.title=!vm.manualSync?'Update this VM agent to enable remote sync.':syncing?'Sync is running or queued; follow VM Activity.':'Run Sync Airtable Now on this VM. Waits if trading automation is busy.';
-     syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);line.append(actions);row.append(line);
+     syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);
+     const remove=node('button',removing.has(vm.id)?'Removing…':'Remove VM');remove.className='quiet';remove.setAttribute('aria-label','Remove VM '+vm.name);remove.disabled=removing.has(vm.id);remove.onclick=()=>removeVM(vm);actions.append(remove);line.append(actions);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
      const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);row.append(details);
      row.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));list.append(row);
    }
    list.scrollTop=scroll;
+   el('vms-refresh-selected').disabled=!fleet.some(vm=>selected.has(vm.id));
    if(!fleet.length)list.append(node('p','No registered VMs yet. Choose Register VM to add one.'));
  }
  el('vms-sort').value=sorting.field;el('vms-sort-direction').textContent=sorting.direction===1?'Ascending':'Descending';

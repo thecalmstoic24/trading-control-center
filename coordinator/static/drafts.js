@@ -99,6 +99,7 @@
   }
   function render(){
     const list=el('draft-list');list.replaceChildren();
+    el('draft-remove-all').disabled=addingAll||inFlight.size>0||!drafts.length;
     el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Queue';
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
     drafts.forEach(d=>{
@@ -181,6 +182,11 @@
       window.dispatchEvent(new Event('queue-refresh'));return true;
     }catch(err){d.error=err.message;save();return false;}finally{inFlight.delete(d.key);render();usage();}
   }
+  el('draft-remove-all').onclick=()=>{
+    if(addingAll||inFlight.size||!drafts.length)return;
+    if(!window.confirm('Remove all '+drafts.length+' unconfirmed draft pairs? Queued and active pairs will stay.'))return;
+    drafts=[];save();render();usage();el('draft-message').textContent='All unconfirmed draft pairs removed.';
+  };
   el('draft-add-all').onclick=async()=>{
     if(addingAll||inFlight.size)return;
     const ready=[];

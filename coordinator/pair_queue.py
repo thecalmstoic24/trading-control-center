@@ -186,6 +186,19 @@ class PairQueue:
         self.store.push(row)
         with self.lock: row['dirty'] = False; self.save()
 
+    def remove_vm(self, slot):
+        # Same mutex as queue creation/dispatch/result processing: no removal race.
+        if not self.io.acquire(blocking=False):
+            raise ValueError('Queue processing is in progress. Try removing this VM again shortly.')
+        try:
+            with self.lock:
+                for row in self.rows:
+                    if slot in slots(row['spec']) and row['status'] not in {'Complete', 'Cancelled', 'Error'}:
+                        raise ValueError(row['id'] + ' still uses this VM. Cancel or finish that queued pair first.')
+                return self.fleet.remove_vm(slot)
+        finally:
+            self.io.release()
+
     def add(self, body):
         with self.io:
             draft_key = body.get('draftKey')
