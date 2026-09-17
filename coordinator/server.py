@@ -32,9 +32,9 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.30.1'
+VERSION = '16.0-preview.31'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
-AGENT_VERSIONS = {'16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
+AGENT_VERSIONS = {'16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
 NAMES = dict(zip(IDS, ('MFFLocDao', 'LCDLocDao')))
 MAX_VMS = 50
@@ -378,7 +378,7 @@ class Center:
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
                     snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''), agentSession=s.get('agentSession',''), manualSync=bool(s.get('manualSync')), manualSyncPending=bool(s.get('manualSyncPending')),
-                    calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
+                    defaultAccountSelection=bool(s.get('defaultAccountSelection')), calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -680,6 +680,7 @@ class Fleet:
         self.retired = []
         self.releasing = set()
         self.vm_refresh = {}
+        self.vm_default = {}
         self.vm_sync_requests = set()
         self.startup_refresh = {}
         self.persist = persist
@@ -746,13 +747,58 @@ class Fleet:
             result = center.view_agent(slot)
         result['pairId'] = owner
         result['refresh'] = self.vm_refresh.get(slot, {}).copy()
+        result['defaultAccount'] = self.vm_default.get(slot, {}).copy()
         return result
+
+    def ensure_default_account(self, slot):
+        # Only idle, unreserved VMs may receive this command. It cannot start a queue.
+        with self.lock:
+            view=self.view(slot)
+            if view.get('account'): return True
+            if slot in self.owners or self.vm_refresh.get(slot,{}).get('status')=='running': return False
+            if not self.catalog.account_discovery_idle(view) or view.get('calibrationRequired'): return False
+            if not view.get('defaultAccountSelection'): return False
+            previous=self.vm_default.get(slot,{})
+            if previous.get('status')=='running' or time.monotonic()<previous.get('retryAt',0): return False
+            self.vm_default[slot]={'status':'running','message':'Selecting Sim101 in the blank account box.'}
+        def work():
+            try:
+                self.catalog.observe(slot)
+                with self.lock:
+                    latest=self.view(slot)
+                    if slot in self.owners or self.vm_refresh.get(slot,{}).get('status')=='running':
+                        raise ValueError('VM became reserved or is refreshing.')
+                    if not self.catalog.account_discovery_idle(latest): raise ValueError('VM is no longer fresh, idle Flat.')
+                self.catalog.call(slot,'ensure_default_account',{},15)
+                self.catalog.observe(slot)
+                latest=self.view(slot)
+                if not self.catalog.safe_flat(latest): raise ValueError('Account selection is not yet verified Flat.')
+                message='Account selection verified: '+latest['account']+'. Queue will recheck readiness.'
+                with self.lock:self.vm_default[slot]={'status':'complete','message':message,'retryAt':time.monotonic()+5}
+                self.vm_event(slot,message)
+            except Exception as exc:
+                with self.lock:self.vm_default[slot]={'status':'error','message':str(exc)[:350],'retryAt':time.monotonic()+5}
+                self.vm_event(slot,'Automatic account selection: '+str(exc)[:350])
+        self.catalog.pool.submit(work)
+        return False
+
+    @staticmethod
+    def readiness_reason(agent):
+        if not agent.get('fresh'): return 'waiting for a fresh VM report'
+        if agent.get('position')!='Flat': return 'position is '+str(agent.get('position') or 'Unknown')
+        for key,label in [('scheduled','entry scheduled'),('busy','desktop busy'),('pairActive','prior pair still active'),('pending','entry verification pending'),('closing','close verification pending')]:
+            if agent.get(key): return label
+        if agent.get('refresh',{}).get('status')=='running': return 'refreshing accounts'
+        if not agent.get('account'):
+            if not agent.get('defaultAccountSelection'): return 'account box blank; select Sim101 or update this agent to Preview 31 for automatic selection'
+            return agent.get('defaultAccount',{}).get('message') or 'account box blank; automatic Sim101 selection pending'
+        return ''
 
     def create_pair(self, left, right):
         members=tuple(s for s in (left,right) if s)
         # Network I/O stays outside the fleet lock so other pairs keep monitoring.
         with self.lock:
-            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in members):
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' or self.vm_default.get(s,{}).get('status')=='running' for s in members):
                 raise ValueError('VM account refresh is running. Wait for it to finish.')
             if not members or len(set(members))!=len(members) or any(s not in self.catalog.config for s in members):
                 raise ValueError('Choose two different registered VMs.')
@@ -766,7 +812,7 @@ class Fleet:
             request.result()
         # Recheck reservations after the requests: another browser may have paired a VM.
         with self.lock:
-            if any(self.vm_refresh.get(s,{}).get('status')=='running' for s in members):
+            if any(self.vm_refresh.get(s,{}).get('status')=='running' or self.vm_default.get(s,{}).get('status')=='running' for s in members):
                 raise ValueError('VM account refresh is running. Wait for it to finish.')
             if not members or len(set(members))!=len(members) or any(s not in self.catalog.config for s in members):
                 raise ValueError('Choose two different registered VMs.')
@@ -793,7 +839,7 @@ class Fleet:
             pair.event('Pair created. Prepare & Verify is required before entry.')
             return identity
 
-    def release_pair(self, identity, strict=False):
+    def release_pair(self, identity, strict=False, allow_blank=False):
         with self.lock:
             pair = self.get_pair(identity)
             if identity in self.releasing or not pair.operation.acquire(blocking=False):
@@ -808,7 +854,7 @@ class Fleet:
             agents = pair.state()['agents']
             def releasable(items):
                 if strict:
-                    return (not pair.active and all(pair.safe_flat(a) for a in items))
+                    return (not pair.active and all((pair.account_discovery_idle(a) if allow_blank and not pair.opened_ids else pair.safe_flat(a)) for a in items))
                 return (any(pair.release_flat(a) for a in items)
                         and all(pair.release_flat(a) or (not a['fresh'] and not any(a[k] for k in ('busy','scheduled','pending','closing'))) for a in items))
             if not releasable(agents):
@@ -1034,6 +1080,7 @@ class Fleet:
         with self.lock:
             if slot not in self.catalog.config: raise ValueError('Choose a registered VM.')
             if self.vm_refresh.get(slot,{}).get('status')=='running': return
+            if self.vm_default.get(slot,{}).get('status')=='running': raise ValueError('Automatic account selection is running.')
             owner=self.owners.get(slot)
             center=self.pairs[owner] if owner else self.catalog
             locked=False

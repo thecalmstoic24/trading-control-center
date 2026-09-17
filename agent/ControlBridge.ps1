@@ -7,8 +7,8 @@ $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
 $script:AgentSession29 = [Guid]::NewGuid().ToString('N')
-$script:ControlVersion = '16.0-preview.29'
-$script:AgentBuild = '16.0-preview.29'
+$script:ControlVersion = '16.0-preview.31'
+$script:AgentBuild = '16.0-preview.31'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -75,6 +75,7 @@ function Get-ControlStatus {
     $state['accounts'] = @($script:Accounts14)
     $state['accountMessage'] = $script:AccountMessage14
     $state['sync'] = $script:Sync14
+    $state['defaultAccountSelection'] = $true
     $state['manualSync'] = $true
     $state['agentSession'] = $script:AgentSession29
     $state['manualSyncPending'] = [bool](($script:Worker14 -and $script:WorkerMode14 -eq 'export') -or (Test-Path (Join-Path $controlDirectory 'sync-manual.json')))
@@ -117,6 +118,7 @@ function Invoke-ControlCommand {
         $request | Add-Member -NotePropertyName token -NotePropertyValue $secretInput.Text -Force
         return Process-AgentRequest -JsonLine ($request | ConvertTo-Json -Compress -Depth 6)
     }
+    if ($Pending.Command -eq 'ensure_default_account') { return Select-DefaultAccount31 }
     if ($Pending.Command -eq 'manual_sync') {
         Request-ManualSync15
         return @{ok=$true;message=$script:Sync14}

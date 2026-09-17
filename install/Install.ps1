@@ -2,7 +2,7 @@
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '16.0-preview.30.1'
+$version = '16.0-preview.31'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent

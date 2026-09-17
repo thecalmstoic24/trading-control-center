@@ -8,9 +8,10 @@ function compactPairDraft(d){
   const item=d[side];if(!item)continue;
   const slot={};for(const k of ['account','master','record','vm'])slot[k]=String(item[k]??'').slice(0,256);
   slot.balance=typeof item.balance==='number'&&Number.isFinite(item.balance)?item.balance:null;
-  slot.metrics={};for(const k of ['CurrentBalance','Realized PnL','stop','Trailing max drawdown','largestProfitDay','tradingDays']){
+  slot.metrics={};for(const k of ['RealDrawdown','CurrentBalance','Realized PnL','stop','Trailing max drawdown','largestProfitDay','tradingDays']){
    const value=item.metrics?.[k];slot.metrics[k]=typeof value==='number'&&Number.isFinite(value)?value:null;
   }
+  slot.metrics.ScraperNote=String(Object.entries(item.metrics||{}).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').slice(0,500);
   if(result.suggestion){
    slot.metrics.firm=PairSuggestions.firm(item.metrics);
    for(const k of ['RealDrawdown','CurrentProfit','ProfitTarget','Consistency','CurrentPnL']){

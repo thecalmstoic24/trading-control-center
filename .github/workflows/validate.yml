@@ -25,6 +25,9 @@ jobs:
           & ./tests/Test-Preview27.ps1
           & ./tests/Test-Preview28.ps1
           & ./tests/Test-Manual-Sync.ps1
+      - name: Default account recovery guards
+        shell: powershell
+        run: ./tests/Test-DefaultAccount31.ps1
       - name: TLS timing, credentials and command transport
         shell: pwsh
         run: ./tests/Test-Gateway.ps1

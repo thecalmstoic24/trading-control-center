@@ -4,7 +4,7 @@
   const storage='planning-draft-pairs-v1';let drafts=[],fleet=[],pairs=[],queued=[];
   try{const value=JSON.parse(localStorage.getItem(storage));if(Array.isArray(value))drafts=value.filter(d=>/^[a-f0-9]{32}$/.test(d.key)&&(d.left||d.right));}catch(_){}
   for(const d of drafts){d.ratio=d.ratio||'1:1';PairRatio.amounts(d);}
-  const inFlight=new Set();
+  const inFlight=new Set();let addingAll=false;
   function save(){drafts=drafts.filter(d=>d.left||d.right);try{localStorage.setItem(storage,JSON.stringify(drafts));}catch(_){el('draft-message').textContent='Drafts cannot be saved in this browser. Keep this page open.';}}
   function usage(){
     const map={};const mark=(account,status)=>{if(!account)return;const u=map[account]||(map[account]={used:true,status:''});if(status==='Pairing'||!u.status)u.status=status;};
@@ -92,16 +92,18 @@
     host.replaceChildren();
     const line=make('p');line.className='draft-balance';line.append(make('span','Current Balance: '+fmt(item?.balance)+' · '));
     const pnl=f['Realized PnL'],value=make('span','Realized P&L: '+fmt(pnl));value.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(value);host.append(line);
-    if(item?.metrics){const dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:null;
-      for(const [label,value] of [['Drawdown',fmt(dd)],['Stop',fmt(f.stop)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']]){const metric=make('div',label+': '+value);metric.className='pair-secondary-metrics';host.append(metric);}
+    if(item?.metrics){const dd=typeof f.RealDrawdown==='number'&&Number.isFinite(f.RealDrawdown)?f.RealDrawdown:null;
+      for(const [label,value] of [['Drawdown',fmt(dd)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']]){const metric=make('div',label+': '+value);metric.className='pair-secondary-metrics';host.append(metric);}
+      const note=String(Object.entries(f).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').trim();if(note){const n=make('div',note);n.className='pair-scraper-note';host.append(n);}
     }
   }
   function render(){
     const list=el('draft-list');list.replaceChildren();
+    el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Queue';
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
     drafts.forEach(d=>{
       const card=make('form');card.className='draft-card';card.dataset.key=d.key;
-      const disabled=make('fieldset');disabled.disabled=inFlight.has(d.key);card.append(disabled);
+      const disabled=make('fieldset');disabled.disabled=addingAll||inFlight.has(d.key);card.append(disabled);
       if(d.suggestion?.strategy===PairSuggestions.STRATEGY){
         const label=make('p','Beta suggestion · '+d.suggestion.reason);label.className='suggestion-reason';disabled.append(label);
         const note=make('small','Calculated from the Planning snapshot. Review any edits before confirming.');disabled.append(note);
@@ -164,22 +166,35 @@
       const notice=make('p',d.notice||'');notice.className='draft-notice';notice.setAttribute('role','status');disabled.append(notice);
       const message=make('p',d.error||'');message.className='draft-error';message.setAttribute('role','status');disabled.append(message);
       validateCard(card,d);
-      card.onsubmit=async e=>{
-        e.preventDefault();if(inFlight.has(d.key)||problem(d))return;
-        if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
-        const left=d.left?.vm,right=d.right?.vm;
-                const [a,b]=d.ratio.split(':').map(Number);
-        if(Number(d.leftQuantity)*b!==Number(d.rightQuantity)*a){message.textContent='Adjust quantity to whole contracts matching the ratio.';return;}
-        inFlight.add(d.key);disabled.disabled=true;confirm.textContent='Adding…';
-        try{
-          await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
-          drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
-          window.dispatchEvent(new Event('queue-refresh'));
-        }catch(err){d.error=err.message;save();}finally{inFlight.delete(d.key);render();usage();}
-      };
+      card.onsubmit=async e=>{e.preventDefault();if(addingAll||inFlight.has(d.key)||problem(d))return;await enqueue(d);};
       list.append(card);
     });
   }
+  async function enqueue(d){
+    if(inFlight.has(d.key))return false;
+    if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
+    const left=d.left?.vm,right=d.right?.vm;
+    inFlight.add(d.key);render();
+    try{
+      await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+      drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
+      window.dispatchEvent(new Event('queue-refresh'));return true;
+    }catch(err){d.error=err.message;save();return false;}finally{inFlight.delete(d.key);render();usage();}
+  }
+  el('draft-add-all').onclick=async()=>{
+    if(addingAll||inFlight.size)return;
+    const ready=[];
+    for(const d of drafts){
+      const card=el('draft-list').querySelector(`[data-key="${d.key}"]`);
+      const reason=problem(d)||(!card?.checkValidity()?'Enter valid positive amounts and whole quantities.':'');
+      if(reason){d.error=reason;continue;}ready.push(d);
+    }
+    addingAll=true;save();render();let count=0;
+    el('draft-left').disabled=true;el('draft-right').disabled=true;el('suggest-pairs').disabled=true;
+    try{for(const d of ready)if(drafts.some(x=>x.key===d.key)&&await enqueue(d))count++;}
+    finally{addingAll=false;el('draft-left').disabled=false;el('draft-right').disabled=false;el('suggest-pairs').disabled=false;save();render();usage();}
+    el('draft-message').textContent=count+' pair'+(count===1?'':'s')+' added to queue.'+(drafts.length?' '+drafts.length+' draft(s) remain; review their errors.':'');
+  };
   window.addEventListener('edit-local-draft',e=>{const d=e.detail;if(!drafts.some(x=>x.key===d.key))drafts.push(d);save();render();usage();});
   window.addEventListener('planning-accounts-updated',e=>{
     const rows=new Map(e.detail.map(r=>[r.id,r]));

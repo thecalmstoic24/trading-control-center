@@ -22,7 +22,9 @@
    if(pairError(vm))return 'Errored';
    if(pending.has(vm.id)||vm.refresh?.status==='running')return 'Refreshing…';
    if(vm.pairId)return 'Paired';
-   return vm.online&&vm.fresh&&vm.position==='Flat'&&!vm.busy&&!vm.scheduled&&!vm.pending&&!vm.closing&&!vm.pairActive&&vm.accounts?.length>0&&vm.refresh?.status!=='error'?'Ready · Available':'Needs attention';
+   if(vm.defaultAccount?.status==='running')return 'Selecting Sim101…';
+   if(vm.fresh&&!vm.account)return 'Account selection needed';
+   return vm.online&&vm.fresh&&vm.position==='Flat'&&!!vm.account&&!vm.calibrationRequired&&!vm.busy&&!vm.scheduled&&!vm.pending&&!vm.closing&&!vm.pairActive&&vm.accounts?.length>0&&vm.refresh?.status!=='error'?'Ready · Available':'Needs attention';
  }
  function sortValue(vm){return sorting.field==='connection'?(vm.online?'Connected':'Disconnected'):sorting.field==='position'?position(vm):sorting.field==='availability'?availability(vm):vm.name;}
  function render(){

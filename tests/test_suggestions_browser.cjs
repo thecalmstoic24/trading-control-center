@@ -6,9 +6,10 @@ const path=require('node:path'),assert=require('node:assert/strict');
  assetServer=spawn('python',['-u',path.join(__dirname,'http_assets_server.py')],{stdio:['ignore','pipe','inherit']});
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('HTTP fixture startup timed out')),20000);assetServer.once('error',reject);assetServer.once('exit',code=>reject(new Error('HTTP fixture exited: '+code)));assetServer.stdout.once('data',()=>{clearTimeout(timer);resolve();});});
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
- const row=(id,firm,values={})=>({id:'rec'+id,fields:{id,firm,'Master Account':firm+'-TEST',CurrentBalance:50000,RealDrawdown:1500,CurrentProfit:0,ProfitTarget:3000,Consistency:0,CurrentPnL:0,...values}});
+ const row=(id,firm,values={})=>({id:'rec'+id,fields:{id,firm,'Master Account':firm+'-TEST',CurrentBalance:50000,stop:48000,'Trailing max drawdown':999,RealDrawdown:1500,CurrentProfit:0,ProfitTarget:3000,Consistency:0,CurrentPnL:0,...values}});
  const fn=(id,values={})=>row(id,'FN',{ProfitTarget:2500,Consistency:.4,largestProfitDay:900,...values});
- const rows=[row('FFF892070','FFF',{RealDrawdown:8.48,CurrentProfit:-1491.52}),row('FFF322630','FFF',{RealDrawdown:612.72,CurrentProfit:472.52}),row('FFF993110','FFF',{CurrentProfit:-159.76,CurrentPnL:159.76}),row('FFF236159','FFF',{RealDrawdown:1183.48,CurrentProfit:2401.96}),fn('FN27255',{RealDrawdown:1107.72,CurrentProfit:919.36}),fn('FN19087',{CurrentProfit:1139.36}),fn('FN20889',{RealDrawdown:1138.92,CurrentProfit:1402.52}),fn('FN67282',{CurrentProfit:968.48})];
+ const rows=[row('FFF892070','FFF',{RealDrawdown:8.48,CurrentProfit:-1491.52}),row('FFF322630','FFF',{RealDrawdown:612.72,CurrentProfit:472.52}),row('FFF993110','FFF',{CurrentProfit:-159.76,CurrentPnL:159.76}),row('FFF236159','FFF',{'scraper note':'Review payout date <b>plain text</b>',RealDrawdown:1183.48,CurrentProfit:2401.96}),fn('FN27255',{RealDrawdown:1107.72,CurrentProfit:919.36}),fn('FN19087',{CurrentProfit:1139.36}),fn('FN20889',{RealDrawdown:1138.92,CurrentProfit:1402.52}),fn('FN67282',{CurrentProfit:968.48})];
+ let rejectAccount='';
  let queue={rows:[],history:[],running:false,message:'Paused'},writes=[],error='',busy=false;
  const errors=[];
  async function open(){
@@ -18,10 +19,10 @@ const path=require('node:path'),assert=require('node:assert/strict');
    if(request.method()==='POST'){
     const body=request.postDataJSON();writes.push({path:url.pathname,body});result={ok:true};
     if(url.pathname==='/api/queue/add'){
-     const d=body.draft;assert.ok(Buffer.byteLength(request.postData())<16384);
+     const d=body.draft;if(d.left?.account===rejectAccount)return route.fulfill({status:400,json:{error:'Test account rejected'}});assert.ok(Buffer.byteLength(request.postData())<16384);
      queue.rows.push({id:'DRAFT-'+body.draftKey,key:body.draftKey,draft:d,localDraft:true,status:'Queued',spec:{...body,left:d.left?'left':null,right:d.right?'right':null,accounts:{left:d.left?.account,right:d.right?.account},quantities:{left:+d.leftQuantity,right:+d.rightQuantity},names:{left:'Unassigned VM',right:'Unassigned VM'},masters:{left:d.left?.master,right:d.right?.master}}});
     }
-   }else if(url.pathname==='/api/state')result={fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
+   }else if(url.pathname==='/api/state')result={version:'16.0-preview.31',fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
    else if(url.pathname==='/api/planning')result={rows,columns:['id','firm','CurrentBalance'].map(name=>({name})),updatedAt:1,error,busy};
    else if(url.pathname==='/api/queue')result=queue;
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
@@ -33,6 +34,20 @@ const path=require('node:path'),assert=require('node:assert/strict');
  }
  let {page,context}=await open();
  assert.equal(await page.locator('.draft-card').count(),0);assert.deepEqual(writes,[]);
+ assert.match(await page.title(),/Preview 31/);
+ assert.match(await page.locator('#control-center-title').textContent(),/Preview 31/);
+ await page.getByRole('checkbox',{name:'Select FFF322630',exact:true}).click();
+ await page.getByRole('checkbox',{name:'Select FN19087',exact:true}).click({modifiers:['Shift']});
+ assert.equal(await page.locator('#planning-table tbody input:checked').count(),5);
+ await page.locator('#planning-clear-selection').click();
+ await page.locator('#planning-table thead button').filter({hasText:/^id/}).click();
+ const ordered=await page.locator('#planning-table tbody tr').evaluateAll(rs=>rs.map(r=>r.dataset.account));
+ await page.getByRole('checkbox',{name:'Select '+ordered[1],exact:true}).click();
+ await page.getByRole('checkbox',{name:'Select '+ordered[3],exact:true}).click({modifiers:['Shift']});
+ assert.deepEqual(await page.locator('#planning-table tbody input:checked').evaluateAll(xs=>xs.map(x=>x.closest('tr').dataset.account)),ordered.slice(1,4));
+ await page.locator('#planning-select-all').click();assert.equal(await page.locator('#planning-table tbody input:checked').count(),8);
+ await page.locator('#planning-clear-selection').click();assert.equal(await page.locator('#planning-table tbody input:checked').count(),0);
+
  await page.getByRole('checkbox',{name:'Select FFF322630',exact:true}).check();await page.locator('#draft-left').click();
  const manual=page.locator('.draft-card').first();await manual.locator('[data-value-key=profit]').fill('777');await manual.locator('[data-value-key=stopLoss]').fill('333');
  const original=await manual.locator('[data-side=left] > p').first().textContent();
@@ -43,6 +58,11 @@ const path=require('node:path'),assert=require('node:assert/strict');
  const first=page.locator('.draft-card').nth(1);assert.match(await first.locator('.suggestion-reason').textContent(),/FFF236159.*one winning trade/);
  assert.equal(await first.locator('[data-value-key=profit]').inputValue(),'600');assert.equal(await first.locator('[data-value-key=stopLoss]').inputValue(),'950');
  assert.equal(await first.locator('[data-value-key=leftQuantity]').inputValue(),'2');assert.equal(await first.locator('[data-value-key=rightQuantity]').inputValue(),'2');
+ assert.match(await first.locator('[data-side=left] .draft-metrics').textContent(),/Drawdown: \$1,183.48/);
+ assert.doesNotMatch(await first.locator('.draft-metrics').first().textContent(),/Stop:/);
+ assert.equal(await first.locator('.pair-scraper-note').textContent(),'Review payout date <b>plain text</b>');
+ assert.equal(await first.locator('.pair-scraper-note b').count(),0);
+ assert.equal(await manual.locator('.pair-scraper-note').count(),0);
  assert.equal(await first.locator('[data-field=ticker]').inputValue(),'NQ');assert.equal(await first.locator('[data-field=ratio]').inputValue(),'1:1');
  for(const card of await page.locator('.draft-card').all())if(await card.locator('.suggestion-firm').count()){const firms=await card.locator('.suggestion-firm').allTextContents();assert.notEqual(firms[0],firms[1]);}
  assert.match(await page.locator('#suggestion-skipped-list').textContent(),/FFF892070.*one price tick/);
@@ -65,8 +85,24 @@ const path=require('node:path'),assert=require('node:assert/strict');
  await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===1);
  assert.match(await page.locator('.draft-card').textContent(),/FFF236159/);assert.match(await page.locator('.draft-card').textContent(),/FN19087/);assert.deepEqual(writes,[]);
  // A firm change in refreshed data disables confirmation without altering manual trade behavior.
- await page.evaluate(()=>window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:[{id:'recFN19087',fields:{id:'FN19087',firm:'FFF',CurrentBalance:50000,RealDrawdown:1500}}]})));
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:[{id:'recFN19087',fields:{id:'FN19087',firm:'FFF',CurrentBalance:50000,stop:48000,'Trailing max drawdown':999,RealDrawdown:1500}}]})));
  assert.equal(await page.getByRole('button',{name:'Same fund',exact:true}).isDisabled(),true);
+ await context.close();
+ // Batch confirmation preserves invalid/rejected drafts, and never starts the queue.
+ queue={rows:[],history:[],running:false,message:'Paused'};writes=[];({page,context}=await open());
+ await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===3);
+ const cards=page.locator('.draft-card');const invalidKey=await cards.nth(2).getAttribute('data-key');
+ await cards.nth(2).locator('[data-value-key=profit]').fill('0');
+ rejectAccount=await cards.nth(1).locator('[data-side=left] > p').first().textContent();
+ await page.locator('#draft-add-all').click();
+ await page.waitForFunction(()=>document.querySelector('#draft-message').textContent.includes('1 pair added to queue.'));
+ assert.equal(writes.length,2);assert.ok(writes.every(w=>w.path==='/api/queue/add'));
+ assert.equal(await cards.count(),2);assert.match(await page.locator(`[data-key="${invalidKey}"] .draft-error`).textContent(),/valid positive/);
+ assert.match(await page.locator('#draft-list').textContent(),/Test account rejected/);
+ assert.equal(queue.running,false);rejectAccount='';
+ await page.locator(`[data-key="${invalidKey}"] [data-value-key=profit]`).fill('100');
+ await page.locator('#draft-add-all').click();await page.waitForFunction(()=>document.querySelectorAll('.draft-card').length===0);
+ assert.equal(queue.rows.length,3);assert.equal(new Set(queue.rows.map(r=>r.key)).size,3);assert.equal(queue.running,false);
  await context.close();
  // A failed Planning snapshot cannot generate drafts from stale data.
  error='Airtable unavailable';({page,context}=await open());await page.locator('#suggest-pairs').click();await page.waitForFunction(()=>document.querySelector('#suggestion-status').textContent.includes('refresh the Planning view'));

@@ -262,7 +262,8 @@ class PairQueue:
             if len(matches) != 1: raise ValueError('Account must have one exact Airtable match.')
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
             balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
-            metrics[slot]={k:matches[0]['fields'].get(k) for k in ('CurrentBalance','Realized PnL','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
+            metrics[slot]={k:matches[0]['fields'].get(k) for k in ('RealDrawdown','CurrentBalance','Realized PnL','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
+            metrics[slot]['ScraperNote']=next((str(v)[:500] for k,v in matches[0]['fields'].items() if re.sub('[^a-z]','',k.lower())=='scrapernote' and v is not None),'')
         if len(members)==2 and all(accounts[s]!='Sim101' for s in members):
             funds=[]
             for slot in (left,right):
@@ -506,14 +507,15 @@ class PairQueue:
         try:
             pair.refresh_both()
             agents=pair.state()['agents']
-            if not all(pair.safe_flat(a) for a in agents): return
+            allow_blank=not row.get('started') and not pair.opened_ids
+            if not all((pair.account_discovery_idle(a) if allow_blank else pair.safe_flat(a)) for a in agents): return
             if row.get('started') and not all(pair.target_matches(a) for a in agents): return
             if row.get('closed') and row.get('afterId'):
                 if not all(a.get('skipResults') for a in agents): return
                 for slot in pair.pair: pair.call(slot,'skip_results',{'tradeId':row['afterId']},15)
                 row['resultsSkipped']=True
-            self.fleet.release_pair(identity, strict=True)
-        except (ValueError, KeyError) as exc:
+            self.fleet.release_pair(identity, strict=True, allow_blank=allow_blank)
+        except Exception as exc:
             row['releaseMessage']=str(exc)
             return
         row.update(errorReleased=True,dirty=True,releaseMessage='VMs verified idle and Flat; released for waiting pairs.')
@@ -592,12 +594,17 @@ class PairQueue:
                     self.set_status(row,'Waiting','A VM or account is assigned to another pair. Release it in Trading when finished.'); return
             if not row.get('checked22'):
                 for s in members: self.fleet.observe(s)
+                for s in members:
+                    if not self.fleet.view(s).get('account'): self.fleet.ensure_default_account(s)
             with self.fleet.lock:
                 agents=[self.fleet.view(s) for s in members]
                 if any(a.get('calibrationRequired') for a in agents):
                     raise ValueError('Calibration required. Click Calibrate Chart 1 on the affected agent, then Retry preparation.')
                 if not row.get('checked22') and not all(self.fleet.catalog.safe_flat(a) for a in agents):
-                    self.set_status(row,'Waiting','Waiting for both VMs to report fresh, idle Flat.'); return
+                    details='; '.join(a['name']+': '+self.fleet.readiness_reason(a) for a in agents if self.fleet.readiness_reason(a))
+                    self.set_status(row,'Waiting',details or 'Waiting for both VMs to report fresh, idle Flat.'); return
+                if any(a.get('refresh',{}).get('status')=='running' or a.get('defaultAccount',{}).get('status')=='running' for a in agents):
+                    self.set_status(row,'Waiting','Waiting for account refresh or automatic selection to finish.'); return
                 if not all(a.get('queueReceipts') for a in agents):
                     raise ValueError('Update both selected VM agents to preview.7 for verified queue results.')
                 if not all(a.get('queueAccountRefresh') for a in agents):

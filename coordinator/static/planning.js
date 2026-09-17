@@ -39,8 +39,8 @@
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
   if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay};return;}
   const el=id=>document.getElementById(id);
-  const selected=new Set();let usage={};
-  window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();renderTable();},suggestionPool:()=>{
+  const selected=new Set();let usage={},selectionAnchor=null;
+  window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();selectionAnchor=null;renderTable();},suggestionPool:()=>{
     if(!data.updatedAt||data.busy||data.error||el('planning-view').disabled)throw Error('Load or refresh the Planning view successfully before suggesting pairs.');
     const checked=data.rows.filter(r=>selected.has(r.id));
     return {rows:checked.length?checked:data.rows,scope:checked.length?'checked accounts':'current Airtable view',viewKey};
@@ -87,6 +87,14 @@
 
     }
   }
+  function selectionStatus(){
+    const count=data.rows.filter(r=>selected.has(r.id)).length;
+    el('planning-selection-status').textContent=count+' selected';
+    el('planning-select-all').disabled=!data.rows.length||!!data.busy;
+    el('planning-clear-selection').disabled=!count;
+  }
+  el('planning-select-all').onclick=()=>{for(const r of data.rows)selected.add(r.id);selectionAnchor=null;renderTable();};
+  el('planning-clear-selection').onclick=()=>window.planningSelection.clear();
   function renderTable(){
     const table=el('planning-table');table.replaceChildren();
     const cols=columnOrder().filter(c=>c.name==='id'||!layout.hidden.includes(c.name));
@@ -106,9 +114,17 @@
     rows.forEach((row,i)=>{
       const tr=node('tr');tr.draggable=!layout.sort;tr.dataset.record=row.id;tr.dataset.account=display(row.fields.id);
       const select=node('td'),box=node('input');box.type='checkbox';box.checked=selected.has(row.id);box.setAttribute('aria-label','Select '+display(row.fields.id));
-      box.onchange=()=>{if(box.checked)selected.add(row.id);else selected.delete(row.id);};
+      const choose=(checked,shift)=>{
+        const anchor=rows.findIndex(r=>r.id===selectionAnchor);
+        const range=shift&&anchor>=0?rows.slice(Math.min(anchor,i),Math.max(anchor,i)+1):[row];
+        for(const r of range)checked?selected.add(r.id):selected.delete(r.id);
+        if(!shift||anchor<0)selectionAnchor=row.id;
+        for(const tr of table.querySelectorAll('tbody tr[data-record]'))tr.querySelector('input[type=checkbox]').checked=selected.has(tr.dataset.record);
+        selectionStatus();
+      };
+      box.onclick=e=>choose(box.checked,e.shiftKey);
       let draggedRow=false;tr.onpointerdown=()=>{draggedRow=false;};
-      tr.onclick=e=>{if(draggedRow||e.target.closest('input,button,a,select')||window.getSelection().toString())return;box.checked=!box.checked;box.onchange();};select.className='account-select';select.append(box);tr.append(select);
+      tr.onclick=e=>{if(draggedRow||e.target.closest('input,button,a,select')||(!e.shiftKey&&window.getSelection().toString()))return;box.checked=!box.checked;choose(box.checked,e.shiftKey);};select.className='account-select';select.append(box);tr.append(select);
       tr.ondragstart=e=>{draggedRow=true;dragId=row.id;e.dataTransfer.setData('text/plain',row.id);e.dataTransfer.effectAllowed='move';};
       tr.ondragover=e=>{if(!layout.sort)e.preventDefault();};
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
@@ -117,7 +133,7 @@
       const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',cellDisplay(value,c));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
     });
     if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
-    table.append(body);resizeColumns(table,cols);decorate();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
+    table.append(body);resizeColumns(table,cols);decorate();selectionStatus();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
   }
   function resizeColumns(table,cols){
     const names=['Select','Order'];for(const c of cols){if(c.name==='id')names.push('Pair status');names.push('field:'+c.name);}
@@ -140,7 +156,7 @@
     try{
       const snapshot=await api('/api/planning');if(generation!==requestGeneration)return;
       const next=snapshot.viewKey||defaultView;
-      if(next!==viewKey){save();viewKey=next;key=next===defaultView?'planning-viw6K3jRjU5PJpWM4-v1':'planning-'+next+'-v1';layout=loadLayout();selected.clear();dragId='';lastUpdate=undefined;el('view-save-status').textContent='';resize(layout.split);}
+      if(next!==viewKey){save();viewKey=next;key=next===defaultView?'planning-viw6K3jRjU5PJpWM4-v1':'planning-'+next+'-v1';layout=loadLayout();selected.clear();selectionAnchor=null;dragId='';lastUpdate=undefined;el('view-save-status').textContent='';resize(layout.split);}
       data=snapshot;
       const views=data.views||[{key:defaultView,name:'Accounts'}],signature=JSON.stringify(views);
       if(signature!==viewSignature){viewSignature=signature;el('planning-view').replaceChildren();for(const v of views){const option=node('option',v.name);option.value=v.key;el('planning-view').append(option);}}

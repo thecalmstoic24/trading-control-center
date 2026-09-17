@@ -57,6 +57,78 @@ class QueueTests(unittest.TestCase):
             c.pool.shutdown(wait=True);c.close_pool.shutdown(wait=True)
             for h in c.logger.handlers:h.close()
         self.tmp.cleanup()
+    def enable_default_account(self):
+        original=self.agent.__call__
+        for state in self.agent.states.values():state['defaultAccountSelection']=True
+        def transport(config,command,body=None,**kwargs):
+            result=original(config,command,body,**kwargs)
+            if command=='ensure_default_account':self.agent.states[config['id']]['account']='Sim101'
+            return result
+        self.fleet.catalog.transport=transport
+        self.fleet.transport=transport
+        for slot in module.IDS:self.fleet.observe(slot)
+
+    def test_blank_account_auto_selection_resumes_queue_without_replaying_entry(self):
+        self.enable_default_account();self.enable_fast22()
+        self.agent.states['vm-left']['account']=''
+        self.add_start();self.tick_until('Preparing')
+        commands=[c[1] for c in self.agent.calls]
+        self.assertEqual(commands.count('ensure_default_account'),1)
+        self.assertNotIn('entry',commands)
+        self.assertEqual(self.agent.states['vm-left']['account'],'Sim101')
+
+    def test_blank_account_does_not_select_when_paused_or_busy_or_old_agent(self):
+        self.enable_default_account();self.agent.states['vm-left']['account']=''
+        self.queue.add(self.body);self.queue.tick()
+        self.assertFalse(any(c[1]=='ensure_default_account' for c in self.agent.calls))
+        self.agent.states['vm-left']['busy']=True;self.queue.command('start',{});self.queue.tick()
+        self.assertFalse(any(c[1]=='ensure_default_account' for c in self.agent.calls))
+        self.assertIn('desktop busy',self.queue.rows[0]['message'])
+        self.agent.states['vm-left'].update(busy=False,defaultAccountSelection=False);self.queue.tick()
+        self.assertIn('Preview 31',self.queue.rows[0]['message'])
+        self.assertFalse(any(c[1]=='ensure_default_account' for c in self.agent.calls))
+
+    def test_existing_account_is_never_replaced_by_auto_selection(self):
+        self.enable_default_account();self.fleet.ensure_default_account('vm-left')
+        self.assertFalse(any(c[1]=='ensure_default_account' for c in self.agent.calls))
+
+    def test_default_selection_in_flight_is_not_duplicated(self):
+        self.enable_default_account();self.agent.states['vm-left']['account']='';self.fleet.observe('vm-left')
+        entered=threading.Event();resume=threading.Event();original=self.fleet.catalog.transport
+        def blocked(config,command,body=None,**kwargs):
+            if command=='ensure_default_account':entered.set();resume.wait(2)
+            return original(config,command,body,**kwargs)
+        self.fleet.catalog.transport=blocked
+        try:
+            self.fleet.ensure_default_account('vm-left');self.assertTrue(entered.wait(1))
+            self.fleet.ensure_default_account('vm-left')
+            self.assertEqual(self.fleet.vm_default['vm-left']['status'],'running')
+            with self.assertRaises(ValueError):self.fleet.create_pair(*module.IDS)
+        finally:resume.set()
+
+    def test_blank_pre_entry_error_releases_then_recovers_for_next_pair(self):
+        self.enable_default_account();row,pair=self.failed_reserved_pair()
+        self.agent.states['vm-left']['account']=''
+        self.queue.add(self.body);self.queue.command('start',{});self.queue.release_error(row)
+        self.assertTrue(row['errorReleased']);self.assertEqual(row['status'],'Error')
+        for _ in range(100):
+            self.queue.tick()
+            if self.queue.rows[1]['status']=='Preparing':break
+            time.sleep(.01)
+        self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+        self.assertEqual(row['status'],'Error')
+
+    def test_error_recovery_network_failure_keeps_queue_running_and_throttles(self):
+        row,pair=self.failed_reserved_pair();original=pair.refresh_both;calls=[]
+        def failed():calls.append(1);raise TimeoutError('temporary connection failure')
+        pair.refresh_both=failed
+        self.queue.release_error(row);self.queue.release_error(row)
+        self.assertEqual(len(calls),1);self.assertTrue(self.queue.running)
+        self.assertIn('connection failure',row['releaseMessage'])
+        self.assertFalse(row.get('errorReleased'))
+        pair.refresh_both=original;row['releaseCheckAt']=0;self.queue.release_error(row)
+        self.assertTrue(row['errorReleased']);self.assertEqual(row['status'],'Error')
+
     def deferred_body(self, single=None):
         original=self.store.records
         records=[{'id':'rec'+str(i),'fields':{'id':account,'Master Account':master,'CurrentBalance':50000}}

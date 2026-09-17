@@ -78,6 +78,7 @@ function renderRegistry(s) {
   $('close-all').disabled=s.pairs.length===0;
 }
 function render(s){
+  if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent='CONTROL CENTER · '+label;}
   if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));
   fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';
   if(!s.pairs.some(p=>p.id===selectedPairId)){

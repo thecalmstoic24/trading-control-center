@@ -149,7 +149,7 @@ public sealed class ControlGateway11 : IDisposable {
                     }
                     return;
                 }
-                if(command!="manual_sync" && command!="skip_results" && command!="single_entry" && command!="bind_single" && command!="peer_check" && command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close" && command!="accounts" && command!="post_trade") { writer.WriteLine("{\"ok\":false,\"message\":\"Unsupported command. Update this VM agent.\"}"); return; }
+                if(command!="ensure_default_account" && command!="manual_sync" && command!="skip_results" && command!="single_entry" && command!="bind_single" && command!="peer_check" && command!="prepare" && command!="entry" && command!="close" && command!="invalidate" && command!="bind_peer" && command!="unbind_peer" && command!="peer" && command!="peer_close" && command!="accounts" && command!="post_trade") { writer.WriteLine("{\"ok\":false,\"message\":\"Unsupported command. Update this VM agent.\"}"); return; }
                 ControlRequest11 request;
                 lock(gate) {
                     if(seen.ContainsKey(id)) {

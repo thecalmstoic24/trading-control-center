@@ -133,9 +133,10 @@
       const slot=s[side];if(!slot)continue;const card=node('article');card.className='compact-account';
       const direction=(side==='left')===(s.direction==='buy')?'Buy':'Sell';
       card.append(node('strong',(s.masters[slot]||s.names[slot])+' · '+direction),node('div',s.accounts[slot]));
-      const f=s.metrics?.[slot]||{},dd=[f.CurrentBalance,f.stop,f['Trailing max drawdown']].every(v=>typeof v==='number'&&Number.isFinite(v))?f.CurrentBalance-f.stop+f['Trailing max drawdown']:undefined;const current=r.after?.[slot]||r.before?.[slot]||{},pnl=current.pnl??f['Realized PnL'];
+      const f=s.metrics?.[slot]||{},dd=typeof f.RealDrawdown==='number'&&Number.isFinite(f.RealDrawdown)?f.RealDrawdown:undefined;const current=r.after?.[slot]||r.before?.[slot]||{},pnl=current.pnl??f['Realized PnL'];
       const line=node('div','Current Balance: '+dollars(current.balance??s.balances?.[slot])+' · '),realized=node('span','Realized P&L: '+dollars(pnl??undefined));realized.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(realized);card.append(line);
-      const metrics=node('div','Drawdown: '+dollars(dd)+' · Stop: '+dollars(f.stop??undefined)+' · Largest profit day: '+dollars(f.largestProfitDay??undefined)+' · Trading days: '+(f.tradingDays??'—'));metrics.className='pair-secondary-metrics';card.append(metrics);
+      const metrics=node('div','Drawdown: '+dollars(dd)+' · Largest profit day: '+dollars(f.largestProfitDay??undefined)+' · Trading days: '+(f.tradingDays??'—'));metrics.className='pair-secondary-metrics';card.append(metrics);
+      const note=String(Object.entries(f).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').trim();if(note){const n=node('div',note);n.className='pair-scraper-note';card.append(n);}
       card.append(node('div','Quantity: '+s.quantities[slot]+' · Ratio: '+(s.ratio||'1:1')));
       card.append(node('div','Profit: '+dollars(side==='left'?s.profit:s.stopLoss*factor)+' · Stop: '+dollars(side==='left'?s.stopLoss:s.profit*factor)));
       const result=node('div','Result: '+dollars(r.results?.[slot]));result.className=r.results?.[slot]>0?'queue-win':r.results?.[slot]<0?'queue-loss':'';card.append(result);cards.append(card);
