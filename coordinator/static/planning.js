@@ -36,8 +36,10 @@
       return cmp*layout.sort.direction;
     });
   }
+  function fundName(row){const key=Object.keys(row.fields||{}).find(k=>k.trim().toLowerCase()==='firm');return display(row.fields[key]).trim().toUpperCase();}
+  function visibleRows(rows,layout,columns){const result=ordered(rows,layout,columns);return layout.groupByFund?result.sort((a,b)=>{const x=fundName(a),y=fundName(b);return !x||!y?x?-1:y?1:0:x.localeCompare(y,undefined,{numeric:true,sensitivity:'base'});}):result;}
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
-  if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay};return;}
+  if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay,fundName,visibleRows};return;}
   const el=id=>document.getElementById(id);
   const selected=new Set();let usage={},selectionAnchor=null;
   window.planningSelection={rows:()=>data.rows.filter(r=>selected.has(r.id)),clear:()=>{selected.clear();selectionAnchor=null;renderTable();},suggestionPool:()=>{
@@ -54,9 +56,9 @@
     }
   }
   function loadLayout(){
-    let result={hidden:[],order:[],columns:[],widths:{},split:65,sort:null};
+    let result={hidden:[],order:[],columns:[],widths:{},split:65,sort:null,groupByFund:false};
     try{const saved=JSON.parse(localStorage.getItem(key));
-      if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))result={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null};
+      if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))result={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null,groupByFund:saved.groupByFund===true};
     }catch(_){}return result;
   }
   let layout=loadLayout();
@@ -95,10 +97,9 @@
   }
   el('planning-select-all').onclick=()=>{for(const r of data.rows)selected.add(r.id);selectionAnchor=null;renderTable();};
   el('planning-clear-selection').onclick=()=>window.planningSelection.clear();
-  function renderTable(){
-    const table=el('planning-table');table.replaceChildren();
-    const cols=columnOrder().filter(c=>c.name==='id'||!layout.hidden.includes(c.name));
-    const head=node('thead'),hr=node('tr');hr.append(node('th','Select'),node('th','Order'));
+  el('planning-group-fund').onclick=()=>{layout.groupByFund=!layout.groupByFund;save();renderTable();};
+  function makeHeader(cols){
+    const hr=node('tr');hr.className='planning-column-header';hr.append(node('th','Select'));
     for(const c of cols){
       if(c.name==='id')hr.append(node('th','Pair status'));
       const th=node('th'),active=layout.sort?.name===c.name;
@@ -109,9 +110,18 @@
       th.ondragover=e=>{if(Array.from(e.dataTransfer.types).includes('application/x-planning-column'))e.preventDefault();};
       th.ondrop=e=>{e.preventDefault();moveColumn(e.dataTransfer.getData('application/x-planning-column'),c.name);};hr.append(th);
     }
-    head.append(hr);table.append(head);const body=node('tbody');
-    const rows=ordered(data.rows,layout,data.columns);
+    return hr;
+  }
+  function renderTable(){
+    const table=el('planning-table');table.replaceChildren();
+    el('planning-group-fund').setAttribute('aria-pressed',String(layout.groupByFund));
+    const cols=columnOrder().filter(c=>c.name==='id'||!layout.hidden.includes(c.name));
+    const rows=visibleRows(data.rows,layout,data.columns),head=node('thead');head.append(makeHeader(cols));head.hidden=layout.groupByFund&&rows.length>0;table.append(head);
+    const body=node('tbody');let previousFund=null;
+
     rows.forEach((row,i)=>{
+      const fund=fundName(row);
+      if(layout.groupByFund&&fund!==previousFund){const group=node('tr'),title=node('th',fund||'Unspecified fund');group.className='fund-heading';title.colSpan=cols.length+2;title.scope='rowgroup';group.append(title);body.append(group,makeHeader(cols));previousFund=fund;}
       const tr=node('tr');tr.draggable=!layout.sort;tr.dataset.record=row.id;tr.dataset.account=display(row.fields.id);
       const select=node('td'),box=node('input');box.type='checkbox';box.checked=selected.has(row.id);box.setAttribute('aria-label','Select '+display(row.fields.id));
       const choose=(checked,shift)=>{
@@ -128,19 +138,18 @@
       tr.ondragstart=e=>{draggedRow=true;dragId=row.id;e.dataTransfer.setData('text/plain',row.id);e.dataTransfer.effectAllowed='move';};
       tr.ondragover=e=>{if(!layout.sort)e.preventDefault();};
       tr.ondrop=e=>{e.preventDefault();move(dragId,row.id);dragId='';};
-      const order=node('td');order.className='row-order';order.append(node('span',String(i+1)));
 
-      const usageCell=node('td');usageCell.className='usage-cell';tr.append(order);for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',cellDisplay(value,c));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
+      const usageCell=node('td');usageCell.className='usage-cell';for(const c of cols){if(c.name==='id')tr.append(usageCell);const value=row.fields[c.name],td=node('td',cellDisplay(value,c));if(c.name.replace(/[^a-z]/gi,'').toLowerCase()==='realizedpnl'&&typeof value==='number')td.className=value<0?'pnl-negative':value>0?'pnl-positive':'';tr.append(td);}body.append(tr);
     });
-    if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+3;tr.append(td);body.append(tr);}
+    if(!rows.length){const tr=node('tr'),td=node('td',data.updatedAt?'No accounts in this Airtable view.':'Refresh Planning or open Airtable setup to load accounts.');td.colSpan=cols.length+2;tr.append(td);body.append(tr);}
     table.append(body);resizeColumns(table,cols);decorate();selectionStatus();el('planning-manual').textContent=layout.sort?'Return to Manual Order':'Manual Order ✓';
   }
   function resizeColumns(table,cols){
-    const names=['Select','Order'];for(const c of cols){if(c.name==='id')names.push('Pair status');names.push('field:'+c.name);}
-    const group=node('colgroup'),headers=table.querySelectorAll('thead th'),widths=names.map(name=>Math.max(60,Math.min(1000,Number(layout.widths[name])||(name.startsWith('field:')?180:name==='Pair status'?110:70))));
+    const names=['Select'];for(const c of cols){if(c.name==='id')names.push('Pair status');names.push('field:'+c.name);}
+    const group=node('colgroup'),headers=table.querySelectorAll('.planning-column-header'),widths=names.map(name=>Math.max(60,Math.min(1000,Number(layout.widths[name])||(name.startsWith('field:')?180:name==='Pair status'?110:70))));
     const apply=()=>{Array.from(group.children).forEach((col,i)=>col.style.width=widths[i]+'px');table.style.width=widths.reduce((a,b)=>a+b,0)+'px';};
     names.forEach((name,i)=>{
-      group.append(node('col'));const th=headers[i],handle=node('span');th.setAttribute('aria-label',th.textContent);handle.className='column-resize';handle.tabIndex=0;handle.setAttribute('role','separator');handle.setAttribute('aria-orientation','vertical');handle.setAttribute('aria-label','Resize '+name.replace(/^field:/,''));
+      group.append(node('col'));for(const header of headers){const th=header.children[i],handle=node('span');th.setAttribute('aria-label',th.textContent);handle.className='column-resize';handle.tabIndex=0;handle.setAttribute('role','separator');handle.setAttribute('aria-orientation','vertical');handle.setAttribute('aria-label','Resize '+name.replace(/^field:/,''));
       let startX=0,startWidth=0,active=false,wasDraggable=false;
       const commit=()=>{layout.widths[name]=widths[i];save();};
       handle.onpointerdown=e=>{e.preventDefault();e.stopPropagation();active=true;wasDraggable=th.draggable;th.draggable=false;startX=e.clientX;startWidth=widths[i];handle.setPointerCapture(e.pointerId);};
@@ -148,7 +157,7 @@
       const finish=()=>{if(!active)return;active=false;th.draggable=wasDraggable;commit();};handle.onpointerup=finish;handle.onpointercancel=finish;
       handle.onclick=e=>{e.preventDefault();e.stopPropagation();};handle.ondragstart=e=>{e.preventDefault();e.stopPropagation();};
       handle.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();e.stopPropagation();widths[i]=Math.max(60,Math.min(1000,widths[i]+(e.key==='ArrowLeft'?-10:10)));apply();commit();}};
-      th.append(handle);
+      th.append(handle);}
     });table.prepend(group);apply();
   }
   async function poll(){

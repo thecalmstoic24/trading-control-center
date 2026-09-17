@@ -69,4 +69,6 @@ jobs:
           node tests/test_preview28_browser.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_suggestions_browser.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_preview34_browser.cjs
           exit $LASTEXITCODE

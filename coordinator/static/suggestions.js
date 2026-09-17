@@ -1,7 +1,7 @@
 'use strict';
 // Beta: calculations and editable drafts only. No network or execution calls.
 (() => {
- const STRATEGY='non-consistency-tests', REVISION=33, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
+ const STRATEGY='non-consistency-tests', REVISION=34, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
  const money=c=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(c/100);
  function number(value,name){
   if(typeof value==='string'&&/^-?\d+(?:\.\d+)?$/.test(value.trim()))value=Number(value);
@@ -18,9 +18,16 @@
  }
  const floorTick=n=>Math.floor((n+1e-7)/TICK_CENTS)*TICK_CENTS;
  const ceilTick=n=>Math.ceil((n-1e-7)/TICK_CENTS)*TICK_CENTS;
+ function stage(fields){
+  const keys=Object.keys(fields||{}).filter(k=>k.trim().toLowerCase()==='stage');
+  if(keys.length!==1)return '';
+  const text=value=>typeof value==='string'?value:value&&typeof value==='object'?String(value.name||''):'';
+  const value=fields[keys[0]];return (Array.isArray(value)?value.map(text).join(' / '):text(value)).trim();
+ }
  function account(row){
   const f=row.fields||{},id=typeof f.id==='string'?f.id.trim():'';
   if(!id||!row.id)throw Error('Missing account ID or Airtable record.');
+  if(!/evaluation|challenge/i.test(stage(f)))throw Error('Stage must include Evaluation or Challenge.');
   const company=firm(f);if(!company)throw Error('Missing or ambiguous firm.');
   const drawdown=cents(f.RealDrawdown,'RealDrawdown'),target=cents(f.ProfitTarget,'ProfitTarget');
   const current=cents(f.CurrentBalance,'CurrentBalance'),opening=cents(f.InitialBalance,'InitialBalance');
@@ -113,6 +120,6 @@
   }catch(e){return e.message;}
   return '';
  }
- const api={STRATEGY,REVISION,TICK_CENTS,MIN_GAIN,MAX_OVERSHOOT,firm,account,gainAgainst,suggest,draft,validateDraft};
+ const api={STRATEGY,REVISION,TICK_CENTS,MIN_GAIN,MAX_OVERSHOOT,firm,stage,account,gainAgainst,suggest,draft,validateDraft};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else window.PairSuggestions=api;
 })();

@@ -54,8 +54,8 @@
      syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);
      const remove=node('button',removing.has(vm.id)?'Removing…':'Remove VM');remove.className='quiet';remove.setAttribute('aria-label','Remove VM '+vm.name);remove.disabled=removing.has(vm.id);remove.onclick=()=>removeVM(vm);actions.append(remove);line.append(actions);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
-     const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);row.append(details);
-     row.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));list.append(row);
+     const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);const secondary=node('div');secondary.className='vm-row-secondary';secondary.append(details);
+     secondary.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));row.append(secondary);list.append(row);
    }
    list.scrollTop=scroll;
    el('vms-refresh-selected').disabled=!fleet.some(vm=>selected.has(vm.id));

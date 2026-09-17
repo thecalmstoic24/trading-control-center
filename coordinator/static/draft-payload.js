@@ -14,6 +14,7 @@ function compactPairDraft(d){
   slot.metrics.ScraperNote=String(Object.entries(item.metrics||{}).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').slice(0,500);
   if(result.suggestion){
    slot.metrics.firm=PairSuggestions.firm(item.metrics);
+   slot.metrics.stage=PairSuggestions.stage(item.metrics).slice(0,256);
    for(const k of ['RealDrawdown','CurrentProfit','ProfitTarget','Consistency','InitialBalance','balance']){
     const v=item.metrics?.[k];slot.metrics[k]=typeof v==='number'&&Number.isFinite(v)?v:null;
    }

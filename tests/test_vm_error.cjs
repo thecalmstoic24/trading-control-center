@@ -15,7 +15,7 @@ let queue={rows:[{id:'PAIR-0077',pairId:'binding-77',status:'Error',message:'ATM
 function emit(name,detail){listeners.get(name)({detail});}
 function row(id){return elements.get('vms-list').children.find(r=>r.dataset.vm===id);}
 function badge(id){return row(id).children[0].children.find(n=>n.className.startsWith('vm-availability'));}
-function message(id){return row(id).children.find(n=>n.tag==='p').textContent;}
+function message(id){return row(id).children.find(n=>n.className==='vm-row-secondary').children.find(n=>n.tag==='p').textContent;}
 emit('fleet-updated',{fleet});assert.equal(badge('left').textContent,'Paired');
 emit('queue-updated',queue);
 for(const id of ['left','right']){

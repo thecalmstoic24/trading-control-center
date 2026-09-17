@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const el=id=>document.getElementById(id), node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
-  let fleet=[],data={rows:[]},busy=false,resizing=false,detailId='';const duplicateKeys=new Map();
+  let fleet=[],data={rows:[]},busy=false,resizing=false,dragging=false,detailId='';const duplicateKeys=new Map();
   let sortColumn=10,sortDirection=-1;
   const selected=new Set();let mutating=false,toastTimer;
   function toast(count){const box=el('queue-toast');clearTimeout(toastTimer);box.textContent=count?`${count} ${count===1?'pair':'pairs'} started in the queue successfully.`:'No new pairs to start.';box.hidden=false;toastTimer=setTimeout(()=>{box.hidden=true;},5000);}
@@ -47,12 +47,12 @@
   function resizeColumns(table){
     let widths={};try{widths=JSON.parse(localStorage.getItem('pair-widths-'+table.id))||{};}catch(_){}
     table.style.tableLayout='fixed';
-    [...table.querySelectorAll('th')].forEach((th,i)=>{
+    [...table.querySelectorAll('th')].forEach(th=>{const i=Number(th.dataset.column);
       if(widths[i])th.style.width=widths[i]+'px';th.style.position='relative';
       const handle=node('span');handle.onclick=e=>e.stopPropagation();handle.className='column-resizer';handle.title='Drag to resize column';
-      handle.onpointerdown=e=>{resizing=true;e.preventDefault();e.stopPropagation();const start=e.clientX,width=th.getBoundingClientRect().width;handle.setPointerCapture(e.pointerId);
+      handle.onpointerdown=e=>{resizing=true;th.draggable=false;e.preventDefault();e.stopPropagation();const start=e.clientX,width=th.getBoundingClientRect().width;handle.setPointerCapture(e.pointerId);
         handle.onpointermove=ev=>{widths[i]=Math.max(65,width+ev.clientX-start);th.style.width=widths[i]+'px';try{localStorage.setItem('pair-widths-'+table.id,JSON.stringify(widths));}catch(_){}};
-        handle.onpointerup=handle.onpointercancel=()=>{resizing=false;handle.onpointermove=null;};};th.append(handle);
+        handle.onpointerup=handle.onpointercancel=()=>{resizing=false;th.draggable=table.id==='trading-queue-table';handle.onpointermove=null;};};th.append(handle);
     });
   }
   function sortValue(r,column){
@@ -73,11 +73,26 @@
       return result*sortDirection||b.id.localeCompare(a.id,undefined,{numeric:true});
     });
   }
+  const columnLabels=['Select','Pair ID','Left master / account','Left balance','Right master / account','Right balance','Instrument / Qty','Status','Left P&L','Right P&L','Completed Time','Actions'];
+  function columnOrder(id){let saved=[];try{saved=JSON.parse(localStorage.getItem('pair-column-order-'+id))||[];}catch(_){}return [...new Set([...(Array.isArray(saved)?saved:[]).filter(n=>Number.isInteger(n)&&n>=0&&n<12),...columnLabels.map((_,i)=>i)])];}
+  function tradeSettings(s,side){
+    const [a,b]=String(s.ratio||'1:1').split(':').map(Number),factor=a>0&&b>0?b/a:1;
+    const values=side==='right'?[Number(s.stopLoss)*factor,Number(s.profit)*factor]:[Number(s.profit),Number(s.stopLoss)];
+    const money=v=>Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:2}).format(Math.round((v+Number.EPSILON)*100)/100):'—';
+    return 'P '+money(values[0])+' L '+money(values[1]);
+  }
   function renderTable(id,rows,isPlanning){
     const table=el(id);table.replaceChildren();const head=node('thead'),hr=node('tr');
     if(!isPlanning)rows=sortedRows(rows);
-    for(const [column,label] of ['Select','Pair ID','Left master / account','Left balance','Right master / account','Right balance','Instrument / Qty','Status','Left P&L','Right P&L','Completed Time','Actions'].entries()){
-      const th=node('th');
+    const order=isPlanning?columnLabels.map((_,i)=>i):columnOrder(id);
+    for(const column of order){
+      const label=columnLabels[column],th=node('th');th.dataset.column=column;
+      if(!isPlanning){th.draggable=true;th.title='Drag to rearrange column';
+        th.ondragstart=e=>{dragging=true;e.dataTransfer.setData('application/x-pair-column',JSON.stringify({id,column}));};
+        th.ondragend=()=>{dragging=false;};
+        th.ondragover=e=>{if(Array.from(e.dataTransfer.types).includes('application/x-pair-column'))e.preventDefault();};
+        th.ondrop=e=>{e.preventDefault();dragging=false;let source;try{source=JSON.parse(e.dataTransfer.getData('application/x-pair-column'));}catch(_){return;}if(source.id!==id||!order.includes(source.column)||source.column===column)return;const next=order.slice();next.splice(next.indexOf(source.column),1);next.splice(order.indexOf(column),0,source.column);try{localStorage.setItem('pair-column-order-'+id,JSON.stringify(next));}catch(_){}render();};
+      }
       if(!isPlanning&&column>0&&column<11){
         th.setAttribute('aria-sort',column===sortColumn?(sortDirection===1?'ascending':'descending'):'none');
         const button=node('button',label+(column===sortColumn?(sortDirection===1?' ▲':' ▼'):''));button.className='column-sort';
@@ -90,14 +105,14 @@
       const tr=node('tr'),s=r.spec,selection=node('td');tr.dataset.pair=r.id;if(!isPlanning){tr.classList.add('pair-select-row');tr.onclick=e=>{if(e.target.closest('button,input'))return;detailId=r.id;if(r.pairId)selectView(r.pairId);renderDetail();};}
       if(removable(r)){const box=node('input');box.type='checkbox';box.checked=selected.has(r.id);box.disabled=mutating;box.setAttribute('aria-label','Select '+r.id);box.onchange=()=>{box.checked?selected.add(r.id):selected.delete(r.id);updateButtons();};selection.append(box);}
       tr.append(selection,node('td',r.localDraft?'Draft':r.id));
-      for(const side of ['left','right']){const slot=s[side];if(!slot){tr.append(node('td','—'),node('td','—'));continue;}tr.append(node('td',`${s.masters[slot]} / ${s.accounts[slot]}`),node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))));}
+      for(const side of ['left','right']){const slot=s[side];if(!slot){tr.append(node('td','—'),node('td','—'));continue;}const balance=node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))),settings=node('small',tradeSettings(s,side));settings.className='pair-settings';balance.append(settings);tr.append(node('td',`${s.masters[slot]} / ${s.accounts[slot]}`),balance);}
       tr.append(node('td',`${(!s.left||!s.right)?'Single Pair · ':''}${s.ticker} · ${s.quantities[s.left]??'—'} / ${s.quantities[s.right]??'—'}`));
       const label=r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
       const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase().replaceAll(' ','-');status.append(phase);tr.append(status);
       for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';tr.append(td);}
       const completed=r.completedUtc||r.synced||r.cancelled;tr.append(node('td',completed?new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(completed)):''));
       const actions=node('td');actions.className='pair-actions';appendActions(actions,r);
-      tr.append(actions);body.append(tr);
+      tr.append(actions);const cells=Array.from(tr.children);for(const column of order){cells[column].dataset.column=column;tr.append(cells[column]);}body.append(tr);
     }
     if(!rows.length){const tr=node('tr'),td=node('td',isPlanning?'No waiting plans. Build a pair to add one.':'Start Queue in Planning to see pairing, completed, and canceled pairs here.');td.colSpan=12;tr.append(td);body.append(tr);}
     table.append(body);resizeColumns(table);
@@ -143,7 +158,7 @@
     }
     host.append(cards);const actions=node('div');actions.className='pair-actions';appendActions(actions,r);host.append(actions);
   }
-  async function poll(){if(busy||resizing)return;busy=true;try{data=await api('/api/queue');render();window.dispatchEvent(new CustomEvent('queue-updated',{detail:data}));}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
+  async function poll(){if(busy||resizing||dragging)return;busy=true;try{data=await api('/api/queue');render();window.dispatchEvent(new CustomEvent('queue-updated',{detail:data}));}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
   function accounts(side){const vm=fleet.find(v=>v.id===el('queue-'+side).value),select=el('queue-'+side+'-account');select.replaceChildren();for(const a of vm?.accounts||['Sim101']){const o=node('option',a);o.value=a;select.append(o);}select.value='Sim101';}
   el('queue-add').onclick=async()=>{
     try{fleet=(await api('/api/state')).fleet;for(const side of ['left','right']){const select=el('queue-'+side);select.replaceChildren();for(const vm of fleet){const o=node('option',vm.name);o.value=vm.id;select.append(o);}if(side==='right'&&fleet[1])select.value=fleet[1].id;accounts(side);}el('queue-form-status').textContent='';el('queue-dialog').showModal();}catch(e){el('queue-status').textContent=e.message;}

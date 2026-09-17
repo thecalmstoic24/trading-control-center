@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict');
 const S=require('../coordinator/static/suggestions.js');
-const row=(id,firm,values={})=>{const profit=values.CurrentProfit??0,today=values['Realized PnL']??0,current=values.CurrentBalance??(50000+profit);return {id:'rec'+id,fields:{id,firm,'Master Account':firm+'-TEST',CurrentBalance:current,balance:current,InitialBalance:current-today,'Realized PnL':today,stop:48000,'Trailing max drawdown':999,RealDrawdown:1500,CurrentProfit:0,ProfitTarget:3000,Consistency:0,CurrentPnL:0,...values}};};
+const row=(id,firm,values={})=>{const profit=values.CurrentProfit??0,today=values['Realized PnL']??0,current=values.CurrentBalance??(50000+profit);return {id:'rec'+id,fields:{id,firm,stage:'Evaluation','Master Account':firm+'-TEST',CurrentBalance:current,balance:current,InitialBalance:current-today,'Realized PnL':today,stop:48000,'Trailing max drawdown':999,RealDrawdown:1500,CurrentProfit:0,ProfitTarget:3000,Consistency:0,CurrentPnL:0,...values}};};
 const fn=(id,values={})=>row(id,'FN',{ProfitTarget:2500,Consistency:.4,largestProfitDay:900,...values});
 const a=S.account(fn('A'));assert.equal(a.allowance,95000);assert.equal(a.remaining,250000);
 assert.equal(S.account(fn('A',{'Realized PnL':-300})).allowance,125000);
@@ -75,3 +75,10 @@ const mffSide=suggestion.left.account===mff.fields.id?'left':'right';
 const over=JSON.parse(JSON.stringify(suggestion));over[mffSide==='left'?'profit':'rightProfit']='980';assert.match(S.validateDraft(over),/more than \$100/);
 const stale=JSON.parse(JSON.stringify(suggestion));stale[mffSide].metrics.InitialBalance=stale[mffSide].metrics.CurrentBalance;assert.match(S.validateDraft(stale),/Daily P&L mismatch/);
 console.log('PASS: consistency branches, losses, $50 buffer, prior largest day, caps, rounding, zero/tiny drawdown, firm isolation, priorities, random ties, exclusions, duplicate IDs and immutable input.');
+
+// Preview 34: only evaluation/challenge stages can produce or confirm suggestions.
+for(const stage of ['Evaluation','evaluation - phase 2','Two Step Challenge',{name:'Challenge'},['Evaluation']])assert.ok(S.account(row('STAGE','FFF',{stage})));
+for(const stage of ['',null,undefined,'Funded','Live',0])assert.throws(()=>S.account(row('STAGE','FFF',{stage})),/Stage/);
+const stageResult=S.suggest([row('A','FFF',{stage:'Funded'}),fn('B'),row('C','MFF',{stage:'Challenge'})],[],()=>.5);
+assert.equal(stageResult.pairs.length,1);assert.ok(stageResult.skipped.some(x=>x.account==='A'&&x.reason.includes('Stage')));
+const stageDraft=S.draft(stageResult.pairs[0],'d'.repeat(32));stageDraft.left.metrics.stage='Funded';assert.match(S.validateDraft(stageDraft),/Stage/);
