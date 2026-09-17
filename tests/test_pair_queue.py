@@ -196,7 +196,7 @@ class QueueTests(unittest.TestCase):
                  for i,(account,master) in enumerate([('MFF-A','MFF-TEST'),('FN-B','FN-TEST')])]
         self.store.records=lambda table: records if table==TABLE else original(table)
         draft=dict(key='d'*32,ticker='NQ',direction='buy',ratio='2:1',leftQuantity='2',rightQuantity='1',
-                   stopLoss='100',profit='200',left={'account':'MFF-A','vm':'old-wrong'},right={'account':'FN-B','vm':''})
+                   stopLoss='100',profit='200',left={'account':'MFF-A','master':'MFF-TEST','balance':50000,'vm':'old-wrong'},right={'account':'FN-B','master':'FN-TEST','balance':50000,'vm':''})
         if single: draft.pop('right' if single=='left' else 'left')
         return dict(self.body,localDraft=True,deferVM=True,draftKey=draft['key'],draft=draft,ticker='NQ',ratio='2:1')
 
@@ -248,9 +248,9 @@ class QueueTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'whole number'):self.queue.add(body)
         body['draft']['leftQuantity']='3'
         with self.assertRaisesRegex(ValueError,'ratio'):self.queue.add(body)
-        body['draft']['leftQuantity']='2';body['draft']['right']['account']='MISSING'
-        with self.assertRaisesRegex(ValueError,'exact Airtable'):self.queue.add(body)
-        body['draft']['right']['account']='MFF-A'
+        body['draft']['leftQuantity']='2';body['draft']['right']['account']='MFF-A'
+        with self.assertRaisesRegex(ValueError,'same real account'):self.queue.add(body)
+        body['draft']['right']['account']='MFF-B';body['draft']['right']['master']='MFF-OTHER'
         with self.assertRaisesRegex(ValueError,'Same fund'):self.queue.add(body)
         self.assertFalse(self.queue.rows)
 
@@ -263,6 +263,65 @@ class QueueTests(unittest.TestCase):
             self.assertIsNone(row['spec']['right' if side=='left' else 'left'])
             self.assertEqual(len(row['spec']['accounts']),1)
         self.assertFalse(self.fleet.pairs)
+
+    def test_fast_confirm_does_not_wait_for_scheduler_or_airtable(self):
+        body=self.deferred_body();self.agent.calls.clear()
+        def unavailable(*args): raise AssertionError('Confirmation must not call Airtable')
+        self.store.records=unavailable
+        self.queue.io.acquire()
+        try:
+            start=time.monotonic()
+            reply=self.queue.command('add',body)
+            self.assertLess(time.monotonic()-start,.5)
+        finally: self.queue.io.release()
+        self.assertEqual(reply['row']['status'],'Queued')
+        self.assertFalse(reply['row'].get('dispatched'))
+        self.assertEqual(self.queue.command('add',body)['id'],reply['id'])
+        self.assertEqual(len(self.queue.rows),1)
+        self.assertEqual(self.agent.calls,[])
+        self.assertEqual(json.loads(self.queue.path.read_text())['rows'][0]['key'],body['draftKey'])
+
+    def test_fast_confirm_failed_save_does_not_leave_executable_row(self):
+        body=self.deferred_body()
+        with patch.object(self.queue,'save',side_effect=OSError('Disk full')):
+            with self.assertRaisesRegex(OSError,'Disk full'):self.queue.add(body)
+        self.assertFalse(self.queue.rows)
+        self.assertFalse(self.fleet.pairs)
+
+    def test_fast_confirm_revalidates_airtable_before_reserving(self):
+        body=self.deferred_body();self.queue.add(body);self.match_deferred()
+        self.store.records=lambda table:[]
+        self.queue.command('start',{'keys':[body['draftKey']]});self.agent.calls.clear()
+        self.queue.tick()
+        self.assertEqual(self.queue.rows[0]['status'],'Waiting')
+        self.assertIn('exact Airtable match',self.queue.rows[0]['message'])
+        self.assertFalse(self.fleet.pairs)
+        self.assertEqual(self.agent.calls,[])
+
+    def test_start_snapshot_is_idempotent_and_excludes_new_plans(self):
+        first=self.deferred_body();self.queue.add(first)
+        second=copy.deepcopy(first);second['draftKey']='e'*32;second['draft']['key']='e'*32;self.queue.add(second)
+        reply=self.queue.command('start',{'keys':[first['draftKey']]})
+        self.assertEqual(reply['startedCount'],1)
+        self.assertTrue(self.queue.rows[0]['dispatched'])
+        self.assertFalse(self.queue.rows[1].get('dispatched'))
+        self.assertTrue(self.queue.rows[1]['localDraft'])
+        identity=self.queue.rows[0]['id'];self.queue.command('pause',{})
+        again=self.queue.command('start',{'keys':[first['draftKey']]})
+        self.assertEqual(again['startedCount'],0)
+        self.assertEqual(self.queue.rows[0]['id'],identity)
+        self.assertFalse(self.queue.running)
+
+    def test_start_lookup_and_disk_failures_leave_batch_unstarted(self):
+        body=self.deferred_body();self.queue.add(body);before=copy.deepcopy(self.queue.rows)
+        def unavailable(*args):raise ValueError('Airtable offline')
+        with patch.object(self.store,'records',side_effect=unavailable):
+            with self.assertRaisesRegex(ValueError,'offline'):self.queue.command('start',{'keys':[body['draftKey']]})
+        self.assertEqual(self.queue.rows,before)
+        with patch.object(self.queue,'save',side_effect=OSError('Disk full')):
+            with self.assertRaisesRegex(OSError,'Disk full'):self.queue.command('start',{'keys':[body['draftKey']]})
+        self.assertEqual(self.queue.rows,before)
+        self.assertFalse(self.queue.running)
 
     def test_contract_month_pins_confirmed_pair_and_survives_reload(self):
         import contracts

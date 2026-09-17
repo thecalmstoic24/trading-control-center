@@ -200,7 +200,9 @@ class PairQueue:
             self.io.release()
 
     def add(self, body):
-        with self.io:
+        quick = body.get('localDraft') is True and body.get('deferVM') is True
+        if quick and not body.get('draftKey'): raise ValueError('Draft identity is required.')
+        with (self.lock if quick else self.io):
             draft_key = body.get('draftKey')
             if draft_key is not None:
                 if not isinstance(draft_key,str) or not re.fullmatch('[a-f0-9]{32}',draft_key):
@@ -219,7 +221,11 @@ class PairQueue:
                            message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
                 if local: row.update(id='DRAFT-'+row['key'],localDraft=True,dirty=False,draft=copy.deepcopy(body.get('draft')))
                 if local and isinstance(row.get('draft'),dict): row['draft']['ticker']=spec['ticker']
-                self.rows.append(row); self.save()
+                self.rows.append(row)
+                try: self.save()
+                except Exception:
+                    self.rows.remove(row)
+                    raise
             try:
                 if not local: self.sync(row)
             except Exception as exc:
@@ -264,7 +270,19 @@ class PairQueue:
                 raise ValueError('Enter positive Currency stop loss and profit target amounts, up to two decimals.')
         pair_amounts(body)
         accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}; metrics = {}
-        source = self.store.records(TABLE)
+        if defer_vm and len(members)==2 and body['accounts'][left]==body['accounts'][right]:
+            raise ValueError('The same real account cannot be both sides of one pair.')
+        if defer_vm:
+            # The draft is a local plan, never authority to trade. Resolve against
+            # current Airtable data in resolve_vms before any reservation or entry.
+            source=[]
+            for side in members:
+                item=draft[side]
+                fields=dict(item.get('metrics') or {})
+                fields.update(id=item['account'],**{'Master Account':str(item.get('master','')),'CurrentBalance':item.get('balance')})
+                source.append({'id':str(item.get('record','')),'fields':fields})
+        else:
+            source = self.store.records(TABLE)
         for slot in members:
             a = body.get('accounts', {}).get(slot); q = body.get('quantities', {}).get(slot)
             if a not in available[slot]: raise ValueError('Account is not in this VM’s discovered NinjaTrader/Airtable list. Refresh accounts first.')
@@ -274,7 +292,7 @@ class PairQueue:
             matches = [r for r in source if r.get('fields', {}).get('id') == a]
             if len(matches) != 1: raise ValueError('Account must have one exact Airtable match.')
             masters[slot] = str(matches[0]['fields'].get('Master Account', '')); records[slot] = matches[0]['id']
-            balances[slot] = money(matches[0]['fields'].get('CurrentBalance'))
+            balances[slot] = matches[0]['fields'].get('CurrentBalance') if defer_vm else money(matches[0]['fields'].get('CurrentBalance'))
             metrics[slot]={k:matches[0]['fields'].get(k) for k in ('RealDrawdown','CurrentBalance','Realized PnL','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
             metrics[slot]['ScraperNote']=next((str(v)[:500] for k,v in matches[0]['fields'].items() if re.sub('[^a-z]','',k.lower())=='scrapernote' and v is not None),'')
         if len(members)==2 and all(accounts[s]!='Sim101' for s in members):
@@ -332,7 +350,11 @@ class PairQueue:
         return True
 
     def command(self, action, body):
-        if action == 'add': return {'id': self.add(body)}
+        if action == 'add':
+            identity=self.add(body)
+            with self.lock:
+                row=next((r for r in self.rows+self.history if r['id']==identity),None)
+                return {'id':identity,'row':copy.deepcopy(row)}
         if action == 'duplicate':
             with self.lock:
                 source=next((r for r in self.rows+self.history if r['id']==body.get('id') and r['status'] in {'Complete','Cancelled'}),None)
@@ -372,19 +394,33 @@ class PairQueue:
                 self.rows.remove(row);self.save()
                 return {'draft':row}
             if action in ('start','resume'):
-                # Safe errored reservations are released by tick; uncertain entries stay protected.
-                for row in self.rows:
-                    if action=='start' and row['status'] in PENDING:
-                        if row.get('localDraft'):
-                            remote=self.store.records(PAIR_TABLE)
-                            maximum=max([int(x['fields']['Pair ID'][5:]) for x in remote if re.fullmatch(r'PAIR-\d+',x.get('fields',{}).get('Pair ID',''))] or [0])
-                            number=max(self.next_id,maximum+1);self.next_id=number+1
-                            row.update(id=f'PAIR-{number:04d}',localDraft=False,dirty=True)
-                            self.save()
-                        if not row.get('dispatched'): started_count+=1
-                        row['dispatched']=True
-                        row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']))
+                keys=body.get('keys')
+                if keys is not None and (not isinstance(keys,list) or not all(isinstance(k,str) for k in keys)):
+                    raise ValueError('Invalid start batch.')
+                candidates=[row for row in self.rows if action=='start' and row['status'] in PENDING
+                            and not row.get('dispatched') and (keys is None or row['key'] in keys)]
+                if action=='start' and keys is not None and not candidates:
+                    return {'ok':True,'startedCount':0,'rows':[]}
+                before_start=copy.deepcopy(candidates);before_next=self.next_id;before_running=self.running;before_message=self.message
+                # Read once, before altering any row, so a failed lookup leaves the batch intact.
+                if any(row.get('localDraft') for row in candidates):
+                    remote=self.store.records(PAIR_TABLE)
+                    maximum=max([int(x['fields']['Pair ID'][5:]) for x in remote if re.fullmatch(r'PAIR-\d+',x.get('fields',{}).get('Pair ID',''))] or [0])
+                    self.next_id=max(self.next_id,maximum+1)
+                for row in candidates:
+                    if row.get('localDraft'):
+                        row.update(id=f'PAIR-{self.next_id:04d}',localDraft=False,dirty=True)
+                        self.next_id+=1
+                    started_count+=1
+                    row['dispatched']=True
+                    row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']))
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
+                try: self.save()
+                except Exception:
+                    for row,previous in zip(candidates,before_start): row.clear();row.update(previous)
+                    self.next_id=before_next;self.running=before_running;self.message=before_message
+                    raise
+                return {'ok':True,'startedCount':started_count,'rows':copy.deepcopy(candidates)}
             elif action == 'start-one':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or row['status'] not in PENDING: raise ValueError('Select a waiting pair.')

@@ -19,7 +19,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('.vm-list-row').waitFor();
- assert.ok((await page.locator('header').boundingBox()).height<=50);
+ assert.equal(await page.locator('header').count(),0);
  assert.ok((await page.locator('#tab-vms').boundingBox()).y<230);
  assert.ok((await page.locator('.vm-list-row').boundingBox()).height<90);
  assert.equal(await page.locator('.vm-row-secondary p').textContent(),'Accounts refreshed. 1 matched account.');

@@ -24,7 +24,7 @@ function changed(source) {
   alertText('Settings changed. Prepare & Verify again.');
 }
 fields.forEach(id=>$(id).addEventListener('input',()=>changed(id)));
-$('connections').onclick=()=>$('connect-dialog').showModal();
+
 $('connection-code').addEventListener('input',()=>{
   registeredId=''; $('connection-result').textContent='Click Save & check connection to register this code.';
 });
@@ -59,7 +59,7 @@ $('close-all').onclick=async()=>{
 };
 function renderRegistry(s) {
   $('pairs-count').textContent=s.pairs.length+' / '+(s.limits?.pairs||20);
-  $('connections').disabled=false;
+  
   const imported=s.fleet.find(a=>a.id===registeredId);
   if(imported)$('connection-result').textContent=imported.fresh?imported.name+' connected. Fresh position: '+imported.position+'.':imported.name+' saved, but no fresh status yet. '+(imported.message||'Check that the agent is running and both computers are connected to the same Tailscale network.');
   $('pair-list').replaceChildren();
@@ -78,7 +78,7 @@ function renderRegistry(s) {
   $('close-all').disabled=s.pairs.length===0;
 }
 function render(s){
-  if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent='CONTROL CENTER · '+label;}
+  if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent='Pair Execution · V16 · '+label;}
   if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));
   fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';
   if(!s.pairs.some(p=>p.id===selectedPairId)){

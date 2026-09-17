@@ -91,10 +91,13 @@
   function updateMetrics(host,item){
     const f=item?.metrics||{},fmt=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
     host.replaceChildren();
-    const line=make('p');line.className='draft-balance';line.append(make('span','Current Balance: '+fmt(item?.balance)+' · '));
-    const pnl=f['Realized PnL'],value=make('span','Realized P&L: '+fmt(pnl));value.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(value);host.append(line);
-    if(item?.metrics){const dd=typeof f.RealDrawdown==='number'&&Number.isFinite(f.RealDrawdown)?f.RealDrawdown:null;
-      for(const [label,value] of [['Drawdown',fmt(dd)],['Largest profit day',fmt(f.largestProfitDay)],['Trading days',f.tradingDays??'—']]){const metric=make('div',label+': '+value);metric.className='pair-secondary-metrics';host.append(metric);}
+    const values=make('div');values.className='draft-values';
+    values.append(make('div','Balance: '+fmt(item?.balance)));
+    const pnl=f['Realized PnL'],value=make('div','Realized: '+fmt(pnl));value.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');values.append(value);
+    const dd=typeof f.RealDrawdown==='number'&&Number.isFinite(f.RealDrawdown)?f.RealDrawdown:null;
+    values.append(make('div','DD: '+fmt(dd)));host.append(values);
+    if(item?.metrics){
+      const stats=make('div');stats.className='draft-stats';stats.append(make('div','Best day: '+fmt(f.largestProfitDay)),make('div','Days: '+(f.tradingDays??'—')));host.append(stats);
       const note=String(Object.entries(f).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').trim();if(note){const n=make('div',note);n.className='pair-scraper-note';host.append(n);}
     }
   }
@@ -103,13 +106,9 @@
     el('draft-remove-all').disabled=addingAll||inFlight.size>0||!drafts.length;
     el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Q';
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
-    drafts.forEach(d=>{
+    drafts.filter(d=>!inFlight.has(d.key)).forEach(d=>{
       const card=make('form');card.className='draft-card';card.dataset.key=d.key;
       const disabled=make('fieldset');disabled.disabled=addingAll||inFlight.has(d.key);card.append(disabled);
-      if(d.suggestion?.strategy===PairSuggestions.STRATEGY){
-        const label=make('p','Beta suggestion · '+d.suggestion.reason);label.className='suggestion-reason';disabled.append(label);
-        const note=make('small','Calculated from the Planning snapshot. Review any edits before confirming.');disabled.append(note);
-      }
       const accountsGrid=make('div');accountsGrid.className='draft-pair-grid';disabled.append(accountsGrid);
       for(const side of ['left','right']){
         if(side==='right'){
@@ -134,10 +133,6 @@
         };
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
-        if(item&&d.suggestion){
-          const company=make('small','Firm: '+(PairSuggestions.firm(item.metrics)||'Missing'));company.className='suggestion-firm';block.append(company);
-          const dd=make('small','RealDrawdown: '+(typeof item.metrics?.RealDrawdown==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(item.metrics.RealDrawdown):'—'));dd.className='suggestion-drawdown';block.append(dd);
-        }
         const metrics=make('div');metrics.className='draft-metrics';updateMetrics(metrics,item);block.append(metrics);
         const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
@@ -151,12 +146,12 @@
           block.onclick=e=>{if(e.target.closest('button'))return;fillSlot(d,side);};
         }
         const amounts=make('div');amounts.className='draft-amounts';
-        input(amounts,d,side+'Quantity','Quantity','number');
-        input(amounts,d,side==='left'?'profit':'rightProfit','Profit','number');
-        input(amounts,d,side==='left'?'stopLoss':'rightStopLoss','Stop loss','number');
+        input(amounts,d,side+'Quantity','Qty','number');
+        input(amounts,d,side==='left'?'profit':'rightProfit','P ($)','number');
+        input(amounts,d,side==='left'?'stopLoss':'rightStopLoss','L ($)','number');
         if(side==='left')accountsGrid.append(block,amounts);else accountsGrid.append(amounts,block);
       }
-      const footer=make('div');footer.className='draft-footer';disabled.append(footer);
+      const footer=make('div');footer.className='draft-footer';accountsGrid.querySelector('.draft-center').append(footer);
       const instrumentLabel=make('label','Instrument'),instrument=make('select');instrument.dataset.field='ticker';
       const companion=d.ticker.replace(/^(?:MNQ|NQ)(?= |$)/,root=>root==='NQ'?'MNQ':'NQ');
       for(const value of [...new Set(['NQ','MNQ',d.ticker,companion])]){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
@@ -177,12 +172,21 @@
     const issue=problem(d);if(issue){d.error=issue;save();render();return false;}
     if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
     const left=d.left?.vm,right=d.right?.vm;
-    inFlight.add(d.key);render();
+    inFlight.add(d.key);delete d.error;save();render();
+    window.dispatchEvent(new CustomEvent('queue-saving',{detail:compactPairDraft(d)}));
     try{
-      await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+      const result=await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+      window.dispatchEvent(new CustomEvent('queue-saved',{detail:{key:d.key,row:result.row}}));
       drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
       window.dispatchEvent(new Event('queue-refresh'));return true;
-    }catch(err){d.error=err.message;save();return false;}finally{inFlight.delete(d.key);render();usage();}
+    }catch(err){
+      // A lost response can follow a successful save. Reconcile using the same key.
+      try{const latest=await api('/api/queue');const row=[...(latest.rows||[]),...(latest.history||[])].find(r=>r.key===d.key);
+        if(row){window.dispatchEvent(new CustomEvent('queue-saved',{detail:{key:d.key,row}}));drafts=drafts.filter(x=>x.key!==d.key);save();return true;}
+      }catch(_){}
+      window.dispatchEvent(new CustomEvent('queue-save-failed',{detail:{key:d.key}}));
+      d.error=err.message;if(!drafts.some(x=>x.key===d.key))drafts.push(d);save();return false;
+    }finally{inFlight.delete(d.key);render();usage();}
   }
   el('draft-remove-all').onclick=()=>{
     if(addingAll||inFlight.size||!drafts.length)return;
@@ -212,10 +216,7 @@
       const cell=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .draft-metrics`);
       if(cell){
         updateMetrics(cell,item);
-        if(d.suggestion){const block=cell.closest('.draft-account');block.querySelector('.suggestion-firm').textContent='Firm: '+(PairSuggestions.firm(item.metrics)||'Missing');
-          block.querySelector('.suggestion-drawdown').textContent='RealDrawdown: '+(typeof item.metrics?.RealDrawdown==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(item.metrics.RealDrawdown):'—');
-          validateCard(cell.closest('form'),d);
-        }
+        if(d.suggestion)validateCard(cell.closest('form'),d);
       }
     }
     save();

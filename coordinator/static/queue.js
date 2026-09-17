@@ -3,11 +3,11 @@
   const el=id=>document.getElementById(id), node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   let fleet=[],data={rows:[]},busy=false,resizing=false,dragging=false,detailId='';const duplicateKeys=new Map();
   let sortColumn=10,sortDirection=-1;
-  const selected=new Set();let mutating=false,toastTimer;
+  const selected=new Set(),saving=new Map(),acknowledged=new Map(),starting=new Set();let mutating=false,toastTimer;
   function toast(count){const box=el('queue-toast');clearTimeout(toastTimer);box.textContent=count?`${count} ${count===1?'pair':'pairs'} started in the queue successfully.`:'No new pairs to start.';box.hidden=false;toastTimer=setTimeout(()=>{box.hidden=true;},5000);}
   const centralDay=value=>{const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);return ['year','month','day'].map(t=>parts.find(p=>p.type===t).value).join('-');};
   function tradingRows(){
-    const rows=[...data.rows.filter(r=>!planned(r)),...(data.history||[])],select=el('trading-date'),value=select.value||'today';
+    const rows=[...data.rows.filter(r=>!planned(r)||starting.has(r.key)),...(data.history||[])],select=el('trading-date'),value=select.value||'today';
     const dateOf=r=>centralDay(r.completedUtc||r.synced||r.cancelled||'');
     const dates=[...new Set(rows.map(dateOf).filter(Boolean))].sort().reverse();select.replaceChildren();
     for(const [v,label] of [['today','Today (Central Time)'],['all','All dates'],...dates.map(d=>[d,d])]){const option=node('option',label);option.value=v;select.append(option);}select.value=value;if(!select.value)select.value='today';
@@ -15,10 +15,10 @@
     return rows.filter(r=>!['Complete','Cancelled'].includes(r.status)||select.value==='all'||dateOf(r)===day);
   }
   const pending=r=>['Queued','Waiting'].includes(r.status);
-  const dollars=v=>v===undefined?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
+  const dollars=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
   async function action(name,body={}){
     if(mutating)return;mutating=true;render();
-    try{const result=await api('/api/queue/'+name,body);if(name==='start')toast(result.startedCount||0);await poll();}
+    try{const result=await api('/api/queue/'+name,body);if(['cancel','remove-selected','resolve'].includes(name)){const ids=body.ids||[body.id];for(const row of data.rows)if(ids.includes(row.id))acknowledged.delete(row.key);}if(name==='start')toast(result.startedCount||0);await poll();}
     catch(e){data.message=e.message;el('queue-status').textContent=el('trading-queue-status').textContent=e.message;}
     finally{mutating=false;render();}
   }
@@ -26,9 +26,9 @@
   const planned=r=>!r.dispatched&&!r.duplicateOf&&(pending(r)||r.status==='Removing');
   function updateButtons(){
     el('trading-refresh').disabled=mutating;
-    const anyPlans=data.rows.some(planned);
+    const anyPlans=data.rows.some(r=>planned(r)&&!starting.has(r.key));
     el('queue-start').disabled=mutating||!anyPlans;
-    el('queue-pause').disabled=el('trading-pause').disabled=mutating||!data.running;
+    el('trading-pause').disabled=mutating||!data.running;
     el('trading-resume').disabled=mutating||data.running||!data.rows.some(r=>r.dispatched&&!['Complete','Cancelled'].includes(r.status));
     for(const [id,isPlanning] of [['queue-remove-selected',true],['trading-remove-selected',false]])
       el(id).disabled=mutating||!data.rows.some(r=>planned(r)===isPlanning&&removable(r)&&selected.has(r.id));
@@ -36,13 +36,14 @@
   function render(){
     el('queue-status').textContent=el('trading-queue-status').textContent=(data.running?'Running · ':'Paused · ')+data.message;
     const valid=new Set(data.rows.filter(removable).map(r=>r.id));for(const id of selected)if(!valid.has(id))selected.delete(id);
-    renderTable('queue-table',data.rows.filter(planned),true);
+    renderTable('queue-table',[...data.rows.filter(r=>planned(r)&&!starting.has(r.key)),...saving.values()].filter((r,i,rs)=>rs.findIndex(x=>(x.key||x.id)===(r.key||r.id))===i),true);
+    el('trading-retry').hidden=!data.rows.some(r=>!r.localDraft&&r.dirty&&(r.closed||r.released22||r.afterId||['Complete','Cancelled'].includes(r.status)));
     renderTable('trading-queue-table',tradingRows(),false);
     const activity=el('queue-activity');activity.replaceChildren();
     for(const r of [...data.rows,...(data.history||[])].slice().reverse()){
       if(!r.message)continue;const item=node('div');item.className='event';item.append(node('span',r.id+' · '+r.status+' · '+r.message));activity.append(item);
     }
-    renderDetail();updateButtons();
+    updateButtons();
   }
   function resizeColumns(table){
     let widths={};try{widths=JSON.parse(localStorage.getItem('pair-widths-'+table.id))||{};}catch(_){}
@@ -84,7 +85,7 @@
   function renderTable(id,rows,isPlanning){
     const table=el(id);table.replaceChildren();const head=node('thead'),hr=node('tr');
     if(!isPlanning)rows=sortedRows(rows);
-    const order=isPlanning?columnLabels.map((_,i)=>i):columnOrder(id);
+    const order=isPlanning?[0,1,2,3,4,5,6,7,11]:columnOrder(id);
     for(const column of order){
       const label=columnLabels[column],th=node('th');th.dataset.column=column;
       if(!isPlanning){th.draggable=true;th.title='Drag to rearrange column';
@@ -102,24 +103,31 @@
     }
     head.append(hr);table.append(head);const body=node('tbody');
     for(const r of rows){
-      const tr=node('tr'),s=r.spec,selection=node('td');tr.dataset.pair=r.id;if(!isPlanning){tr.classList.add('pair-select-row');tr.onclick=e=>{if(e.target.closest('button,input'))return;detailId=r.id;if(r.pairId)selectView(r.pairId);renderDetail();};}
+      const tr=node('tr'),s=r.spec,selection=node('td');tr.dataset.pair=r.id;tr.dataset.key=r.key||'';
       if(removable(r)){const box=node('input');box.type='checkbox';box.checked=selected.has(r.id);box.disabled=mutating;box.setAttribute('aria-label','Select '+r.id);box.onchange=()=>{box.checked?selected.add(r.id):selected.delete(r.id);updateButtons();};selection.append(box);}
-      tr.append(selection,node('td',r.localDraft?'Draft':r.id));
-      for(const side of ['left','right']){const slot=s[side];if(!slot){tr.append(node('td','—'),node('td','—'));continue;}const balance=node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))),settings=node('small',tradeSettings(s,side));settings.className='pair-settings';balance.append(settings);tr.append(node('td',`${s.masters[slot]} / ${s.accounts[slot]}`),balance);}
-      tr.append(node('td',`${(!s.left||!s.right)?'Single Pair · ':''}${s.ticker} · ${s.quantities[s.left]??'—'} / ${s.quantities[s.right]??'—'}`));
-      const label=r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
+      tr.append(selection,node('td',r.localDraft?'Draft':r.id.replace(/^PAIR-/, '')));
+      for(const side of ['left','right']){const slot=s[side];if(!slot){tr.append(node('td','—'),node('td','—'));continue;}
+        const balance=node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))),settings=node('small');settings.className='pair-settings';
+        const [profit,loss]=tradeSettings(s,side).split(' L ');const p=node('span',profit),l=node('span','L '+loss);p.className='queue-win';l.className='queue-loss';settings.append(p,document.createTextNode(' '),l);balance.append(settings);
+        const account=node('td');account.append(node('div',s.masters[slot]||s.names?.[slot]||'—'));const number=node('small',s.accounts[slot]);number.className='pair-account-number';account.append(number);tr.append(account,balance);
+      }
+      tr.append(node('td',`${s.ticker.split(' ')[0]} ${s.quantities[s.left]??'—'}/${s.quantities[s.right]??'—'}`));
+      const label=starting.has(r.key)?'Starting…':r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
       const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase().replaceAll(' ','-');status.append(phase);tr.append(status);
       for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';tr.append(td);}
-      const completed=r.completedUtc||r.synced||r.cancelled;tr.append(node('td',completed?new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(completed)):''));
+      const completed=r.completedUtc||r.synced||r.cancelled,completedCell=node('td');
+      if(completed){const date=new Date(completed);if(Number.isFinite(date.getTime())){completedCell.append(node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)),node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit',second:'2-digit'}).format(date)));}}
+      tr.append(completedCell);
       const actions=node('td');actions.className='pair-actions';appendActions(actions,r);
-      tr.append(actions);const cells=Array.from(tr.children);for(const column of order){cells[column].dataset.column=column;tr.append(cells[column]);}body.append(tr);
+      tr.append(actions);const cells=Array.from(tr.children);tr.replaceChildren();for(const column of order){cells[column].dataset.column=column;tr.append(cells[column]);}body.append(tr);
     }
-    if(!rows.length){const tr=node('tr'),td=node('td',isPlanning?'No waiting plans. Build a pair to add one.':'Start Queue in Planning to see pairing, completed, and canceled pairs here.');td.colSpan=12;tr.append(td);body.append(tr);}
+    if(!rows.length){const tr=node('tr'),td=node('td',isPlanning?'No waiting plans. Build a pair to add one.':'Start Queue in Planning to see pairing, completed, and canceled pairs here.');td.colSpan=order.length;tr.append(td);body.append(tr);}
     table.append(body);resizeColumns(table);
   }
   function appendActions(target,r){
+    if(r.status==='Saving…'||starting.has(r.key))return;
     const add=(label,name,extra={},blue=false)=>{const b=node('button',label);b.className=blue?'duplicate-button':'quiet';b.disabled=mutating;b.onclick=()=>action(name,{id:r.id,...extra});target.append(b);};
-    if(r.localDraft&&r.draft){const b=node('button','Edit');b.className='quiet';b.disabled=mutating;b.onclick=async()=>{try{const result=await api('/api/queue/edit-draft',{id:r.id});window.dispatchEvent(new CustomEvent('edit-local-draft',{detail:result.draft.draft}));await poll();}catch(e){el('queue-status').textContent=e.message;}};target.append(b);}
+    if(r.localDraft&&r.draft){const b=node('button','Edit');b.className='quiet';b.disabled=mutating;b.onclick=async()=>{try{const result=await api('/api/queue/edit-draft',{id:r.id});acknowledged.delete(r.key);window.dispatchEvent(new CustomEvent('edit-local-draft',{detail:result.draft.draft}));await poll();}catch(e){el('queue-status').textContent=e.message;}};target.append(b);}
     if(r.status==='Awaiting results'||(r.status==='Error'&&r.closed))add('Skip Results','skip-results');
     if(pending(r)){if(r.duplicateOf&&!r.dispatched)add('Start','start-one');add('Cancel','cancel');}
     if(r.status==='Removing')add('Cancel','cancel');
@@ -134,31 +142,12 @@
     }
     if(['Complete','Cancelled'].includes(r.status)){
       const b=node('button','Duplicate');b.className='duplicate-button';b.disabled=mutating;
-      b.onclick=async()=>{if(!duplicateKeys.has(r.id))duplicateKeys.set(r.id,crypto.randomUUID().replaceAll('-',''));const key=duplicateKeys.get(r.id);await action('duplicate',{id:r.id,draftKey:key});if(data.rows.some(x=>x.key===key)){detailId=data.rows.find(x=>x.key===key).id;duplicateKeys.delete(r.id);renderDetail();}};target.append(b);
+      b.onclick=async()=>{if(!duplicateKeys.has(r.id))duplicateKeys.set(r.id,crypto.randomUUID().replaceAll('-',''));const key=duplicateKeys.get(r.id);await action('duplicate',{id:r.id,draftKey:key});if(data.rows.some(x=>x.key===key)){detailId=data.rows.find(x=>x.key===key).id;duplicateKeys.delete(r.id);}};target.append(b);
     }
   }
-  function renderDetail(){
-    const host=el('compact-pair'),rows=tradingRows();host.replaceChildren();
-    const r=rows.find(r=>r.id===detailId)||rows[rows.length-1];host.hidden=!r;if(!r)return;
-    const s=r.spec,label=r.status==='Awaiting results'?'Trade closed · Syncing results':r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status;
-    host.append(node('h3',r.id+' · '+s.ticker+' · '+label));
-    const cards=node('div');cards.className='compact-cards';
-    const ratio=(s.ratio||'1:1').split(':').map(Number),factor=ratio[1]/ratio[0];
-    for(const side of ['left','right']){
-      const slot=s[side];if(!slot)continue;const card=node('article');card.className='compact-account';
-      const direction=(side==='left')===(s.direction==='buy')?'Buy':'Sell';
-      card.append(node('strong',(s.masters[slot]||s.names[slot])+' · '+direction),node('div',s.accounts[slot]));
-      const f=s.metrics?.[slot]||{},dd=typeof f.RealDrawdown==='number'&&Number.isFinite(f.RealDrawdown)?f.RealDrawdown:undefined;const current=r.after?.[slot]||r.before?.[slot]||{},pnl=current.pnl??f['Realized PnL'];
-      const line=node('div','Current Balance: '+dollars(current.balance??s.balances?.[slot])+' · '),realized=node('span','Realized P&L: '+dollars(pnl??undefined));realized.className='realized-pnl '+(pnl>0?'queue-win':pnl<0?'queue-loss':'');line.append(realized);card.append(line);
-      const metrics=node('div','Drawdown: '+dollars(dd)+' · Largest profit day: '+dollars(f.largestProfitDay??undefined)+' · Trading days: '+(f.tradingDays??'—'));metrics.className='pair-secondary-metrics';card.append(metrics);
-      const note=String(Object.entries(f).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').trim();if(note){const n=node('div',note);n.className='pair-scraper-note';card.append(n);}
-      card.append(node('div','Quantity: '+s.quantities[slot]+' · Ratio: '+(s.ratio||'1:1')));
-      card.append(node('div','Profit: '+dollars(side==='left'?s.profit:s.stopLoss*factor)+' · Stop: '+dollars(side==='left'?s.stopLoss:s.profit*factor)));
-      const result=node('div','Result: '+dollars(r.results?.[slot]));result.className=r.results?.[slot]>0?'queue-win':r.results?.[slot]<0?'queue-loss':'';card.append(result);cards.append(card);
-    }
-    host.append(cards);const actions=node('div');actions.className='pair-actions';appendActions(actions,r);host.append(actions);
-  }
-  async function poll(){if(busy||resizing||dragging)return;busy=true;try{data=await api('/api/queue');render();window.dispatchEvent(new CustomEvent('queue-updated',{detail:data}));}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
+  async function poll(){if(busy||resizing||dragging)return;busy=true;try{const fresh=await api('/api/queue');
+      for(const [key,row] of acknowledged){const seen=[...(fresh.rows||[]),...(fresh.history||[])].find(r=>r.key===key);if(seen&&(!row.dispatched||seen.dispatched))acknowledged.delete(key);else{fresh.rows=fresh.rows.filter(r=>r.key!==key);fresh.rows.push(row);}}
+      data=fresh;render();window.dispatchEvent(new CustomEvent('queue-updated',{detail:data}));}catch(e){el('queue-status').textContent=e.message;}finally{busy=false;}}
   function accounts(side){const vm=fleet.find(v=>v.id===el('queue-'+side).value),select=el('queue-'+side+'-account');select.replaceChildren();for(const a of vm?.accounts||['Sim101']){const o=node('option',a);o.value=a;select.append(o);}select.value='Sim101';}
   el('queue-add').onclick=async()=>{
     try{fleet=(await api('/api/state')).fleet;for(const side of ['left','right']){const select=el('queue-'+side);select.replaceChildren();for(const vm of fleet){const o=node('option',vm.name);o.value=vm.id;select.append(o);}if(side==='right'&&fleet[1])select.value=fleet[1].id;accounts(side);}el('queue-form-status').textContent='';el('queue-dialog').showModal();}catch(e){el('queue-status').textContent=e.message;}
@@ -178,6 +167,26 @@
   el('trading-date').onchange=()=>render();
   el('trading-refresh').onclick=()=>action('refresh');
   el('trading-resume').onclick=()=>action('resume');el('trading-pause').onclick=()=>action('pause');el('trading-retry').onclick=()=>action('retry');
-  el('queue-start').onclick=()=>action('start');el('queue-pause').onclick=()=>action('pause');el('queue-retry').onclick=()=>action('retry');
+  el('queue-start').onclick=async()=>{
+    if(mutating)return;
+    const keys=data.rows.filter(r=>planned(r)&&!starting.has(r.key)).map(r=>r.key);if(!keys.length)return;
+    keys.forEach(k=>starting.add(k));mutating=true;render();
+    try{const result=await api('/api/queue/start',{keys});
+      for(const row of result.rows||[]){acknowledged.set(row.key,row);data.rows=data.rows.filter(r=>r.key!==row.key);data.rows.push(row);}
+      toast(result.startedCount||0);await poll();}
+    catch(e){await poll();data.message=e.message;}
+    finally{keys.forEach(k=>starting.delete(k));mutating=false;render();}
+  };
+  window.addEventListener('queue-saving',e=>{
+    const d=e.detail,s={left:d.left?'left':null,right:d.right?'right':null,ticker:d.ticker,ratio:d.ratio,profit:+d.profit,stopLoss:+d.stopLoss,accounts:{},masters:{},balances:{},quantities:{}};
+    for(const side of ['left','right'])if(d[side]){s.accounts[side]=d[side].account;s.masters[side]=d[side].master;s.balances[side]=d[side].balance;s.quantities[side]=+d[side+'Quantity'];}
+    saving.set(d.key,{id:'DRAFT-'+d.key,key:d.key,localDraft:true,status:'Saving…',spec:s});render();
+  });
+  window.addEventListener('queue-saved',e=>{
+    const {key,row}=e.detail;saving.delete(key);
+    if(row){acknowledged.set(key,row);data.rows=data.rows.filter(r=>r.key!==key);data.rows.push(row);}
+    render();
+  });
+  window.addEventListener('queue-save-failed',e=>{saving.delete(e.detail.key);render();});
   window.addEventListener('queue-refresh',poll);setInterval(poll,3000);poll();
 })();

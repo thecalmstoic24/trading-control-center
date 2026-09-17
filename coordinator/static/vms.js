@@ -52,12 +52,18 @@
      syncButton.disabled=syncing||!vm.online||!vm.manualSync;syncButton.setAttribute('aria-label','Sync Airtable for '+vm.name);
      syncButton.title=!vm.manualSync?'Update this VM agent to enable remote sync.':syncing?'Sync is running or queued; follow VM Activity.':'Run Sync Airtable Now on this VM. Waits if trading automation is busy.';
      syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);
-     const remove=node('button',removing.has(vm.id)?'Removing…':'Remove VM');remove.className='quiet';remove.setAttribute('aria-label','Remove VM '+vm.name);remove.disabled=removing.has(vm.id);remove.onclick=()=>removeVM(vm);actions.append(remove);line.append(actions);row.append(line);
+     line.append(actions);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
      const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);const secondary=node('div');secondary.className='vm-row-secondary';secondary.append(details);
      secondary.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));row.append(secondary);list.append(row);
    }
    list.scrollTop=scroll;
+   const select=el('vm-remove-select'),previous=select.value;select.replaceChildren();
+   const blank=node('option','Select VM');blank.value='';select.append(blank);
+   for(const vm of fleet.slice().sort((a,b)=>a.name.localeCompare(b.name))){const option=node('option',vm.name);option.value=vm.id;select.append(option);}
+   select.value=fleet.some(v=>v.id===previous)?previous:'';
+   el('vm-remove-action').disabled=!select.value||removing.has(select.value);
+   el('vm-remove-action').textContent=removing.has(select.value)?'Removing…':'Remove';
    el('vms-refresh-selected').disabled=!fleet.some(vm=>selected.has(vm.id));
    if(!fleet.length)list.append(node('p','No registered VMs yet. Choose Register VM to add one.'));
  }
@@ -66,6 +72,8 @@
  el('vms-sort').onchange=()=>{sorting.field=el('vms-sort').value;saveSort();};
  el('vms-sort-direction').onclick=()=>{sorting.direction*=-1;el('vms-sort-direction').textContent=sorting.direction===1?'Ascending':'Descending';saveSort();};
  el('vms-refresh-selected').onclick=async()=>{const ids=fleet.filter(vm=>selected.has(vm.id)).map(vm=>vm.id);for(const id of ids)await refresh(id);};
+ el('vm-remove-select').onchange=()=>{el('vm-remove-action').disabled=!el('vm-remove-select').value||removing.has(el('vm-remove-select').value);};
+ el('vm-remove-action').onclick=()=>{const vm=fleet.find(v=>v.id===el('vm-remove-select').value);if(vm)return removeVM(vm);};
  el('vms-register').onclick=()=>el('connect-dialog').showModal();
  el('vms-refresh-all').onclick=async()=>{for(const vm of fleet)await refresh(vm.id);};
  window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];render();});
