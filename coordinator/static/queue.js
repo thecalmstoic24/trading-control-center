@@ -209,7 +209,7 @@
   el('trading-start-day').onclick=async()=>{
     const button=el('trading-start-day');if(button.disabled)return;button.disabled=true;
     if(!dayKey)dayKey=crypto.randomUUID().replaceAll('-','');
-    try{const result=await api('/api/queue/start-day',{key:dayKey});dayKey=null;await poll();el('trading-date').dataset.session=result.session.id;visibleLimit=250;render();}
+    try{const result=await api('/api/queue/start-day',{key:dayKey});dayKey=null;await poll();data.sessions=[...(data.sessions||[]).filter(s=>s.id!==result.session.id),result.session];data.activeSession=result.session.id;el('trading-date').dataset.session=result.session.id;visibleLimit=250;render();}
     catch(e){el('trading-queue-status').textContent=e.message;}finally{button.disabled=false;}
   };
   window.addEventListener('control-tab-changed',()=>render());

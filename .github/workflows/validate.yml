@@ -25,6 +25,9 @@ jobs:
           & ./tests/Test-Preview27.ps1
           & ./tests/Test-Preview28.ps1
           & ./tests/Test-Manual-Sync.ps1
+      - name: API-only updater regression
+        shell: powershell
+        run: ./tests/Test-API-Updater.ps1
       - name: Default account recovery guards
         shell: powershell
         run: ./tests/Test-DefaultAccount31.ps1
