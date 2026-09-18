@@ -171,7 +171,7 @@
       const views=data.views||[{key:defaultView,name:'Accounts'}],signature=JSON.stringify(views);
       if(signature!==viewSignature){viewSignature=signature;el('planning-view').replaceChildren();for(const v of views){const option=node('option',v.name);option.value=v.key;el('planning-view').append(option);}}
       el('planning-view').value=viewKey;
-      window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:data.rows}));
+      if(lastUpdate!==data.updatedAt)window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:data.rows}));
       el('planning-refresh').disabled=!!data.busy;
       el('planning-status').textContent=`${data.rows.length} accounts · ${data.updatedAt?'Updated '+new Date(data.updatedAt*1000).toLocaleString():'Not loaded yet'}${data.busy?' · Refreshing…':''}${data.error?' · '+data.error:''}`;
       if(el('planning-dialog').open)el('planning-setup-status').textContent=data.busy?'Checking Airtable…':data.error||(data.configured?'Airtable connected.':'');
@@ -188,6 +188,7 @@
     document.querySelector('main').classList.toggle('vm-view',tab==='vms');
     document.querySelector('main').classList.toggle('trading-view',tab==='trading');
     window.scrollTo(0,0);
+    window.dispatchEvent(new CustomEvent('control-tab-changed',{detail:tab}));
     if(tab==='planning')poll();
   };
   const split=el('planning-divider'),layoutBox=document.querySelector('.planning-layout');
@@ -218,5 +219,5 @@
     const value=el('planning-token').value.trim();el('planning-token').value='';el('planning-save').disabled=true;
     try{await refresh({token:value});}finally{el('planning-save').disabled=false;}
   };
-  renderTable();poll();setInterval(poll,3000);
+  renderTable();poll();setInterval(()=>{if(!document.hidden&&!el('planning-panel').hidden)poll();},3000);
 })();

@@ -4,14 +4,19 @@ const fragment = location.hash.slice(1);
 if (/^[a-f0-9]{64}$/.test(fragment)) { sessionStorage.setItem('control-token', fragment); history.replaceState(null, '', '/'); }
 const token = sessionStorage.getItem('control-token') || '';
 let state, initialized = false, dirty = false, pending = false, lastEvent = '', lastJob = '', lost = true, closedSequence = null, pairKey = '', fleetKey = '', registeredId = '';
+let fleetEventKey='';
 let fleetState, selectedPairId=sessionStorage.getItem('selected-pair')||'';
 const drafts={}, pairJobs={};
 const fields = ['left-stop','left-profit','right-stop','right-profit','instrument','left-account','right-account','left-quantity','right-quantity'];
 function alertText(text, error=false) { $('alert').textContent=text; $('alert').classList.toggle('error',error); }
+const apiSnapshots=new Map();
 async function api(path, body) {
   const options = {headers:{'X-Control-Token':token},cache:'no-store'};
+  if(!body&&['/api/state','/api/queue'].includes(path))options.headers['X-Control-View']='dashboard';
+  const cached=!body&&apiSnapshots.get(path);if(cached)options.headers['If-None-Match']=cached.etag;
   if(body) { options.method='POST'; options.headers['Content-Type']='application/json'; options.body=JSON.stringify(body); }
-  const response=await fetch(path,options); const result=await response.json();
+  const response=await fetch(path,options);if(response.status===304&&cached)return cached.result;const result=await response.json();
+  const etag=response.headers?.get('ETag');if(!body&&response.ok&&etag)apiSnapshots.set(path,{etag,result});
   if(!response.ok) throw new Error(result.error || 'Request failed.');
   return result;
 }
@@ -79,11 +84,13 @@ function renderRegistry(s) {
 }
 function render(s){
   if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent='Pair Execution · V16 · '+label;}
-  if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));
+  const eventKey=JSON.stringify([s.fleet.map(v=>{const {ageMs,rttMs,...rest}=v;return rest;}),s.pairs,s.vmEvents]);
+  if(eventKey!==fleetEventKey){fleetEventKey=eventKey;if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));}
   fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';
   if(!s.pairs.some(p=>p.id===selectedPairId)){
     selectedPairId=s.pairs[0]?.id||'';initialized=false;closedSequence=null;
   }
+  if(s.dashboard){$('pair-workspace').hidden=true;return;}
   renderRegistry(s);
   const pair=s.pairs.find(p=>p.id===selectedPairId);
   $('pair-workspace').hidden=true;
@@ -199,7 +206,7 @@ function renderPair(s) {
 }
 let polling=false;
 async function poll(){
-  if(polling)return;polling=true;
+  if(polling||document.hidden)return;polling=true;
   try{render(await api('/api/state'));}
   catch(e){$('pair-status-label').textContent='Unknown';$('pair-status-label').className='idle';$('pair-status-detail').textContent='Coordinator unavailable. Reconnect to verify this pair.';lost=true;$('server-dot').classList.remove('connected');$('server-state').textContent='Coordinator unavailable';$('buy').disabled=$('sell').disabled=$('prepare').disabled=true;alertText(e.message+' Check both VMs if a pair is active.',true);
     for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').className='position idle';root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}

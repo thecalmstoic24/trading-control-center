@@ -25,7 +25,9 @@
       const [state,queue]=await Promise.all([api('/api/state'),api('/api/queue')]);
       if(window.planningSelection.suggestionPool().viewKey!==pool.viewKey)throw Error('The Planning view changed. Click Suggest pairs again.');
       fleet=state.fleet||[];pairs=state.pairs||[];queued=queue.rows||[];
-      const result=PairSuggestions.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())]);
+      const session=queue.activeSession;
+      const history=[...(queue.rows||[]),...(queue.history||[])].filter(r=>session?r.sessionId===session:(r.dispatchedAt||r.started||r.created||'').slice(0,10)===new Date().toISOString().slice(0,10));
+      const result=PairSuggestions.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())],Math.random,history);
       const additions=result.pairs.map(pair=>PairSuggestions.draft(pair,crypto.randomUUID().replaceAll('-','')));
       for(const d of additions){chooseVM(d.left);chooseVM(d.right);drafts.push(d);}
       if(additions.length){save();render();usage();}

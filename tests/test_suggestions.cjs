@@ -18,7 +18,7 @@ for(const values of [{firm:''},{firm:['A','B']},{CurrentProfit:null},{RealDrawdo
 }
 const rows=[row('FFF892070','FFF',{RealDrawdown:8.48,CurrentProfit:-1491.52}),row('FFF322630','FFF',{RealDrawdown:612.72,CurrentProfit:472.52}),row('FFF993110','FFF',{CurrentProfit:-159.76,'Realized PnL':159.76}),row('FFF236159','FFF',{RealDrawdown:1183.48,CurrentProfit:2401.96}),fn('FN27255',{RealDrawdown:1107.72,CurrentProfit:919.36,largestProfitDay:790.44}),fn('FN19087',{CurrentProfit:1139.36,largestProfitDay:848.48}),fn('FN20889',{RealDrawdown:1138.92,CurrentProfit:1402.52,largestProfitDay:975.44}),fn('FN67282',{CurrentProfit:968.48,largestProfitDay:968.48})];
 const saved=JSON.stringify(rows),result=S.suggest(rows,[],()=>.5);
-assert.equal(result.pairs.length,3);assert.equal(result.pairs[0].a.id,'FFF236159');assert.equal(result.pairs[0].gainA,60000);assert.equal(result.pairs[0].priority,0);
+assert.equal(result.pairs.length,3);assert.equal(result.pairs[0].a.id,'FFF236159');assert.equal(result.pairs[0].gainA,63000);assert.equal(result.pairs[0].priority,0);
 assert.ok(result.skipped.some(x=>x.account==='FFF892070'&&x.reason.includes('$100 minimum')));assert.equal(JSON.stringify(rows),saved);
 for(const p of result.pairs){
  assert.notEqual(p.a.firm,p.b.firm);assert.ok(p.gainA<=p.b.drawdown&&p.gainB<=p.a.drawdown);
@@ -52,7 +52,7 @@ for(const p of batch.pairs){assert.notEqual(p.a.firm,p.b.firm);for(const [a,b,ga
 const mff=row('MFFUEVRPD608112146','MFF',{balance:52024.46,CurrentProfit:2024.46,CurrentBalance:52382.94,InitialBalance:52024.46,'Realized PnL':358.48,RealDrawdown:1679.76});
 const fnLoss=fn('FNFTCHHAINGUYEN81629',{balance:51816.40,CurrentProfit:1816.40,CurrentBalance:51364.88,InitialBalance:51816.40,'Realized PnL':-451.52,RealDrawdown:1048.48,largestProfitDay:913.48});
 assert.equal(S.account(mff).profit,238294);assert.equal(S.account(mff).remaining,61706);
-assert.equal(S.gainAgainst(S.account(mff),S.account(fnLoss)),62000);
+assert.equal(S.gainAgainst(S.account(mff),S.account(fnLoss)),65000);
 assert.equal(S.account(fnLoss).allowance,140152);assert.equal(S.account(fnLoss).remaining,113512);
 const refreshed=JSON.parse(JSON.stringify(mff));refreshed.fields.balance=52382.94;refreshed.fields.CurrentProfit=2382.94;
 assert.equal(S.account(refreshed).profit,S.account(mff).profit);
@@ -82,3 +82,13 @@ for(const stage of ['',null,undefined,'Funded','Live',0])assert.throws(()=>S.acc
 const stageResult=S.suggest([row('A','FFF',{stage:'Funded'}),fn('B'),row('C','MFF',{stage:'Challenge'})],[],()=>.5);
 assert.equal(stageResult.pairs.length,1);assert.ok(stageResult.skipped.some(x=>x.account==='A'&&x.reason.includes('Stage')));
 const stageDraft=S.draft(stageResult.pairs[0],'d'.repeat(32));stageDraft.left.metrics.stage='Funded';assert.match(S.validateDraft(stageDraft),/Stage/);
+// Preview 36: final-trade cushion, cap preservation, adaptive fairness.
+assert.equal(S.gainAgainst(S.account(row('FINISH','A',{CurrentProfit:2400})),{loss:100000}),63000);
+assert.equal(S.gainAgainst(S.account(row('FINISH','A',{CurrentProfit:2400})),{loss:61000}),59000);
+const balancePool=[row('A1','A'),row('A2','A'),row('B1','B'),row('B2','B'),row('C1','C'),row('C2','C')];
+const usage=[{id:'prior',status:'Complete',spec:{accounts:{left:'A1',right:'B1'}}}];
+const fair=S.suggest(balancePool,[],()=>.5,usage);
+assert.ok(![fair.pairs[0].a.id,fair.pairs[0].b.id].some(id=>['A1','B1'].includes(id)));
+assert.equal(fair.pairs.length,3);
+for(const pair of fair.pairs)for(const [a,gain] of [[pair.a,pair.gainA],[pair.b,pair.gainB]])if(gain>=a.remaining)assert.ok(gain>=a.remaining+2500);
+console.log('PASS: $25 final cushion, capped non-finishing trade, adaptive least-used selection and six-account coverage.');

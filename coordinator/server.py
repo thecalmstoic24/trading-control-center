@@ -32,7 +32,7 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.35'
+VERSION = '16.0-preview.36'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
 AGENT_VERSIONS = {'16.0-preview.34','16.0-preview.33','16.0-preview.32','16.0-preview.31','16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
@@ -975,17 +975,20 @@ class Fleet:
                 'message':f'Close All Pairs requested for {len(results)} pairs. Verify each result separately.'})
         return {'ok':True, 'pairs':results}
 
-    def state(self):
+    def state(self, dashboard=False):
         with self.lock:
             states = []
             for identity,pair in self.pairs.items():
-                state = pair.state()
+                if dashboard:
+                    with pair.lock:
+                        state = dict(settings={'accounts':dict(pair.settings.get('accounts',{}))}, active=pair.active, prepared=bool(pair.prepared), closedSequence=pair.closed_sequence)
+                else: state = pair.state()
                 state['id'] = identity
                 state['name'] = ' / '.join(pair.name(slot) for slot in pair.pair)
                 states.append(state)
             fleet=[self.view(slot) for slot in self.catalog.config]
             for view in fleet: self.record_vm_activity(view)
-            return {'version':VERSION, 'pairs':states, 'limits':{'vms':MAX_VMS,'pairs':MAX_PAIRS},
+            return {'version':VERSION, 'dashboard':dashboard, 'pairs':states, 'limits':{'vms':MAX_VMS,'pairs':MAX_PAIRS},
                     'fleet':fleet, 'vmEvents':list(self.vm_events),
                     'events':list(self.global_events), 'serverTime':time.time()}
 
@@ -1203,7 +1206,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, value, kind='application/json; charset=utf-8'):
         data = json.dumps(value, allow_nan=False).encode() if isinstance(value, (dict, list)) else value
+        etag = None
+        if self.command == 'GET' and status == 200 and self.path in ('/api/queue','/api/planning'):
+            etag = '"' + hashlib.sha256(data).hexdigest() + '"'
+            if self.headers.get('If-None-Match') == etag:
+                self.send_response(304); self.send_header('ETag', etag); self.end_headers(); return
         self.send_response(status)
+        if etag: self.send_header('ETag', etag)
         for key, val in {'Content-Type':kind, 'Content-Length':str(len(data)), 'Cache-Control':'no-store',
                          'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer',
                          'X-Frame-Options':'DENY',
@@ -1233,13 +1242,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc: self.reply(400, {'error':str(exc)})
             return
         if self.path == '/api/queue':
-            self.reply(200, self.server.queue.snapshot())
+            self.reply(200, self.server.queue.snapshot(compact=self.headers.get('X-Control-View') == 'dashboard'))
             return
         if self.path == '/api/planning':
             self.reply(200, self.server.planning.snapshot())
             return
         if self.path == '/api/state':
-            self.reply(200, self.server.center.state())
+            self.reply(200, self.server.center.state(dashboard=self.headers.get('X-Control-View') == 'dashboard'))
             return
         files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/suggestions.js':'suggestions.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',

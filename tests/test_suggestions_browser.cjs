@@ -23,7 +23,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
      const d=body.draft;if(d.left?.account===rejectAccount)return route.fulfill({status:400,json:{error:'Test account rejected'}});assert.ok(Buffer.byteLength(request.postData())<16384);
      queue.rows.push({id:'DRAFT-'+body.draftKey,key:body.draftKey,draft:d,localDraft:true,status:'Queued',spec:{...body,left:d.left?'left':null,right:d.right?'right':null,accounts:{left:d.left?.account,right:d.right?.account},quantities:{left:+d.leftQuantity,right:+d.rightQuantity},names:{left:'Unassigned VM',right:'Unassigned VM'},masters:{left:d.left?.master,right:d.right?.master}}});
     }
-   }else if(url.pathname==='/api/state')result={version:'16.0-preview.35',fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
+   }else if(url.pathname==='/api/state')result={version:'16.0-preview.36',fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
    else if(url.pathname==='/api/planning')result={rows,columns:['id','firm','CurrentBalance'].map(name=>({name})),updatedAt:1,error,busy};
    else if(url.pathname==='/api/queue')result=queue;
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
@@ -35,8 +35,8 @@ const path=require('node:path'),assert=require('node:assert/strict');
  }
  let {page,context}=await open();
  assert.equal(await page.locator('.draft-card').count(),0);assert.deepEqual(writes,[]);
- assert.match(await page.title(),/Preview 35/);
- assert.match(await page.locator('#control-center-title').textContent(),/Preview 35/);
+ assert.match(await page.title(),/Preview 36/);
+ assert.match(await page.locator('#control-center-title').textContent(),/Preview 36/);
  await page.getByRole('checkbox',{name:'Select FFF322630',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select FN19087',exact:true}).click({modifiers:['Shift']});
  assert.equal(await page.locator('#planning-table tbody input:checked').count(),5);
@@ -126,14 +126,14 @@ const path=require('node:path'),assert=require('node:assert/strict');
   row('MISSING-OPEN','FFF',{InitialBalance:null}));
  error='';writes=[];queue={rows:[],history:[],running:false,message:'Paused'};({page,context}=await open());
  await page.locator('#suggest-pairs').click();await waitCount(page.locator('.draft-card'),1);
- assert.equal(await page.locator('[data-value-key=profit]').inputValue(),'620');
+ assert.equal(await page.locator('[data-value-key=profit]').inputValue(),'650');
  assert.equal(await page.locator('[data-value-key=rightProfit]').inputValue(),'1140');
  assert.match(await page.locator('#suggestion-skipped-list').textContent(),/FN-927.*below the \$100 minimum/);
  assert.match(await page.locator('#suggestion-skipped-list').textContent(),/MISSING-OPEN.*InitialBalance/);
  await page.locator('[data-value-key=profit]').fill('980');
  assert.equal(await page.locator('.draft-card button[type=submit]').isDisabled(),true);
  assert.match(await page.locator('.draft-notice').textContent(),/more than \$100/);
- await page.locator('[data-value-key=profit]').fill('620');assert.equal(await page.locator('.draft-card button[type=submit]').isDisabled(),false);
+ await page.locator('[data-value-key=profit]').fill('650');assert.equal(await page.locator('.draft-card button[type=submit]').isDisabled(),false);
  // Refreshed mismatching fields block the existing suggestion, not just new cards.
  const mismatch={...rows[0],fields:{...rows[0].fields,InitialBalance:52382.94}};
  await page.evaluate(row=>window.dispatchEvent(new CustomEvent('planning-accounts-updated',{detail:[row]})),mismatch);

@@ -1,0 +1,63 @@
+const {chromium}=require('playwright');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],writes=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ const now=new Date().toISOString();
+ const row=(i,status)=>({id:'PAIR-'+String(i).padStart(4,'0'),key:String(i).padStart(32,'0'),status,dispatched:true,dispatchedAt:now,created:now,completedUtc:status==='Complete'?now:undefined,message:status,spec:{left:'left',right:'right',ticker:'NQ DEC26',ratio:'1:1',profit:500,stopLoss:600,accounts:{left:'A'+i,right:'B'+i},masters:{left:'MFF-DEMO',right:'FN-DEMO'},quantities:{left:2,right:2},balances:{left:52000,right:51000}}});
+ const queue={rows:Array.from({length:20},(_,i)=>row(i+1,i<12?'Complete':i<17?'Trading':'Waiting')),history:[],sessions:[],activeSession:null,running:true,message:'Running'};
+ const fleet=['left','right'].map(id=>({id,name:id,online:true,fresh:true,position:'Flat',accounts:['Sim101'],refresh:{}}));
+ await page.route('http://127.0.0.1:8788/**',async route=>{
+  const req=route.request(),url=new URL(req.url());let result;
+  if(req.method()==='POST'){
+   writes.push(url.pathname);result={ok:true};
+   if(url.pathname==='/api/queue/start-day'){const session={id:req.postDataJSON().key,startedAt:now};queue.sessions.push(session);queue.activeSession=session.id;result={ok:true,session};}
+  }else if(url.pathname==='/api/state')result={version:'16.0-preview.36',dashboard:true,fleet,pairs:[],events:[],vmEvents:[]};
+  else if(url.pathname==='/api/queue')result=queue;
+  else if(url.pathname==='/api/planning')result={rows:[],columns:[],views:[{key:'test',name:'Test'}],viewKey:'test',updatedAt:1,error:'',busy:false};
+  else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
+  if(result)return route.fulfill({json:result});
+  const file=url.pathname==='/'?'index.html':url.pathname.slice(1);return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+ });
+ await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('#tab-trading').click();
+ await page.waitForFunction(()=>document.getElementById('progress-percent').textContent==='60%');
+ assert.match(await page.locator('#progress-counts').textContent(),/12 out of 20 complete5 pairing3 waiting/);
+ assert.equal(await page.locator('.progress-errors').count(),0);
+ assert.equal(await page.locator('.progress-complete').evaluate(e=>e.style.width),'60%');
+ assert.equal(await page.locator('.progress-pairing').evaluate(e=>e.style.width),'25%');
+ assert.equal(await page.locator('.progress-waiting').evaluate(e=>e.style.width),'15%');
+ assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).color),'rgb(25, 100, 201)');
+ assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).animationName),'none');
+ assert.equal(await page.locator('.pair-phase.trading').first().evaluate(e=>getComputedStyle(e).animationDuration),'1.5s');
+ const heading=await page.locator('#trading-split h2').first().boundingBox(),gauge=await page.locator('#trading-progress').boundingBox(),date=await page.locator('#trading-date').boundingBox();
+ assert.ok(gauge.width<=430&&gauge.x>heading.x&&gauge.x+gauge.width<=date.x,'Compact gauge between heading and date');
+ const table=page.locator('#trading-queue-table');
+ await table.locator('.status-filter summary').click();await table.getByLabel('Waiting',{exact:true}).check();assert.equal(await table.locator('tbody tr[data-pair]').count(),3);
+ await table.getByLabel('All',{exact:true}).check();await table.getByLabel('Pairing',{exact:true}).check();await table.getByLabel('Complete',{exact:true}).check();assert.equal(await table.locator('tbody tr[data-pair]').count(),17);
+ assert.equal(await page.locator('#progress-percent').textContent(),'60%','Filter must not alter session totals');
+ await table.getByLabel('All',{exact:true}).check();await table.locator('.status-filter summary').click();
+ await page.evaluate(()=>{window.originalRow=document.querySelector('#trading-queue-table tr[data-pair="PAIR-0001"]');window.originalHeader=document.querySelector('#trading-queue-table thead');});
+ queue.rows[19].status='Error';await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));await page.locator('.progress-errors').waitFor();
+ assert.equal(await page.locator('.progress-errors').textContent(),'1 error');
+ assert.ok(await page.evaluate(()=>window.originalRow===document.querySelector('#trading-queue-table tr[data-pair="PAIR-0001"]')),'Unchanged row must retain DOM identity');
+ assert.ok(await page.evaluate(()=>window.originalHeader===document.querySelector('#trading-queue-table thead')));
+ // Sorting must neither duplicate nor lose rows.
+ await table.getByRole('button',{name:'Pair ID',exact:true}).click();assert.equal(await table.locator('tbody tr[data-pair]').count(),20);
+ for(let i=21;i<=120;i++)queue.rows.push(row(i,'Complete'));
+ await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));await page.waitForFunction(()=>document.querySelectorAll('#trading-queue-table tr[data-pair]').length===120);
+ const scroll=page.locator('#trading-split .planning-scroll');const y=(await table.locator('thead').boundingBox()).y;await scroll.evaluate(e=>e.scrollTop=300);assert.ok(Math.abs((await table.locator('thead').boundingBox()).y-y)<2);
+ await page.locator('#trading-start-day').click();await page.waitForFunction(()=>document.getElementById('trading-date').value.startsWith('session:'));
+ assert.equal(await table.locator('tbody tr[data-pair]').count(),0);assert.equal(await page.locator('#progress-percent').textContent(),'0%');assert.equal(queue.rows.length,120);
+ const next=row(121,'Waiting');next.sessionId=queue.activeSession;queue.rows.push(next);await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));await table.locator('tr[data-pair="PAIR-0121"]').waitFor();
+ assert.equal(await table.locator('tbody tr[data-pair]').count(),1);
+ await page.reload();await page.locator('#tab-trading').click();await table.locator('tr[data-pair="PAIR-0121"]').waitFor();assert.equal(await table.locator('tbody tr[data-pair]').count(),1);
+ await page.locator('#trading-date').selectOption('all');assert.equal(await table.locator('tbody tr[data-pair]').count(),121);
+ await page.locator('#tab-planning').click();
+ const title=await page.locator('.planning-account-heading h2').boundingBox(),view=await page.locator('#planning-view').boundingBox();assert.ok(Math.abs(title.y-view.y)<12);
+ assert.equal(await page.locator('#draft-add-all').textContent(),'Add All to Queue');
+ assert.ok((await page.locator('#tab-planning').boundingBox()).height>=34);
+ assert.equal(writes.filter(p=>p==='/api/queue/start-day').length,1);assert.ok(!writes.some(p=>p==='/api/action'));assert.deepEqual(errors,[]);
+ await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview36-planning.png')});
+ await browser.close();console.log('PASS: compact live gauge; conditional errors; multi-status filtering; retained row/header nodes; sticky headers; saved sessions; untouched trades; compact Planning header; tactile tabs.');
+})().catch(e=>{console.error(e);process.exit(1)});

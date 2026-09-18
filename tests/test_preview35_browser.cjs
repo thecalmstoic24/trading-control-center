@@ -27,7 +27,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
     batch.forEach((r,i)=>Object.assign(r,{id:'PAIR-00'+(i+1),localDraft:false,dispatched:true}));queue.running=true;
     result={startedCount:batch.length,rows:batch};
    }
-  }else if(url.pathname==='/api/state')result={version:'16.0-preview.35',fleet,pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
+  }else if(url.pathname==='/api/state')result={version:'16.0-preview.36',fleet,pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
   else if(url.pathname==='/api/queue')result=queue;
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],updatedAt:1,error:'',busy:false};
   else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
@@ -37,7 +37,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  });
  await page.addInitScript(d=>localStorage.setItem('planning-draft-pairs-v1',JSON.stringify([d])),initial);
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('.vm-list-row').first().waitFor();
- assert.equal(await page.locator('header').count(),0);assert.match(await page.locator('#control-center-title').textContent(),/Pair Execution.*V16.*Preview 35/);
+ assert.equal(await page.locator('header').count(),0);assert.match(await page.locator('#control-center-title').textContent(),/Pair Execution.*V16.*Preview 36/);
  assert.equal(await page.locator('.vm-row-actions button').count(),4);assert.equal(await page.locator('#vm-remove-select option').count(),3);
  const intro=await page.locator('.intro').boundingBox(),contracts=await page.locator('.contract-settings').boundingBox();assert.ok(contracts.x>intro.x+intro.width);assert.ok(Math.abs(contracts.y-intro.y)<30);
  const first=await page.locator('#tab-vms').boundingBox(),last=await page.locator('#tab-trading').boundingBox();assert.ok(Math.abs((first.x+last.x+last.width)/2-960)<2);

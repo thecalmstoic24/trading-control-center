@@ -1,7 +1,7 @@
 'use strict';
 // Beta: calculations and editable drafts only. No network or execution calls.
 (() => {
- const STRATEGY='non-consistency-tests', REVISION=34, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
+ const STRATEGY='non-consistency-tests', REVISION=36, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
  const money=c=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(c/100);
  function number(value,name){
   if(typeof value==='string'&&/^-?\d+(?:\.\d+)?$/.test(value.trim()))value=Number(value);
@@ -61,9 +61,12 @@
  }
  function gainAgainst(a,b){
   // Round remaining profit UP to reach the target, but never round a risk cap up.
-  return Math.min(Math.max(MIN_GAIN,ceilTick(a.remaining)),floorTick(a.allowance),b.loss,floorTick(a.headroom),MAX_CENTS);
+  let gain=Math.min(Math.max(MIN_GAIN,ceilTick(a.remaining+2500)),floorTick(a.allowance),b.loss,floorTick(a.headroom),MAX_CENTS);
+  // A finishing trade must include the requested $25 cushion. Never exceed a cap.
+  if(gain>=a.remaining&&gain<a.remaining+2500)gain=floorTick(a.remaining-1);
+  return gain;
  }
- function suggest(rows,excluded=[],random=Math.random){
+ function suggest(rows,excluded=[],random=Math.random,history=[]){
   if(rows.length>1000)throw Error('Select at most 1,000 accounts for this beta suggestion batch.');
   const blocked=new Set(excluded),seen=new Map(),skipped=[],accounts=[];
   for(const row of rows){const id=String(row.fields?.id||'').trim();seen.set(id,(seen.get(id)||0)+1);}
@@ -85,10 +88,26 @@
    const other=Math.max(a.remaining,b.remaining);
    edges.push({a,b,gainA,gainB,finishA,finishB,priority,distance,other,tie:random()});
   }
-  edges.sort((a,b)=>a.priority-b.priority||a.distance-b.distance||a.other-b.other||a.tie-b.tie);
+  const poolCounts=new Map(),firmUse=new Map(),accountUse=new Map();
+  const accountFirm=new Map(accounts.map(a=>[a.id,a.firm]));
+  for(const a of accounts)poolCounts.set(a.firm,(poolCounts.get(a.firm)||0)+1);
+  const seenHistory=new Set();
+  for(const r of history){
+   const key=r.key||r.id;if(seenHistory.has(key)||r.status==='Cancelled')continue;seenHistory.add(key);
+   for(const id of Object.values(r.spec?.accounts||{})){
+    accountUse.set(id,(accountUse.get(id)||0)+1);const firm=accountFirm.get(id);
+    if(firm)firmUse.set(firm,(firmUse.get(firm)||0)+1);
+   }
+  }
   const used=new Set(),pairs=[];
-  for(const edge of edges){
-   if(used.has(edge.a.id)||used.has(edge.b.id))continue;
+  const fairness=e=>(firmUse.get(e.a.firm)||0)/poolCounts.get(e.a.firm)+(firmUse.get(e.b.firm)||0)/poolCounts.get(e.b.firm);
+  const reuse=e=>(accountUse.get(e.a.id)||0)+(accountUse.get(e.b.id)||0);
+  const compare=(a,b)=>a.priority-b.priority||reuse(a)-reuse(b)||fairness(a)-fairness(b)||a.distance-b.distance||a.other-b.other||a.tie-b.tie;
+  while(true){
+   let edge=null;
+   for(const candidate of edges)if(!used.has(candidate.a.id)&&!used.has(candidate.b.id)&&(!edge||compare(candidate,edge)<0))edge=candidate;
+   if(!edge)break;
+   for(const a of [edge.a,edge.b])firmUse.set(a.firm,(firmUse.get(a.firm)||0)+1);
    const preferred=(edge.finishB&&!edge.finishA)||((edge.finishA===edge.finishB)&&edge.b.remaining<edge.a.remaining);
    if(preferred){[edge.a,edge.b]=[edge.b,edge.a];[edge.gainA,edge.gainB]=[edge.gainB,edge.gainA];[edge.finishA,edge.finishB]=[edge.finishB,edge.finishA];}
    edge.reason=edge.priority===0?edge.a.id+': '+money(edge.a.remaining)+' remaining; one winning trade can reach the profit requirement before costs.':edge.a.id+': '+money(edge.a.remaining)+' remaining; target limited by consistency or the partner’s drawdown.';
@@ -113,6 +132,7 @@
    for(const [own,partner,gainValue,lossValue] of [[a,b,d.profit,d.stopLoss],[b,a,d.rightProfit,d.rightStopLoss]]){
     const gain=cents(gainValue,'Profit'),loss=cents(lossValue,'Stop loss');
     if(gain<MIN_GAIN)return 'Suggested profit must be at least $100 on both sides.';
+    if(gain>=own.remaining&&gain<own.remaining+2500)return own.id+': a final trade needs at least $25 above the remaining profit requirement.';
     if(gain>own.allowance)return own.id+': profit exceeds today’s consistency allowance. Refresh Planning and suggest again.';
     if(gain>own.headroom)return own.id+': profit exceeds ProfitTarget by more than $100. Refresh Planning and suggest again.';
     if(gain>partner.drawdown||loss>own.drawdown)return own.id+': suggested amounts exceed RealDrawdown. Refresh Planning and suggest again.';

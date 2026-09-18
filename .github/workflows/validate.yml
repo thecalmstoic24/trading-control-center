@@ -39,7 +39,7 @@ jobs:
         run: python -m unittest discover -s tests -p test_static_assets.py
       - name: Queue registration removal regression
         shell: pwsh
-        run: python -m unittest discover -s tests -p test_pair_queue.py
+        run: python -m unittest discover -s tests -p test_preview36.py
       - name: JavaScript regressions
         shell: pwsh
         run: |
@@ -73,4 +73,6 @@ jobs:
           node tests/test_preview34_browser.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_preview35_browser.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_preview36_browser.cjs
           exit $LASTEXITCODE

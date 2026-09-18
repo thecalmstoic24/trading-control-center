@@ -146,8 +146,10 @@ class PairQueue:
         self.lock = threading.RLock(); self.io = threading.Lock(); self.stop = threading.Event()
         self.running = False; self.message = 'Queue paused. Add pairs, then Start Queue.'
         self.rows = []; self.history = []; self.next_id = 1
+        self.sessions = []; self.active_session = None
         if self.path.exists():
             saved = json.loads(self.path.read_text()); self.rows = saved['rows']; self.next_id = saved['nextId']; self.history = saved.get('history', [])
+            self.sessions = saved.get('sessions', []); self.active_session = saved.get('activeSession')
             # A restart never resumes entry, even if a previous command response was lost.
             for row in self.rows:
                 row.pop('vmMatchRetryAt',None)
@@ -161,14 +163,18 @@ class PairQueue:
     def save(self):
         with self.lock:
             tmp = self.path.with_suffix('.tmp')
-            tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows, 'history': self.history}, allow_nan=False))
+            tmp.write_text(json.dumps({'nextId': self.next_id, 'rows': self.rows, 'history': self.history, 'sessions': self.sessions, 'activeSession': self.active_session}, allow_nan=False))
             os.replace(tmp, self.path)
 
-    def snapshot(self):
+    def snapshot(self, compact=False):
         with self.lock:
-            result=copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history})
+            result=copy.deepcopy({'running': self.running, 'message': self.message, 'rows': self.rows, 'history': self.history, 'sessions': self.sessions, 'activeSession': self.active_session})
             for row in result['rows']:
                 row['canRetryReadiness']=row['status']=='Error' and retryable_entry(row)
+            if compact:
+                keys = {'id','key','spec','status','message','dispatched','dispatchedAt','sessionId','localDraft','duplicateOf','created','started','closed','completedUtc','synced','cancelled','dirty','released22','afterId','pairId','canRetryReadiness','errorReleased','results','before','after'}
+                for collection in ('rows','history'):
+                    result[collection] = [{**{k:v for k,v in row.items() if k in keys}, 'draft':bool(row.get('draft'))} for row in result[collection]]
             return result
 
     def set_status(self, row, status, message):
@@ -382,6 +388,23 @@ class PairQueue:
                     self.save()
             return {'id':identity}
 
+        # Session boundaries are display/history metadata only; no entry or balance changes.
+        if action == 'start-day':
+            key = body.get('key')
+            if not isinstance(key, str) or not re.fullmatch('[a-f0-9]{32}', key):
+                raise ValueError('Invalid trading session identity.')
+            with self.lock:
+                existing = next((s for s in self.sessions if s['id'] == key), None)
+                if existing: return {'ok': True, 'session': copy.deepcopy(existing)}
+                previous = self.active_session
+                session = {'id': key, 'startedAt': now()}
+                self.sessions.append(session); self.active_session = key
+                try: self.save()
+                except Exception:
+                    self.sessions.pop(); self.active_session = previous
+                    raise
+                return {'ok': True, 'session': copy.deepcopy(session)}
+
         # Pause must not wait for an export/network request.
         if action == 'pause':
             with self.lock: self.running=False; self.message='Paused. Open trades continue to be monitored.'
@@ -413,6 +436,7 @@ class PairQueue:
                         self.next_id+=1
                     started_count+=1
                     row['dispatched']=True
+                    row['dispatchedAt']=now(); row['sessionId']=self.active_session
                     row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']))
                 self.running=True; self.message='Queue started. Follow this batch in Trading.'
                 try: self.save()
@@ -424,7 +448,7 @@ class PairQueue:
             elif action == 'start-one':
                 row=next((r for r in self.rows if r['id']==body.get('id')),None)
                 if not row or row['status'] not in PENDING: raise ValueError('Select a waiting pair.')
-                row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']));row['dispatched']=True;self.running=True;self.message='Pair started; waiting for available VMs.'
+                row['fast22']=all(self.fleet.view(slot).get('backgroundExports') for slot in slots(row['spec']));row['dispatched']=True;row.setdefault('dispatchedAt',now());row.setdefault('sessionId',self.active_session);self.running=True;self.message='Pair started; waiting for available VMs.'
             elif action == 'refresh':
                 self.refresh_remote()
             elif action == 'retry':

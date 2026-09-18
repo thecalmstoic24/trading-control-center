@@ -35,7 +35,11 @@
    return vm.online&&vm.fresh&&vm.position==='Flat'&&!!vm.account&&!vm.calibrationRequired&&!vm.busy&&!vm.scheduled&&!vm.pending&&!vm.closing&&!vm.pairActive&&vm.accounts?.length>0&&vm.refresh?.status!=='error'?'Ready · Available':'Needs attention';
  }
  function sortValue(vm){return sorting.field==='connection'?(vm.online?'Connected':'Disconnected'):sorting.field==='position'?position(vm):sorting.field==='availability'?availability(vm):vm.name;}
+ let lastRender='';
  function render(){
+   if(el('vms-panel').hidden)return;
+   const key=JSON.stringify([fleet.map(v=>{const {ageMs,rttMs,...rest}=v;return rest;}),queueRows.map(r=>[r.key,r.id,r.pairId,r.status,r.message,r.errorReleased]),[...pending],[...syncPending],[...removing],[...selected],[...open],sorting]);
+   if(key===lastRender)return;lastRender=key;
    const list=el('vms-list'),scroll=list.scrollTop;list.replaceChildren();
    for(const vm of fleet.slice().sort((a,b)=>String(sortValue(a)).localeCompare(String(sortValue(b)),undefined,{numeric:true,sensitivity:'base'})*sorting.direction||a.name.localeCompare(b.name))){
      const row=node('section');row.className='vm-list-row';row.dataset.vm=vm.id;
@@ -78,5 +82,6 @@
  el('vms-refresh-all').onclick=async()=>{for(const vm of fleet)await refresh(vm.id);};
  window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];render();});
  window.addEventListener('queue-updated',e=>{queueRows=e.detail.rows||[];render();});
+ window.addEventListener('control-tab-changed',()=>render());
  render();
 })();
