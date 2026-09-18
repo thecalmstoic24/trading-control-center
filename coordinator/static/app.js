@@ -198,7 +198,7 @@ function renderPair(s) {
   const latest=s.events[0];
   if(latest && JSON.stringify(latest)!==lastEvent){
     lastEvent=JSON.stringify(latest);$('events').replaceChildren();
-    for(const e of s.events){const row=document.createElement('div');row.className='event';const time=document.createElement('time');time.textContent=e.time;const message=document.createElement('span');message.textContent=e.message;row.append(time,message);$('events').append(row);}
+    for(const e of s.events){const row=document.createElement('div');row.className='event';const time=document.createElement('time');time.textContent=e.utc?new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit',second:'2-digit'}).format(new Date(e.utc)):e.time;const message=document.createElement('span');message.textContent=e.message;row.append(time,message);$('events').append(row);}
   }
   const job=s.jobs.find(j=>j.id===lastJob);
   if(job && job.status!=='running'){alertText(job.status==='error'?job.message:(latest?.message||job.message),job.status==='error');lastJob='';}

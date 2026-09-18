@@ -5,7 +5,7 @@ class Element {
   querySelector(key){return this.parts[key]??=(new Element());}
 }
 const elements={},get=id=>{assert.notEqual(id,'orders-checked','removed checkbox must never be accessed');return elements[id]??=(new Element());};
-const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element()},location:{hash:''},sessionStorage:{getItem:()=>'',setItem(){}},history:{replaceState(){}},setInterval(){},fetch:()=>new Promise(()=>{}),console});
+const context=vm.createContext({window:{addEventListener(){},dispatchEvent(){}},CustomEvent:class {},document:{getElementById:get,createElement:()=>new Element()},location:{hash:''},sessionStorage:{getItem:()=>'',setItem(){}},history:{replaceState(){}},setInterval(){},fetch:()=>new Promise(()=>{}),console});
 vm.runInContext(fs.readFileSync('coordinator/static/app.js','utf8'),context);
 function render(s){context.fixture=s;vm.runInContext('render(fixture)',context);}
 const agent=(id,name,pairId)=>({id,name,pairId,configured:true,online:true,fresh:true,position:'Flat',account:'Sim101',quantity:1,ticker:'MNQ',ageMs:1});

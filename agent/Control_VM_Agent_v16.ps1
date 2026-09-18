@@ -2231,8 +2231,8 @@ $script:ControlPreparedId = ''
 $script:BoundPeer = $null
 $script:ControlRevision = 0
 $script:AgentSession29 = [Guid]::NewGuid().ToString('N')
-$script:ControlVersion = '16.0-preview.31'
-$script:AgentBuild = '16.0-preview.31'
+$script:ControlVersion = '16.0-preview.38'
+$script:AgentBuild = '16.0-preview.38'
 $controlDirectory = Join-Path $env:LOCALAPPDATA 'TradingControlCenter\agent-data'
 $identityPath = Join-Path $controlDirectory 'identity.clixml'
 $script:ControlIdentity = Import-Clixml -LiteralPath $identityPath
@@ -2307,6 +2307,20 @@ function Get-ControlStatus {
     $state['skipResults'] = $true
     $state['backgroundExports'] = $true
     $state['syncReceipt'] = $script:SyncReceipt17
+    if(-not $script:TelemetryRead38 -or ([DateTime]::UtcNow-$script:TelemetryRead38).TotalSeconds -ge 1) {
+        $script:TelemetryRead38=[DateTime]::UtcNow
+        $script:Telemetry38=@{}
+        foreach($entry38 in @(@('orderSafety','orders.json',262144),@('candles','candles.json',65536))) {
+            try {
+                $path38=Join-Path (Join-Path $env:LOCALAPPDATA 'TradingControlCenter\telemetry') $entry38[1]
+                if((Test-Path -LiteralPath $path38) -and (Get-Item -LiteralPath $path38).Length -lt $entry38[2]) {
+                    $script:Telemetry38[$entry38[0]]=Get-Content -LiteralPath $path38 -Raw | ConvertFrom-Json
+                }
+            } catch { }
+        }
+    }
+    $state['orderSafety']=$script:Telemetry38['orderSafety']
+    $state['candles']=$script:Telemetry38['candles']
     $state['calibrationRequired'] = [bool]$script:CalibrationRequired20
     $state['queueReceipts'] = $true
     $state['queueAccountRefresh'] = $true
@@ -2415,6 +2429,15 @@ function Invoke-ControlCommand {
         return @{ok=$true;message='TLS peer bound; prepare required.'}
     }
     if ($Pending.Command -eq 'unbind_peer') {
+        if($request.verifyOrders) {
+            $safetyFile38=Join-Path $env:LOCALAPPDATA 'TradingControlCenter\telemetry\orders.json'
+            if(-not (Test-Path -LiteralPath $safetyFile38)){throw 'Install NinjaTrader Telemetry before releasing this VM.'}
+            $safety38=Get-Content -LiteralPath $safetyFile38 -Raw | ConvertFrom-Json
+            $age38=([DateTime]::UtcNow-([DateTime]::Parse($safety38.publishedUtc).ToUniversalTime())).TotalSeconds
+            $expected38=([string]$request.account -split '[!|]',2)[0].Trim()
+            $match38=@($safety38.accounts | Where-Object { (([string]$_.name -split '[!|]',2)[0].Trim()) -ceq $expected38 })
+            if(-not $expected38 -or $age38 -lt -2 -or $age38 -gt 5 -or $match38.Count -ne 1 -or $match38[0].connected -ne $true -or $null -eq $match38[0].workingOrders -or $match38[0].workingOrders -ne 0 -or $null -eq $match38[0].openPositions -or $match38[0].openPositions -ne 0){throw 'Release blocked: original account is disconnected, has open positions/orders, or its telemetry is stale.'}
+        }
         if ($script:Busy -or $script:Worker14 -or $script:ScheduledAction -or $script:CloseCheck -or $script:PendingVerification) { throw 'VM is active or closing.' }
         $snapshot = Get-ChartSnapshot
         if($snapshot.Position -cne 'Flat') { throw 'Current chart account must be Flat.' }

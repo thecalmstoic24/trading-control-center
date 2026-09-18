@@ -26,6 +26,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
    }else if(url.pathname==='/api/state')result={version:'16.0-preview.36',fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
    else if(url.pathname==='/api/planning')result={rows,columns:['id','firm','CurrentBalance'].map(name=>({name})),updatedAt:1,error,busy};
    else if(url.pathname==='/api/queue')result=queue;
+   else if(url.pathname==='/api/auto-quantity')result={enabled:false,vm:'',bars:10,multiplier:1};
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
    if(result)return route.fulfill({json:result});
    // Serve HTML and scripts through the production handler, including its allowlist.

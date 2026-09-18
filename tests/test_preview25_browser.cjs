@@ -21,7 +21,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   }else if(url.pathname==='/api/state')result={fleet,pairs:[],events:[],limits:{vms:50,pairs:20}};
   else if(url.pathname==='/api/planning')result={rows:accounts,columns:Object.keys(accounts[0].fields).map(name=>({name})),updatedAt:1,error:'',busy:false};
   else if(url.pathname==='/api/queue')result=queue;
-  else if(url.pathname==='/api/contracts')result=contract();
+  else if(url.pathname==='/api/auto-quantity')result={enabled:false,vm:'',bars:10,multiplier:1};
+   else if(url.pathname==='/api/contracts')result=contract();
   if(result)return route.fulfill({json:result});
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
   await route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});

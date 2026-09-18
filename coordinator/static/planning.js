@@ -37,7 +37,7 @@
     });
   }
   function fundName(row){const key=Object.keys(row.fields||{}).find(k=>k.trim().toLowerCase()==='firm');return display(row.fields[key]).trim().toUpperCase();}
-  function visibleRows(rows,layout,columns){const result=ordered(rows,layout,columns);return layout.groupByFund?result.sort((a,b)=>{const x=fundName(a),y=fundName(b);return !x||!y?x?-1:y?1:0:x.localeCompare(y,undefined,{numeric:true,sensitivity:'base'});}):result;}
+  function visibleRows(rows,layout,columns){if(!layout.groupByFund)return ordered(rows,layout,columns);const groups=new Map();for(const row of rows){const f=fundName(row);if(!groups.has(f))groups.set(f,[]);groups.get(f).push(row);}return [...groups.keys()].sort((a,b)=>a.localeCompare(b)).flatMap(f=>ordered(groups.get(f),{...layout,sort:layout.fundSort?.[f]||layout.sort},columns));}
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
   if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay,fundName,visibleRows};return;}
   const el=id=>document.getElementById(id);
@@ -58,7 +58,7 @@
   function loadLayout(){
     let result={hidden:[],order:[],columns:[],widths:{},split:65,sort:null,groupByFund:false};
     try{const saved=JSON.parse(localStorage.getItem(key));
-      if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))result={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null,groupByFund:saved.groupByFund===true};
+      if(saved&&Array.isArray(saved.hidden)&&Array.isArray(saved.order))result={hidden:saved.hidden,order:saved.order,columns:Array.isArray(saved.columns)?saved.columns:[],widths:saved.widths&&typeof saved.widths==='object'?saved.widths:{},split:Number(saved.split)||65,sort:saved.sort||null,groupByFund:saved.groupByFund===true,fundSort:saved.fundSort||{}};
     }catch(_){}return result;
   }
   let layout=loadLayout();
@@ -98,14 +98,15 @@
   el('planning-select-all').onclick=()=>{for(const r of data.rows)selected.add(r.id);selectionAnchor=null;renderTable();};
   el('planning-clear-selection').onclick=()=>window.planningSelection.clear();
   el('planning-group-fund').onclick=()=>{layout.groupByFund=!layout.groupByFund;save();renderTable();};
-  function makeHeader(cols){
+  function makeHeader(cols,fund=null){
+    const sorting=fund===null?layout.sort:layout.fundSort?.[fund]||layout.sort;
     const hr=node('tr');hr.className='planning-column-header';hr.append(node('th','Select'));
     for(const c of cols){
       if(c.name==='id')hr.append(node('th','Pair status'));
-      const th=node('th'),active=layout.sort?.name===c.name;
-      th.setAttribute('aria-sort',active?(layout.sort.direction===1?'ascending':'descending'):'none');
-      const b=node('button',c.name+(active?(layout.sort.direction===1?' ↑':' ↓'):''));b.className='quiet';
-      b.onclick=()=>{layout.sort={name:c.name,direction:active?-layout.sort.direction:1};save();renderTable();};th.append(b);th.draggable=true;
+      const th=node('th'),active=sorting?.name===c.name;
+      th.setAttribute('aria-sort',active?(sorting.direction===1?'ascending':'descending'):'none');
+      const b=node('button',c.name+(active?(sorting.direction===1?' ↑':' ↓'):''));b.className='quiet';
+      b.onclick=()=>{const next={name:c.name,direction:active?-sorting.direction:1};if(fund===null)layout.sort=next;else{layout.fundSort=layout.fundSort||{};layout.fundSort[fund]=next;}save();renderTable();};th.append(b);th.draggable=true;
       th.ondragstart=e=>{e.dataTransfer.setData('application/x-planning-column',c.name);};
       th.ondragover=e=>{if(Array.from(e.dataTransfer.types).includes('application/x-planning-column'))e.preventDefault();};
       th.ondrop=e=>{e.preventDefault();moveColumn(e.dataTransfer.getData('application/x-planning-column'),c.name);};hr.append(th);
@@ -122,7 +123,7 @@
 
     rows.forEach((row,i)=>{
       const fund=fundName(row);
-      if(layout.groupByFund&&fund!==previousFund){const group=node('tr'),title=node('th',fund||'Unspecified fund');group.className='fund-heading';title.colSpan=cols.length+2;title.scope='rowgroup';group.append(title);body.append(group,makeHeader(cols));previousFund=fund;}
+      if(layout.groupByFund&&fund!==previousFund){const group=node('tr'),title=node('th',(fund||'Unspecified fund')+' ('+rows.filter(r=>fundName(r)===fund).length+')');group.className='fund-heading';title.colSpan=cols.length+2;title.scope='rowgroup';group.append(title);body.append(group,makeHeader(cols,fund));previousFund=fund;}
       const tr=node('tr');tr.draggable=!layout.sort;tr.dataset.record=row.id;tr.dataset.account=display(row.fields.id);
       const select=node('td'),box=node('input');box.type='checkbox';box.checked=selected.has(row.id);box.setAttribute('aria-label','Select '+display(row.fields.id));
       const choose=(checked,shift)=>{

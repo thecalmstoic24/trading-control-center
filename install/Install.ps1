@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$version = '16.0-preview.37'
+$version = '16.0-preview.38'
 $base = Join-Path $env:LOCALAPPDATA 'TradingControlCenter'
 $destination = Join-Path $base ("releases\" + $version)
 $source = Split-Path $PSScriptRoot -Parent
@@ -150,6 +150,7 @@ $install.Add_Click({
             $status.Text='Installed. Dashboard is opening on your third computer.'
         }else{
             $id=($name.ToLowerInvariant() -replace '[^a-z0-9]+','-').Trim('-')
+            Add-DesktopShortcut 'Install NinjaTrader Telemetry' (Join-Path $destination 'install\Install-NinjaTrader-Telemetry.ps1')
             $data=Join-Path $base 'agent-data'; Protect-Directory $data
             $identityPath=Join-Path $data 'identity.clixml'
             if(Test-Path -LiteralPath $identityPath){

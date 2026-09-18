@@ -16,7 +16,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   }else if(url.pathname==='/api/state')result={version:'16.0-preview.36',dashboard:true,fleet,pairs:[],events:[],vmEvents:[]};
   else if(url.pathname==='/api/queue')result=queue;
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],views:[{key:'test',name:'Test'}],viewKey:'test',updatedAt:1,error:'',busy:false};
-  else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
+  else if(url.pathname==='/api/auto-quantity')result={enabled:false,vm:'',bars:10,multiplier:1};
+   else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
   if(result)return route.fulfill({json:result});
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
@@ -29,10 +30,10 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('.progress-pairing').evaluate(e=>e.style.width),'25%');
  assert.equal(await page.locator('.progress-waiting').evaluate(e=>e.style.width),'15%');
  assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).color),'rgb(25, 100, 201)');
- assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).animationName),'none');
- assert.equal(await page.locator('.pair-phase.trading').first().evaluate(e=>getComputedStyle(e).animationDuration),'1.5s');
+ assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).animationName),'pairing-pulse');
+ assert.equal(await page.locator('.pair-phase.trading').first().evaluate(e=>getComputedStyle(e).animationName),'none');
  const heading=await page.locator('#trading-split h2').first().boundingBox(),gauge=await page.locator('#trading-progress').boundingBox(),date=await page.locator('#trading-date').boundingBox();
- assert.ok(gauge.width<=430&&gauge.x>heading.x&&gauge.x+gauge.width<=date.x,'Compact gauge between heading and date');
+ assert.ok(gauge.width<=430&&gauge.y<heading.y,'Gauge stays in sticky navigation above the table');
  const table=page.locator('#trading-queue-table');
  await table.locator('.status-filter summary').click();await table.getByLabel('Waiting',{exact:true}).check();assert.equal(await table.locator('tbody tr[data-pair]').count(),3);
  await table.getByLabel('All',{exact:true}).check();await table.getByLabel('Pairing',{exact:true}).check();await table.getByLabel('Complete',{exact:true}).check();assert.equal(await table.locator('tbody tr[data-pair]').count(),17);

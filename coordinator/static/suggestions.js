@@ -1,7 +1,7 @@
 'use strict';
 // Beta: calculations and editable drafts only. No network or execution calls.
 (() => {
- const STRATEGY='non-consistency-tests', REVISION=36, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
+ const STRATEGY='non-consistency-tests', REVISION=38, TICK_CENTS=1000, MIN_GAIN=10000, MAX_OVERSHOOT=10000, MAX_CENTS=10000000;
  const money=c=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(c/100);
  function number(value,name){
   if(typeof value==='string'&&/^-?\d+(?:\.\d+)?$/.test(value.trim()))value=Number(value);
@@ -24,7 +24,7 @@
   const text=value=>typeof value==='string'?value:value&&typeof value==='object'?String(value.name||''):'';
   const value=fields[keys[0]];return (Array.isArray(value)?value.map(text).join(' / '):text(value)).trim();
  }
- function account(row){
+ function account(row,manual=false){
   const f=row.fields||{},id=typeof f.id==='string'?f.id.trim():'';
   if(!id||!row.id)throw Error('Missing account ID or Airtable record.');
   if(!/evaluation|challenge/i.test(stage(f)))throw Error('Stage must include Evaluation or Challenge.');
@@ -52,11 +52,11 @@
   }
   if(required>target+MAX_OVERSHOOT)throw Error('Consistency requires more than the allowed $100 above ProfitTarget. Review this account separately.');
   const headroom=Math.max(0,target+MAX_OVERSHOOT-profit);
-  const remaining=Math.max(0,required-profit),loss=Math.min(MAX_CENTS,floorTick(Math.max(0,drawdown)));
+  const remaining=Math.max(0,required-profit),loss=Math.min(MAX_CENTS,ceilTick(Math.max(0,drawdown)));
   if(!remaining)throw Error('Profit requirement already reached.');
-  if(loss<MIN_GAIN)throw Error('RealDrawdown cannot support a partner’s $100 minimum profit, before costs.');
-  if(floorTick(allowance)<MIN_GAIN)throw Error('Remaining consistency allowance is below the $100 minimum profit today.');
-  if(floorTick(headroom)<MIN_GAIN)throw Error('Less than $100 fits within the maximum target overshoot.');
+  if(!manual&&loss<MIN_GAIN)throw Error('RealDrawdown cannot support a partner’s $100 minimum profit, before costs.');
+  if(!manual&&floorTick(allowance)<MIN_GAIN)throw Error('Remaining consistency allowance is below the $100 minimum profit today.');
+  if(!manual&&floorTick(headroom)<MIN_GAIN)throw Error('Less than $100 fits within the maximum target overshoot.');
   return {id,firm:company,row,drawdown,remaining,allowance,loss,required,headroom,profit,today,openingProfit};
  }
  function gainAgainst(a,b){
@@ -127,15 +127,14 @@
   if(d.suggestion.revision!==REVISION)return 'Older suggestion: remove it and click Suggest pairs again.';
   if(!d.left||!d.right)return 'Suggested pairs need both accounts. Remove and suggest again.';
   try{
-   const a=account({id:d.left.record,fields:{...d.left.metrics,id:d.left.account}}),b=account({id:d.right.record,fields:{...d.right.metrics,id:d.right.account}});
+   const a=account({id:d.left.record,fields:{...d.left.metrics,id:d.left.account}},true),b=account({id:d.right.record,fields:{...d.right.metrics,id:d.right.account}},true);
    if(a.firm===b.firm)return 'Same fund';
    for(const [own,partner,gainValue,lossValue] of [[a,b,d.profit,d.stopLoss],[b,a,d.rightProfit,d.rightStopLoss]]){
     const gain=cents(gainValue,'Profit'),loss=cents(lossValue,'Stop loss');
-    if(gain<MIN_GAIN)return 'Suggested profit must be at least $100 on both sides.';
-    if(gain>=own.remaining&&gain<own.remaining+2500)return own.id+': a final trade needs at least $25 above the remaining profit requirement.';
+    if(gain<=0||loss<=0)return 'Enter positive profit and loss amounts.';
     if(gain>own.allowance)return own.id+': profit exceeds today’s consistency allowance. Refresh Planning and suggest again.';
     if(gain>own.headroom)return own.id+': profit exceeds ProfitTarget by more than $100. Refresh Planning and suggest again.';
-    if(gain>partner.drawdown||loss>own.drawdown)return own.id+': suggested amounts exceed RealDrawdown. Refresh Planning and suggest again.';
+    if(gain>ceilTick(partner.drawdown)||loss>ceilTick(own.drawdown))return own.id+': suggested amounts exceed RealDrawdown. Refresh Planning and suggest again.';
    }
   }catch(e){return e.message;}
   return '';

@@ -23,7 +23,7 @@ target = ROOT / 'agent' / 'Control_VM_Agent_v16.ps1'
 target.write_text(output, encoding='utf-8-sig')  # Windows PowerShell 5.1 needs BOM for Unicode.
 assert output.replace(bridge + '\n' + anchor + '\nexit 0', anchor) == source
 
-files = [target, ROOT / 'agent' / 'ControlGateway.cs', ROOT / 'agent' / 'AirtableWorker.ps1']
+files = [target, ROOT / 'agent' / 'ControlGateway.cs', ROOT / 'agent' / 'AirtableWorker.ps1', ROOT / 'agent' / 'TccTelemetry.cs', ROOT / 'agent' / 'TccOrderSafety.cs']
 files += sorted((ROOT / 'coordinator').glob('*.py'))
 files += sorted((ROOT / 'coordinator' / 'static').glob('*'))
 files += sorted((ROOT / 'install').glob('*.ps1'))

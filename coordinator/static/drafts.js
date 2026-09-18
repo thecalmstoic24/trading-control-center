@@ -61,6 +61,7 @@
   }
   const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
   function problem(d){
+    if(window.autoQuantity?.configuration().enabled&&(!d.left||!d.right))return 'Auto Quantity requires two accounts.';
     if([PairSuggestions.STRATEGY,FundedSuggestions.STRATEGY].includes(d.suggestion?.strategy)&&d.left&&d.right){
       const a=PairSuggestions.firm(d.left.metrics),b=PairSuggestions.firm(d.right.metrics);
       if(!a||!b)return 'Missing firm';
@@ -69,7 +70,7 @@
     const suggestionProblem=PairSuggestions.validateDraft(d)||FundedSuggestions.validateDraft(d);if(suggestionProblem)return suggestionProblem;
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
     const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
-    if(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a)return 'Invalid quantity';
+    if(!window.autoQuantity?.configuration().enabled&&(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a))return 'Invalid quantity';
     return '';
   }
   function validateCard(card,d){
@@ -81,7 +82,7 @@
   }
   let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
-    const l=make('label',label),n=make('input');n.type=type;n.value=d[key];n.required=true;n.dataset.field=alias;n.dataset.valueKey=key;
+    const l=make('label',label),n=make('input');n.type=type;n.value=d[key];n.required=true;if(key.includes('Quantity')&&window.autoQuantity?.configuration().enabled){n.required=false;n.disabled=true;}n.dataset.field=alias;n.dataset.valueKey=key;
     if(type==='number'){n.min=key.includes('Quantity')?'1':'0.01';n.max=key.includes('Quantity')?'1000':'100000';n.step=key.includes('Quantity')?'1':'0.01';}
     n.oninput=()=>{
       PairRatio.edit(d,key,n.value);
@@ -105,12 +106,29 @@
       const note=String(Object.entries(f).find(([k])=>k.replace(/[^a-z]/gi,'').toLowerCase()==='scrapernote')?.[1]??'').trim();if(note){const n=make('div',note);n.className='pair-scraper-note';host.append(n);}
     }
   }
+  const estimateCache=new Map();
+  function preview(d){
+    if(!window.autoQuantity?.configuration().enabled)return;
+    const signature=JSON.stringify([d.profit,d.ratio,d.ticker,window.autoQuantity.configuration()]);
+    const previous=estimateCache.get(d.key);
+    if(previous?.signature===signature&&(previous.pending||Date.now()-previous.at<5000))return;
+    estimateCache.set(d.key,{signature,at:Date.now(),pending:true});
+    const copy={...d};
+    window.autoQuantity.estimate(copy).then(()=>{
+      if(!drafts.includes(d)||JSON.stringify([d.profit,d.ratio,d.ticker,window.autoQuantity.configuration()])!==signature)return;
+      Object.assign(d,{ticker:copy.ticker,leftQuantity:copy.leftQuantity,rightQuantity:copy.rightQuantity,notice:copy.notice});save();
+    }).catch(e=>{if(drafts.includes(d))d.notice=e.message;}).finally(()=>{
+      estimateCache.set(d.key,{signature:JSON.stringify([d.profit,d.ratio,d.ticker,window.autoQuantity.configuration()]),at:Date.now(),pending:false});
+      if(drafts.includes(d))render();
+    });
+  }
   function render(){
     const list=el('draft-list');list.replaceChildren();
     el('draft-remove-all').disabled=addingAll||inFlight.size>0||!drafts.length;
     el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Queue';
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
     drafts.filter(d=>!inFlight.has(d.key)).forEach(d=>{
+      preview(d);
       const card=make('form');card.className='draft-card';card.dataset.key=d.key;
       const disabled=make('fieldset');disabled.disabled=addingAll||inFlight.has(d.key);card.append(disabled);
       const accountsGrid=make('div');accountsGrid.className='draft-pair-grid';disabled.append(accountsGrid);
@@ -173,13 +191,14 @@
   }
   async function enqueue(d){
     if(inFlight.has(d.key))return false;
+    try{d.profit=String(Math.ceil(Number(d.profit)));d.stopLoss=String(Math.ceil(Number(d.stopLoss)));PairRatio.amounts(d);await window.autoQuantity?.estimate(d);}catch(e){d.error=e.message;save();render();return false;}
     const issue=problem(d);if(issue){d.error=issue;save();render();return false;}
     if(d.left)chooseVM(d.left);if(d.right)chooseVM(d.right);
     const left=d.left?.vm,right=d.right?.vm;
     inFlight.add(d.key);delete d.error;save();render();
     window.dispatchEvent(new CustomEvent('queue-saving',{detail:compactPairDraft(d)}));
     try{
-      const result=await api('/api/queue/add',{localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+      const result=await api('/api/queue/add',{autoQuantity:window.autoQuantity?.configuration().enabled?window.autoQuantity.configuration():undefined,localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
       window.dispatchEvent(new CustomEvent('queue-saved',{detail:{key:d.key,row:result.row}}));
       drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
       window.dispatchEvent(new Event('queue-refresh'));return true;
@@ -211,6 +230,7 @@
     finally{addingAll=false;el('draft-left').disabled=false;el('draft-right').disabled=false;el('suggest-pairs').disabled=false;save();render();usage();}
     el('draft-message').textContent=count+' pair'+(count===1?'':'s')+' added to queue.'+(drafts.length?' '+drafts.length+' draft(s) remain; review their errors.':'');
   };
+  window.addEventListener('auto-quantity-changed',()=>render());
   window.addEventListener('edit-local-draft',e=>{const d=e.detail;if(!drafts.some(x=>x.key===d.key))drafts.push(d);save();render();usage();});
   window.addEventListener('planning-accounts-updated',e=>{
     const rows=new Map(e.detail.map(r=>[r.id,r]));

@@ -1,5 +1,5 @@
 """Shared currency-ratio validation for planning and agent preparation."""
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING
 import math
 
 RATIOS = ('1:1','2:1','1:2','2:3','3:2','3:4','4:3','2:5','5:2','3:5','5:3','4:5','5:4')
@@ -16,11 +16,12 @@ def pair_amounts(body):
         except (TypeError, ValueError): raise ValueError('Enter positive currency amounts.')
         if not math.isfinite(v) or not 0 < v <= 100000 or round(v, 2) != v:
             raise ValueError('Enter positive currency amounts up to 100000 with at most two decimals.')
+    stop,profit=math.ceil(float(stop)),math.ceil(float(profit))
     def scale(value):
-        result = float((Decimal(str(value))*b/a).quantize(Decimal('.01'), rounding=ROUND_HALF_UP))
+        result = float((Decimal(str(value))*b/a).quantize(Decimal('1'), rounding=ROUND_CEILING))
         if not 0 < result <= 100000: raise ValueError('Ratio produces a currency amount outside the supported range.')
         return result
-    return float(stop), float(profit), scale(profit), scale(stop)
+    return float(math.ceil(float(stop))), float(math.ceil(float(profit))), scale(profit), scale(stop)
 
 def validate_quantities(body, left, right):
     if 'ratio' not in body: return # Existing manual pairs keep independent quantities.

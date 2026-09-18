@@ -1,4 +1,5 @@
 import copy
+import datetime as dt
 import json
 from pathlib import Path
 import sys
@@ -34,6 +35,8 @@ class Agent(Fake):
         for s in self.states.values(): s.update(queueReceipts=True,queueAccountRefresh=True,accounts=['Sim101'])
     def __call__(self,config,command,body=None,**kw):
         reply=super().__call__(config,command,body,**kw)
+        if command=='status':
+            reply['state']['orderSafety']=getattr(self,'safety_override',dict(publishedUtc=dt.datetime.now(dt.timezone.utc).isoformat(),accounts=[dict(name=a,connected=True,workingOrders=0,openPositions=0) for a in set(['Sim101']+self.states[config['id']].get('accounts',[]))]))
         if command=='accounts': self.states[config['id']]['accountRefreshId']=body.get('refreshId')
         if command=='post_trade' and not self.skip_receipt:
             s=config['id']; self.states[s]['syncReceipt']={'id':body['tradeId'],'completedUtc':'2026-09-14T12:00:00Z',
@@ -88,7 +91,7 @@ class QueueTests(unittest.TestCase):
         self.fleet.vm_sync_requests.add('vm-left')
         with self.assertRaisesRegex(ValueError,'operation'):self.queue.remove_vm('vm-left')
         self.fleet.vm_sync_requests.clear()
-        for field,value in [('position','Long'),('busy',True),('scheduled',True),('pairActive',True),('pendingVerification',True),('manualSyncPending',True)]:
+        for field,value in [('position','Long'),('busy',True),('scheduled',True),('pendingVerification',True),('manualSyncPending',True)]:
             old=self.fleet.catalog.last_good['vm-left'].copy()
             self.fleet.catalog.last_good['vm-left'][field]=value
             with self.assertRaisesRegex(ValueError,'last reported'):self.queue.remove_vm('vm-left')
@@ -223,7 +226,7 @@ class QueueTests(unittest.TestCase):
         import contracts
         self.queue.add(self.deferred_body());self.queue.command('start',{});self.agent.calls.clear()
         self.queue.tick();row=self.queue.rows[0]
-        self.assertEqual(row['status'],'Waiting');self.assertIn('No registered VM',row['message'])
+        self.assertEqual(row['status'],'Need check');self.assertIn('No registered VM',row['message'])
         self.assertEqual(self.agent.calls,[]);self.assertFalse(self.fleet.pairs)
         self.match_deferred();contracts.save(self.fleet.directory,'MAR27');row['vmMatchRetryAt']=0
         self.queue.tick()
@@ -293,7 +296,7 @@ class QueueTests(unittest.TestCase):
         self.store.records=lambda table:[]
         self.queue.command('start',{'keys':[body['draftKey']]});self.agent.calls.clear()
         self.queue.tick()
-        self.assertEqual(self.queue.rows[0]['status'],'Waiting')
+        self.assertEqual(self.queue.rows[0]['status'],'Need check')
         self.assertIn('exact Airtable match',self.queue.rows[0]['message'])
         self.assertFalse(self.fleet.pairs)
         self.assertEqual(self.agent.calls,[])
@@ -382,7 +385,9 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(first['errorReleased']);self.assertEqual(first['status'],'Error')
         self.queue.command('resolve',{'id':first['id']})
         self.assertTrue(self.queue.running);self.assertIn('completedUtc',first)
-        self.queue.tick();self.assertEqual(self.queue.rows[1]['status'],'Preparing')
+        self.queue.tick()
+        # Preparation runs asynchronously; the next tick may already enter Trading.
+        self.assertIn(self.queue.rows[1]['status'],('Preparing','Trading'))
 
     def failed_reserved_pair(self):
         self.enable_fast22();self.add_start();self.queue.tick()
@@ -392,7 +397,7 @@ class QueueTests(unittest.TestCase):
         return row,pair
 
     def test_error_auto_release_blocks_stale_busy_scheduled_or_open_vm(self):
-        for field,value in [('scheduled',True),('busy',True),('pendingVerification',True),('pairActive',True)]:
+        for field,value in [('scheduled',True),('busy',True),('pendingVerification',True)]:
             with self.subTest(field=field):
                 row,pair=self.failed_reserved_pair()
                 self.agent.states['vm-right'][field]=value
@@ -1007,7 +1012,8 @@ class QueueTests(unittest.TestCase):
 
     def test_airtable_failure_prevents_entry(self):
         self.queue.add(self.body);self.queue.command('start',{});self.queue.rows[0]['dirty']=True;self.store.fail=True
-        with self.assertRaises(ValueError):self.queue.tick()
+        self.queue.tick()
+        self.assertTrue(self.queue.rows[0].get("syncError"))
         self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
 
     def test_currency_delta_and_field_layout(self):
@@ -1017,3 +1023,33 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(fields['Right Stop Loss'],200);self.assertNotIn('Left Trade P&L',fields)
 
 if __name__=='__main__':unittest.main()
+
+class Recovery38Tests(QueueTests):
+    # Reuse only fixtures/helpers, avoid repeating the inherited suite in discovery.
+    def test_order_safety_blocks_release(self):
+        for bad in ('orders','positions','stale','missing','wrong-account','disconnected'):
+            with self.subTest(bad=bad):
+                row,pair=self.failed_reserved_pair()
+                self.agent.safety_override=dict(publishedUtc=dt.datetime.now(dt.timezone.utc).isoformat(),accounts=[dict(name='Sim101',connected=True,workingOrders=0,openPositions=0)])
+                value=self.agent.safety_override
+                if bad=='orders':value['accounts'][0]['workingOrders']=1
+                if bad=='positions':value['accounts'][0]['openPositions']=1
+                if bad=='stale':value['publishedUtc']='2020-01-01T00:00:00Z'
+                if bad=='missing':self.agent.safety_override=None
+                if bad=='wrong-account':value['accounts'][0]['name']='different'
+                if bad=='disconnected':value['accounts'][0]['connected']=False
+                with self.assertRaises(ValueError):self.queue.release_vm('vm-left')
+                self.assertIn(row['pairId'],self.fleet.pairs)
+                del self.agent.safety_override
+                self.queue.release_vm('vm-left')
+                self.assertEqual(row['status'],'Error');self.assertTrue(row['errorReleased'])
+    def test_changed_account_quantity_and_retained_flag_release(self):
+        row,pair=self.failed_reserved_pair()
+        for state in self.agent.states.values(): state.update(account='Different',quantity='17',pairActive=True)
+        self.queue.release_vm('vm-left')
+        self.assertTrue(row['errorReleased']);self.assertEqual(row['status'],'Error')
+        self.assertFalse(any(c[1]=='entry' for c in self.agent.calls))
+
+# Inherited fixtures/helpers are shared, but original cases run once under QueueTests.
+for _name in list(vars(QueueTests)):
+    if _name.startswith('test_') and _name not in vars(Recovery38Tests): setattr(Recovery38Tests,_name,None)

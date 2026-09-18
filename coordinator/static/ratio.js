@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const options=['1:1','2:1','1:2','2:3','3:2','3:4','4:3','2:5','5:2','3:5','5:3','4:5','5:4'];
- const round=n=>Math.round((n+Number.EPSILON)*100)/100;
+ const round=n=>Math.ceil(n-1e-9);
  function factor(d){const [a,b]=(d.ratio||'1:1').split(':').map(Number);return b/a;}
  function amounts(d){d.rightStopLoss=String(round(Number(d.profit)*factor(d)));d.rightProfit=String(round(Number(d.stopLoss)*factor(d)));}
  function quantities(d,side='left'){

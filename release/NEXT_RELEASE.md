@@ -1,5 +1,9 @@
-# Remaining work after Preview 37
+# Remaining release gates for Preview 38
 
-Auto Quantity Beta remains pending a usable live candle-data source. Keep it separate and off by default. The requested calculation uses completed 1-minute candle high-low ranges including wicks, configurable bar count and distance multiplier, the left-side dollar profit target, and NQ/MNQ quantities preserving the pair ratio. When enabled, hide quantity/instrument fields on pair cards and retain the ratio. Freeze sizing before preparation and reject unavailable/stale data. The user also requested a TradingView chart at the bottom of Trading; an embedded chart alone does not provide candle data to the coordinator.
+- Public-source publication explicitly approved by the user on September 18, 2026. Publish the candidate to the existing `thecalmstoic24/trading-control-center` repository for validation.
+- Upload the candidate source/installer, run Windows/browser CI, resolve failures, and only then advance release/latest.json with the verified installer commit/checksum. The local installer SHA256 is recorded in RELEASE_CANDIDATE_v16_38.json.
+- Browser fixtures and the new NinjaTrader C# stubs still require execution. Local Chromium download timed out; PowerShell/NinjaTrader are unavailable here.
 
-Preview 37 implements New Non-consistency. Session history was already released in Preview 36. The separate reported Airtable HTTP 422 issue remains outside these changes.
+- Capture/reproduce the original Airtable HTTP 422/442 if it recurs. Actual error details are now preserved; its original cause is not proven fixed.
+- Validate TccTelemetry and TccOrderSafety in the installed NinjaTrader runtime and SIM101. Their live runtime is unavailable in this development environment. Auto Quantity remains off by default.
+- Pushover is intentionally deferred by the user.

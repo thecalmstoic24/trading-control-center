@@ -4,6 +4,7 @@ Pair receipts come from the authenticated agent after its CSV values have been
 confirmed by Airtable. Accounts browsing remains read-only in planning.py.
 """
 import contracts
+import auto_quantity
 import funded_strategy
 import copy
 import datetime as dt
@@ -23,7 +24,7 @@ from planning import BASE, TABLE, credential
 from ratios import pair_amounts, validate_quantities
 
 PAIR_TABLE = 'tblHhpDgF7rYPQOaA'
-PENDING = {'Queued', 'Waiting'}
+PENDING = {'Queued', 'Waiting', 'Need check'}
 TERMINAL = {'Complete', 'Cancelled', 'Removing'}
 RESULT_WAIT_SECONDS = 30
 
@@ -51,6 +52,21 @@ def retryable_entry(row):
         str(row.get('message','')).startswith('Entry did not complete normally: ')
         and str(row.get('message','')).endswith('Entry stage readiness check: Estimated VM clock difference exceeds 500 ms. Synchronize Windows time.')))
 
+def import_pending(row, fields):
+    priority=fields.get('Priority') or 4
+    if isinstance(priority,str) and priority.isdigit(): priority=int(priority)
+    if type(priority) is not int or priority not in (1,2,3,4): raise ValueError('Priority must be 1, 2, or 3, or blank.')
+    spec=copy.deepcopy(row['spec'])
+    for side in ('left','right'):
+        slot=spec.get(side); field=side.title()+' Quantity'
+        if slot and field in fields:
+            q=fields[field]
+            if type(q) not in (int,float) or not math.isfinite(q) or not float(q).is_integer() or not 1<=q<=1000: raise ValueError('Quantity must be a whole number from 1 to 1000.')
+            spec['quantities'][slot]=int(q)
+    if spec.get('left') and spec.get('right'): validate_quantities(spec,spec['left'],spec['right'])
+    row['priority']=priority;row['spec']=spec
+    if row.pop('remoteEditError',False): row.update(status='Waiting',message='Airtable settings corrected; waiting for preparation.')
+
 class PairStore:
     def __init__(self, planning):
         self.planning = planning
@@ -69,7 +85,12 @@ class PairStore:
         try:
             with urllib.request.urlopen(req, timeout=20) as response: return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise ValueError(f'Airtable request failed (HTTP {exc.code}). Check Planning token read/write access; retry sync.') from None
+            try:
+                error=json.loads(exc.read(8192)).get('error',{})
+                detail=(error.get('type','')+': '+error.get('message','')) if isinstance(error,dict) else str(error)
+            except Exception: detail='Response body unavailable.'
+            detail=detail.replace(token,'[redacted]')[:500]
+            raise ValueError(f'Airtable request failed (HTTP {exc.code}): {detail}') from None
         finally:
             token = None
 
@@ -91,6 +112,8 @@ class PairStore:
         if len(matches) > 1: raise ValueError('Duplicate Execution Key in Airtable; resolve before continuing.')
         collisions = [r for r in records if r.get('fields', {}).get('Pair ID') == row['id'] and r.get('fields', {}).get('Execution Key') != row['key']]
         if collisions: raise ValueError('Pair ID already exists on another coordinator. Use one coordinator for the queue.')
+        if matches and row['status'] in PENDING and not row.get('pairId') and not row.get('started'):
+            import_pending(row,matches[0].get('fields',{}))
         fields = self.fields(row)
         # Upsert only by the internal UUID. Repeated saves preserve the same record.
         result = self.request(PAIR_TABLE, 'PATCH', {'performUpsert': {'fieldsToMergeOn': ['Execution Key']},
@@ -113,7 +136,7 @@ class PairStore:
 
     @staticmethod
     def fields(row):
-        spec = row['spec']; f = {'Pair ID': row['id'], 'Execution Key': row['key'], 'Status': row['status'],
+        spec = row['spec']; f = {'Pair ID': row['id'], 'Execution Key': row['key'], 'Status': {'Need check':'Waiting','Removing':'Cancelled'}.get(row['status'],row['status']),
             'Queue Order': row['order'], 'Instrument': spec['ticker'], 'Currency': 'USD',
             'Direction': 'Buy left / Sell right' if spec['direction'] == 'buy' else 'Sell left / Buy right',
             'Created At': row['created'], 'Activity / Error': row.get('message', '')}
@@ -173,7 +196,7 @@ class PairQueue:
             for row in result['rows']:
                 row['canRetryReadiness']=row['status']=='Error' and retryable_entry(row)
             if compact:
-                keys = {'id','key','spec','status','message','dispatched','dispatchedAt','sessionId','localDraft','duplicateOf','created','started','closed','completedUtc','synced','cancelled','dirty','released22','afterId','pairId','canRetryReadiness','errorReleased','results','before','after'}
+                keys = {'id','key','spec','status','message','dispatched','dispatchedAt','sessionId','localDraft','duplicateOf','created','started','closed','completedUtc','synced','cancelled','dirty','released22','afterId','pairId','canRetryReadiness','priority','errorReleased','results','before','after'}
                 for collection in ('rows','history'):
                     result[collection] = [{**{k:v for k,v in row.items() if k in keys}, 'draft':bool(row.get('draft'))} for row in result[collection]]
             return result
@@ -191,6 +214,7 @@ class PairQueue:
         # Queue mutation and background sync are serialized by io.
         if row.get('remoteDeleted') or row.get('localDraft'): return
         self.store.push(row)
+        row.pop('syncError',None)
         with self.lock: row['dirty'] = False; self.save()
 
     def remove_vm(self, slot):
@@ -225,7 +249,7 @@ class PairQueue:
                 number = max(self.next_id, maximum + 1)
                 if not local: self.next_id = number + 1
                 row = dict(id=f'PAIR-{number:04d}', key=draft_key or uuid.uuid4().hex, spec=spec, status='Queued',
-                           message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
+                           priority=4, message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
                 if local: row.update(id='DRAFT-'+row['key'],localDraft=True,dirty=False,draft=copy.deepcopy(body.get('draft')))
                 if local and isinstance(row.get('draft'),dict): row['draft']['ticker']=spec['ticker']
                 self.rows.append(row)
@@ -276,6 +300,7 @@ class PairQueue:
             if isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or not 0 < v <= 100000 or round(v,2) != v:
                 raise ValueError('Enter positive Currency stop loss and profit target amounts, up to two decimals.')
         currency_amounts = pair_amounts(body)
+        amounts=dict(stopLoss=currency_amounts[0],profit=currency_amounts[1])
         strategy = body.get('strategy') or (body.get('draft') or {}).get('suggestion', {}).get('strategy')
         accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}; metrics = {}
         if defer_vm and len(members)==2 and body['accounts'][left]==body['accounts'][right]:
@@ -321,7 +346,7 @@ class PairQueue:
             if funds[0] and funds[0]==funds[1]: raise ValueError('Same fund: choose accounts from different funds.')
         if len(members)==2 and accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
         if len(members)==2: validate_quantities(dict(body, quantities=quantities), left, right)
-        return dict(**({'strategy':strategy} if strategy == funded_strategy.STRATEGY else {}),**({'vmMatchPending':True} if defer_vm else {}),**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
+        return dict(**({'autoQuantity':auto_quantity.validate_config(body['autoQuantity'])} if body.get('autoQuantity') else {}),**({'strategy':strategy} if strategy == funded_strategy.STRATEGY else {}),**({'vmMatchPending':True} if defer_vm else {}),**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
                     names=names,masters=masters,records=records,balances=balances,metrics=metrics,**amounts)
 
     def validate_vms(self, body):
@@ -358,7 +383,7 @@ class PairQueue:
             # Revalidate account membership and settings before any reservation or command.
             resolved=self.validate(resolved)
         except ValueError as exc:
-            self.set_status(row,'Waiting','Waiting for VM matching: '+str(exc))
+            self.set_status(row,'Need check','Waiting for VM matching: '+str(exc))
             return False
         row['spec']=resolved
         row['fast22']=all(self.fleet.view(s).get('backgroundExports') for s in slots(resolved))
@@ -542,10 +567,36 @@ class PairQueue:
             self.save()
         return {'ok':True, 'startedCount':started_count}
 
+    def release_vm(self, slot):
+        with self.io, self.lock:
+            identity=self.fleet.owners.get(slot)
+            if not identity: raise ValueError('This VM has no reservation to release.')
+            row=next((r for r in self.rows if r.get('pairId')==identity),None)
+            if row and row['status'] not in {'Error','Awaiting results','Complete','Cancelled'}:
+                raise ValueError('Cancel an unstarted pair or close the trade before releasing its VMs.')
+            pair=self.fleet.get_pair(identity)
+            if (pair.active and (not row or not row.get('closed'))) or (pair.opened_ids and (not row or not row.get('closed'))):
+                raise ValueError('Trade outcome is unresolved. Close and verify it first.')
+            if row and row.get('afterId') and row['status'] in {'Error','Awaiting results'}:
+                original=row['status'];self.skip_results(row)
+                if original=='Error': self.set_status(row,'Error','Results skipped; VMs released. Trade was not retried.')
+            else:
+                self.fleet.release_pair(identity,strict=True,allow_blank=True,verify_orders=True)
+            if row:
+                row.update(errorReleased=True,released22=True,dirty=True)
+                self.save()
+            return {'ok':True,'message':'Pair reservations released; waiting pairs can reuse these VMs.'}
+
     def refresh_remote(self):
         # Called under io + lock. Never interpret a failed read as an empty table.
         remote = self.store.records(PAIR_TABLE)
         keys = {r.get('fields', {}).get('Execution Key') for r in remote}
+        by_key={r.get('fields',{}).get('Execution Key'):r.get('fields',{}) for r in remote}
+        for row in self.rows:
+            fields=by_key.get(row['key'])
+            if fields and row['status'] in PENDING and not row.get('pairId') and not row.get('started'):
+                try: import_pending(row,fields)
+                except ValueError as exc: row.update(status='Need check',remoteEditError=True,message='Airtable edits: '+str(exc))
         removed = 0
         for row in self.rows[:]:
             if row.get('localDraft') or row['key'] in keys or (row.get('dirty') and not row.get('remoteDeleted')):
@@ -587,19 +638,18 @@ class PairQueue:
         row['releaseCheckAt']=time.time()+5
         pair=self.fleet.get_pair(identity)
         # No unknown entry is cleared merely because a chart currently says Flat.
-        if pair.active or (pair.opened_ids and not row.get('closed')): return
+        if (pair.active or pair.opened_ids) and not row.get('closed'): return
         if pair.operation.locked() or pair.sync_dispatch or any(j['status']=='running' for j in pair.jobs): return
         try:
             pair.refresh_both()
             agents=pair.state()['agents']
             allow_blank=not row.get('started') and not pair.opened_ids
-            if not all((pair.account_discovery_idle(a) if allow_blank else pair.safe_flat(a)) for a in agents): return
-            if row.get('started') and not all(pair.target_matches(a) for a in agents): return
+            if not all(pair.release_flat(a) for a in agents): return
             if row.get('closed') and row.get('afterId'):
                 if not all(a.get('skipResults') for a in agents): return
                 for slot in pair.pair: pair.call(slot,'skip_results',{'tradeId':row['afterId']},15)
                 row['resultsSkipped']=True
-            self.fleet.release_pair(identity, strict=True, allow_blank=allow_blank)
+            self.fleet.release_pair(identity, strict=True, allow_blank=True,verify_orders=True)
         except Exception as exc:
             row['releaseMessage']=str(exc)
             return
@@ -609,7 +659,7 @@ class PairQueue:
 
     def skip_results(self, row, automatic=False):
         pair=self.fleet.get_pair(row['pairId'])
-        if pair.active or pair.operation.locked() or any(j['status']=='running' for j in pair.jobs):
+        if (pair.active and not row.get('closed')) or pair.operation.locked() or any(j['status']=='running' for j in pair.jobs):
             raise ValueError('Wait for trade closure and the current operation to finish.')
         pair.refresh_both()
         if not all(pair.view_agent(s).get('skipResults') for s in pair.pair):
@@ -625,7 +675,7 @@ class PairQueue:
         pair.refresh_both()
         if pair.sync_dispatch:
             raise ValueError('Export stop acknowledged; waiting for the in-flight refresh to finish.')
-        self.fleet.release_pair(row['pairId'], strict=True)
+        self.fleet.release_pair(row['pairId'], strict=True,allow_blank=True,verify_orders=True)
         row.update(released22=True,fast22=True,resultsSkipped=True,completedUtc=now())
         if automatic: row['resultsTimedOut']=True
         message=('Results automatically skipped after 30 seconds' if automatic else 'Results skipped')
@@ -642,14 +692,23 @@ class PairQueue:
 
     def tick(self):
         with self.io:
+            with self.lock:
+                remote=getattr(self,'remote_cache',None)
+                if remote is not None:
+                    for row in self.rows:
+                        if row['status'] in PENDING and not row.get('pairId') and not row.get('started') and row['key'] in remote:
+                            try: import_pending(row,remote[row['key']])
+                            except ValueError as exc: row.update(status='Need check',remoteEditError=True,message='Airtable edits: '+str(exc))
+                    self.remote_cache=None
             for row in self.rows[:]:
                 if row.get('remoteDeleted') and row.get('pairId') not in self.fleet.pairs:
                     self.rows.remove(row); self.save(); continue
                 if row['status']=='Removing':
                     self.remove(row)
                     continue
-                if row.get('dirty') and not row.get('fast22') and row['status']!='Awaiting results':
-                    self.sync(row)
+                if row.get('dirty') and not row.get('fast22') and row['status']!='Awaiting results' and not row.get('remoteEditError'):
+                    try: self.sync(row)
+                    except Exception as exc: row['syncError']=str(exc);self.message='Pair upload pending: '+str(exc)
             # Advance every active pair, then reserve any eligible pending pairs.
             # Fleet ownership is checked under its lock before each reservation.
             active=[r for r in self.rows if r['status'] not in PENDING | TERMINAL | {'Error'}]
@@ -659,8 +718,8 @@ class PairQueue:
             for row in self.rows[:]:
                 if row['status']=='Error': self.release_error(row)
             if not self.running: return
-            for row in self.rows[:]:
-                if row['status'] not in PENDING or not row.get('dispatched'): continue
+            for row in sorted(self.rows[:],key=lambda r:(r.get('priority',4),r['order'])):
+                if row['status'] not in PENDING or not row.get('dispatched') or row.get('remoteEditError') or row.get('syncError') or getattr(self,'remote_poll_error',False): continue
                 try: self.advance(row)
                 except Exception as exc: self.fail(row, exc)
             if not any(r['status'] not in TERMINAL | {'Error'} and r.get('dispatched') for r in self.rows):
@@ -696,6 +755,12 @@ class PairQueue:
                     raise ValueError('Update both VM agents to Preview 18 for automatic verified account refresh.')
                 if not self.running: return
                 if row.get('fast22'): row['checked22']=True
+                if spec.get('autoQuantity',{}).get('enabled'):
+                    if len(members)!=2: raise ValueError('Auto Quantity requires a two-sided pair.')
+                    source=spec['autoQuantity']['vm']
+                    if source not in self.fleet.catalog.config: raise ValueError('Candle source VM is no longer registered.')
+                    self.fleet.observe(source)
+                    auto_quantity.apply(spec,spec['autoQuantity'],self.fleet.view(source))
                 pair_id=self.fleet.create_pair(spec['left'],spec['right'])
                 row['pairId']=pair_id
                 pair=self.fleet.get_pair(pair_id)
@@ -804,6 +869,17 @@ class PairQueue:
                 self.fail(row,'Results saved, but VM release failed: '+str(exc)); return
             self.planning.refresh(); self.message='Pair complete. Ready for the next queued pair.'
 
+    def remote_loop(self):
+        while not self.stop.is_set():
+            with self.lock: needed=any(r['status'] in PENDING and not r.get('localDraft') for r in self.rows)
+            if needed:
+                try:
+                    remote={r.get('fields',{}).get('Execution Key'):r.get('fields',{}) for r in self.store.records(PAIR_TABLE)}
+                    with self.lock: self.remote_cache=remote;self.remote_poll_error=False
+                except Exception as exc:
+                    with self.lock: self.remote_poll_error=True;self.message='Airtable edit refresh failed; new preparation paused: '+str(exc)
+            self.stop.wait(5)
+
     def result_loop(self):
         # Airtable latency must never occupy the scheduler or a released VM.
         while not self.stop.is_set():
@@ -830,5 +906,7 @@ class PairQueue:
                 with self.lock: self.running=False; self.message=str(exc)
             self.stop.wait(.25 if any(r.get('fast22') and r['status'] not in TERMINAL | {'Error'} for r in self.rows) else 2)
 
-    def start(self): self.result_thread.start(); self.thread.start()
+    def start(self):
+        self.remote_thread=threading.Thread(target=self.remote_loop,daemon=True)
+        self.remote_thread.start();self.result_thread.start();self.thread.start()
     def close(self): self.running=False; self.stop.set()

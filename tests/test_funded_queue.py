@@ -25,7 +25,7 @@ class FundedQueueTests(unittest.TestCase):
         self.assertEqual(row['spec']['strategy'],'new-non-consistency')
         self.records[0]['fields']['RealCurrentBalance']=50301
         self.agent.calls.clear();self.queue.tick()
-        self.assertEqual(row['status'],'Waiting')
+        self.assertEqual(row['status'],'Need check')
         self.assertIn('RealCurrentBalance',row['message'])
         self.assertFalse(self.fleet.pairs)
         self.assertFalse(any(cmd in ('prepare','entry') for _,cmd,_ in self.agent.calls))

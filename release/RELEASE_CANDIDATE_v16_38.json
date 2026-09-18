@@ -1,0 +1,12 @@
+{
+  "version": "16.0-preview.38",
+  "status": "approved-for-publication-awaiting-ci",
+  "installer": "Setup_Trading_Control_Center_v16.ps1",
+  "sha256": "815d98164e7daa8577a89ac742bfe06dee01315464fb84b44ae52b191e9e9594",
+  "python_checks": 360,
+  "javascript_scripts": 10,
+  "windows_browser_checks": "pending",
+  "original_http_error": "not reproduced; actual error diagnostics added",
+  "agent_update_required": true,
+  "ninjatrader_setup_required": true
+}

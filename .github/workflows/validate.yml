@@ -25,6 +25,12 @@ jobs:
           & ./tests/Test-Preview27.ps1
           & ./tests/Test-Preview28.ps1
           & ./tests/Test-Manual-Sync.ps1
+      - name: Telemetry syntax and coordinator regressions
+        shell: powershell
+        run: |
+          & ./tests/Test-Telemetry38.ps1
+          python -m unittest discover -s tests -q
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
       - name: API-only updater regression
         shell: powershell
         run: ./tests/Test-API-Updater.ps1
@@ -75,8 +81,16 @@ jobs:
           node "$env:NODE_PATH/playwright/cli.js" install chromium
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $browserFailed = 0
-          foreach($test in @('test_funded_browser.cjs','test_preview36_browser.cjs','test_preview28_browser.cjs','test_suggestions_browser.cjs','test_preview34_browser.cjs','test_preview35_browser.cjs')) {
+          foreach($test in @('test_preview38_browser.cjs','test_funded_browser.cjs','test_preview36_browser.cjs','test_preview28_browser.cjs','test_suggestions_browser.cjs','test_preview34_browser.cjs','test_preview35_browser.cjs')) {
             node "tests/$test"
             if($LASTEXITCODE -ne 0){$browserFailed = 1}
           }
           exit $browserFailed
+
+      - name: Browser review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-review
+          path: ${{ runner.temp }}/preview*.png
+          if-no-files-found: ignore

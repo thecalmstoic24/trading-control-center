@@ -19,15 +19,15 @@ function message(id){return row(id).children.find(n=>n.className==='vm-row-secon
 emit('fleet-updated',{fleet});assert.equal(badge('left').textContent,'Paired');
 emit('queue-updated',queue);
 for(const id of ['left','right']){
- assert.equal(badge(id).textContent,'Errored');assert.ok(badge(id).className.includes('vm-error'));
+ assert.equal(badge(id).textContent,'Error');assert.ok(badge(id).className.includes('vm-error'));
  assert.match(message(id),/PAIR-0077.*ATM Edit dialog/);
 }
 assert.equal(badge('other').textContent,'Ready · Available');
 assert.equal(fleet[0].pairId,'binding-77');
 fleet[0].refresh.status='running';emit('fleet-updated',{fleet});
-assert.equal(badge('left').textContent,'Errored');
+assert.equal(badge('left').textContent,'Error');
 fleet[0].online=false;emit('fleet-updated',{fleet});
-assert.equal(badge('left').textContent,'Errored');
+assert.equal(badge('left').textContent,'Error');
 fleet[0].online=true;fleet[0].refresh.status='complete';queue.rows[0].status='Preparing';emit('queue-updated',queue);
 assert.equal(badge('right').textContent,'Paired');assert.ok(badge('right').className.includes('vm-paired'));
 queue.history=queue.rows.map(r=>({...r,status:'Error'}));queue.rows=[];
@@ -40,6 +40,6 @@ emit('queue-updated',queue);emit('fleet-updated',{fleet});
 assert.equal(badge('left').textContent,'Paired');
 // Current Single Pair errors are handled by the same ownership rule.
 queue.rows=[{id:'PAIR-0078',pairId:'binding-new',status:'Error'}];emit('queue-updated',queue);
-assert.equal(badge('left').textContent,'Errored');assert.equal(badge('right').textContent,'Ready · Available');
+assert.equal(badge('left').textContent,'Error');assert.equal(badge('right').textContent,'Ready · Available');
 assert.match(message('left'),/Pair failed/);
 console.log('PASS: production renderer shows Errored for both bound VMs; error message/color precedence; refresh/disconnect; retry/release; old history/reassignment; Single Pair.');

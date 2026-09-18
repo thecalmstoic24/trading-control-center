@@ -13,6 +13,7 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),pat
    else if(url.pathname==='/api/state')result={version:'16.0-preview.37',fleet:[],pairs:[],events:[],vmEvents:[],limits:{vms:50,pairs:20}};
    else if(url.pathname==='/api/planning')result={rows,columns:[{name:'id'}],updatedAt:1,error:'',busy:false};
    else if(url.pathname==='/api/queue')result={rows:[],history:[],running:false};
+   else if(url.pathname==='/api/auto-quantity')result={enabled:false,vm:'',bars:10,multiplier:1};
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
    return route.fulfill({json:result});
   });

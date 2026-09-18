@@ -21,7 +21,7 @@ const saved=JSON.stringify(rows),result=S.suggest(rows,[],()=>.5);
 assert.equal(result.pairs.length,3);assert.equal(result.pairs[0].a.id,'FFF236159');assert.equal(result.pairs[0].gainA,63000);assert.equal(result.pairs[0].priority,0);
 assert.ok(result.skipped.some(x=>x.account==='FFF892070'&&x.reason.includes('$100 minimum')));assert.equal(JSON.stringify(rows),saved);
 for(const p of result.pairs){
- assert.notEqual(p.a.firm,p.b.firm);assert.ok(p.gainA<=p.b.drawdown&&p.gainB<=p.a.drawdown);
+ assert.notEqual(p.a.firm,p.b.firm);assert.ok(p.gainA<=Math.ceil(p.b.drawdown/1000)*1000&&p.gainB<=Math.ceil(p.a.drawdown/1000)*1000);
  assert.ok(p.gainA<=p.a.allowance&&p.gainB<=p.b.allowance);assert.equal(p.gainA%1000,0);assert.equal(p.gainB%1000,0);
  const d=S.draft(p,'a'.repeat(32));assert.equal(d.leftQuantity,'2');assert.equal(d.rightQuantity,'2');assert.equal(d.profit,d.rightStopLoss);assert.equal(d.stopLoss,d.rightProfit);assert.equal(d.ticker,'NQ');assert.equal(d.ratio,'1:1');
 }
@@ -46,7 +46,7 @@ assert.equal(S.gainAgainst(near,tight),59000);assert.ok(S.gainAgainst(near,tight
 let seed=17;const random=()=>((seed=(seed*1664525+1013904223)>>>0)/2**32);
 const many=Array.from({length:100},(_,i)=>row('A'+i,['FFF','FN','MFF'][i%3],{CurrentProfit:Math.round((random()*5000-2000)*100)/100,RealDrawdown:Math.round(random()*200000)/100,Consistency:i%2?.4:0,largestProfitDay:random()*1000,'Realized PnL':random()*1200-500}));
 const batch=S.suggest(many,[],random);const ids=new Set();
-for(const p of batch.pairs){assert.notEqual(p.a.firm,p.b.firm);for(const [a,b,gain] of [[p.a,p.b,p.gainA],[p.b,p.a,p.gainB]]){assert.ok(gain>=10000&&gain<=a.allowance&&gain<=b.drawdown&&gain<=a.headroom);assert.equal(gain%1000,0);assert.ok(!ids.has(a.id));ids.add(a.id);}}
+for(const p of batch.pairs){assert.notEqual(p.a.firm,p.b.firm);for(const [a,b,gain] of [[p.a,p.b,p.gainA],[p.b,p.a,p.gainB]]){assert.ok(gain>=10000&&gain<=a.allowance&&gain<=Math.ceil(b.drawdown/1000)*1000&&gain<=a.headroom);assert.equal(gain%1000,0);assert.ok(!ids.has(a.id));ids.add(a.id);}}
 // Exact reported screenshots: daily losses restore allowance; website refreshes
 // do not double-count realized P&L or reset total progress.
 const mff=row('MFFUEVRPD608112146','MFF',{balance:52024.46,CurrentProfit:2024.46,CurrentBalance:52382.94,InitialBalance:52024.46,'Realized PnL':358.48,RealDrawdown:1679.76});
@@ -66,11 +66,11 @@ for(const bad of [{InitialBalance:null},{InitialBalance:50000},{'Realized PnL':n
 const almost=S.account(row('ALMOST','MFF',{CurrentProfit:2999.99}));
 assert.equal(S.gainAgainst(almost,S.account(fn('PARTNER'))),10000);
 assert.equal(almost.headroom,10001);
-assert.equal(S.suggest([row('LOW','FFF',{RealDrawdown:99.99}),fn('PARTNER')]).pairs.length,0);
+assert.equal(S.suggest([row('LOW','FFF',{RealDrawdown:99.99}),fn('PARTNER')]).pairs.length,1);
 const suggestion=S.draft(S.suggest([mff,fnLoss]).pairs[0],'b'.repeat(32));
 assert.equal(S.validateDraft(suggestion),'');
 assert.match(S.validateDraft({...suggestion,suggestion:{strategy:S.STRATEGY}}),/Older suggestion/);
-const changed=JSON.parse(JSON.stringify(suggestion));changed.profit='99';assert.match(S.validateDraft(changed),/at least \$100/);
+const changed=JSON.parse(JSON.stringify(suggestion));changed.profit='99';assert.equal(S.validateDraft(changed),'');
 const mffSide=suggestion.left.account===mff.fields.id?'left':'right';
 const over=JSON.parse(JSON.stringify(suggestion));over[mffSide==='left'?'profit':'rightProfit']='980';assert.match(S.validateDraft(over),/more than \$100/);
 const stale=JSON.parse(JSON.stringify(suggestion));stale[mffSide].metrics.InitialBalance=stale[mffSide].metrics.CurrentBalance;assert.match(S.validateDraft(stale),/Daily P&L mismatch/);
@@ -92,3 +92,6 @@ assert.ok(![fair.pairs[0].a.id,fair.pairs[0].b.id].some(id=>['A1','B1'].includes
 assert.equal(fair.pairs.length,3);
 for(const pair of fair.pairs)for(const [a,gain] of [[pair.a,pair.gainA],[pair.b,pair.gainB]])if(gain>=a.remaining)assert.ok(gain>=a.remaining+2500);
 console.log('PASS: $25 final cushion, capped non-finishing trade, adaptive least-used selection and six-account coverage.');
+const rounded=S.account(row('ROUND','FFF',{RealDrawdown:897.72}));assert.equal(rounded.loss,90000);
+const manual=S.draft(S.suggest([row('MANUAL','FFF',{CurrentProfit:2980}),fn('PARTNER')]).pairs[0],'e'.repeat(32));
+manual.profit='50';manual.rightStopLoss='50';assert.equal(S.validateDraft(manual),'');

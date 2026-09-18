@@ -29,10 +29,12 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 import contracts
+import auto_quantity
+import datetime as dt
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.37'
+VERSION = '16.0-preview.38'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
 AGENT_VERSIONS = {'16.0-preview.34','16.0-preview.33','16.0-preview.32','16.0-preview.31','16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
@@ -298,7 +300,7 @@ class Center:
         # Callers supply bounded messages; do not log request bodies or enrollment codes.
         text = str(text)[:700]
         with self.lock:
-            self.events.appendleft(dict(time=time.strftime('%H:%M:%S', time.gmtime()), message=text))
+            self.events.appendleft(dict(time=time.strftime('%H:%M:%S', time.gmtime()), utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()), message=text))
         self.logger.info(text)
 
     def observe(self, slot):
@@ -378,7 +380,7 @@ class Center:
                     message=o.get('error') or s.get('message', ''),
                     execution=s.get('execution', ''), sampleUtc=s.get('sampleUtc'),
                     snapshotHeld=bool(cached and not self.active and not self.prepared), lastKnown=cached, accounts=account_list(raw_accounts), rawAccounts=raw_accounts, accountMessage=s.get('accountMessage', ''), sync=s.get('sync', ''), agentSession=s.get('agentSession',''), manualSync=bool(s.get('manualSync')), manualSyncPending=bool(s.get('manualSyncPending')),
-                    defaultAccountSelection=bool(s.get('defaultAccountSelection')), calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
+                    defaultAccountSelection=bool(s.get('defaultAccountSelection')), calibrationRequired=bool(s.get('calibrationRequired')), accountRefreshId=s.get('accountRefreshId'), queueAccountRefresh=bool(s.get('queueAccountRefresh')), singlePair=bool(s.get('singlePair')), skipResults=bool(s.get('skipResults')), backgroundExports=bool(s.get('backgroundExports')), orderSafety=s.get('orderSafety'), candles=s.get('candles'), syncReceipt=s.get('syncReceipt'), queueReceipts=bool(s.get('queueReceipts')),
                     selectedAccount=account_id(s.get('selectedAccount', 'Sim101')), selectedQuantity=s.get('selectedQuantity', 1))
 
     def safe_flat(self, agent):
@@ -839,7 +841,7 @@ class Fleet:
             pair.event('Pair created. Prepare & Verify is required before entry.')
             return identity
 
-    def release_pair(self, identity, strict=False, allow_blank=False):
+    def release_pair(self, identity, strict=False, allow_blank=False, verify_orders=False):
         with self.lock:
             pair = self.get_pair(identity)
             if identity in self.releasing or not pair.operation.acquire(blocking=False):
@@ -853,14 +855,24 @@ class Fleet:
             pair.refresh_both()
             agents = pair.state()['agents']
             def releasable(items):
+                if verify_orders:
+                    for agent in items:
+                        telemetry=agent.get('orderSafety')
+                        try:
+                            stamp=dt.datetime.fromisoformat(telemetry['publishedUtc'].replace('Z','+00:00'))
+                            age=(dt.datetime.now(dt.timezone.utc)-stamp).total_seconds()
+                            account=pair.settings.get('accounts',{}).get(agent['id'])
+                            matches=[a for a in telemetry['accounts'] if account_id(a.get('name',''))==account_id(account)]
+                            if not -2<=age<=5 or len(matches)!=1 or matches[0].get('connected') is not True or matches[0].get('workingOrders')!=0 or matches[0].get('openPositions')!=0: return False
+                        except (TypeError,KeyError,ValueError): return False
                 if strict:
-                    return (not pair.active and all((pair.account_discovery_idle(a) if allow_blank and not pair.opened_ids else pair.safe_flat(a)) for a in items))
+                    return ((not pair.active or (allow_blank and verify_orders)) and all((pair.release_flat(a) if allow_blank else pair.safe_flat(a)) for a in items))
                 return (any(pair.release_flat(a) for a in items)
                         and all(pair.release_flat(a) or (not a['fresh'] and not any(a[k] for k in ('busy','scheduled','pending','closing'))) for a in items))
             if not releasable(agents):
-                raise ValueError('Release requires idle Flat / Flat or Flat / Unknown status.')
+                raise ValueError('Release requires fresh idle Flat readings and, for recovery, current order-safety telemetry with no open positions or working orders. Install NinjaTrader Telemetry on the affected VM.' if verify_orders else 'Release requires idle Flat / Flat or Flat / Unknown status.')
             verified_slots = [a['id'] for a in agents if pair.release_flat(a)]
-            futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {}, 10) for slot in verified_slots]
+            futures = [pair.pool.submit(pair.call, slot, 'unbind_peer', {'verifyOrders':verify_orders,'account':pair.settings.get('accounts',{}).get(slot,'')}, 10) for slot in verified_slots]
             for future in futures:
                 future.result()
             pair.refresh_both()
@@ -971,7 +983,7 @@ class Fleet:
                     results[identity] = {'job':pair.submit('close', {})}
                 except ValueError as exc:
                     results[identity] = {'error':str(exc)}
-            self.global_events.appendleft({'time':time.strftime('%H:%M:%S', time.gmtime()),
+            self.global_events.appendleft({'utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()), 'time':time.strftime('%H:%M:%S', time.gmtime()),
                 'message':f'Close All Pairs requested for {len(results)} pairs. Verify each result separately.'})
         return {'ok':True, 'pairs':results}
 
@@ -1216,7 +1228,7 @@ class Handler(BaseHTTPRequestHandler):
         for key, val in {'Content-Type':kind, 'Content-Length':str(len(data)), 'Cache-Control':'no-store',
                          'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer',
                          'X-Frame-Options':'DENY',
-                         'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"}.items():
+                         'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src https://www.tradingview.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"}.items():
             self.send_header(key, val)
         self.end_headers()
         self.wfile.write(data)
@@ -1237,6 +1249,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed(auth=self.path.startswith('/api/')):
             return
+        if self.path == '/api/auto-quantity':
+            self.reply(200,auto_quantity.configuration(self.server.center.directory));return
         if self.path == '/api/contracts':
             try: self.reply(200, contracts.settings(self.server.center.directory))
             except ValueError as exc: self.reply(400, {'error':str(exc)})
@@ -1250,7 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state(dashboard=self.headers.get('X-Control-View') == 'dashboard'))
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/funded-suggestions.js':'funded-suggestions.js', '/suggestions.js':'suggestions.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/auto-quantity.js':'auto-quantity.js', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/funded-suggestions.js':'funded-suggestions.js', '/suggestions.js':'suggestions.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:
@@ -1284,6 +1298,14 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/planning/refresh':
                 self.server.planning.refresh(body.get('token'))
                 self.reply(202, {'ok':True})
+            elif self.path == '/api/auto-quantity':
+                self.reply(200,auto_quantity.save(self.server.center.directory,body))
+            elif self.path == '/api/auto-quantity/estimate':
+                spec=dict(body['spec']);spec['ticker']=contracts.resolve(self.server.center.directory,spec['ticker'])
+                config=auto_quantity.validate_config(body['config'])
+                self.reply(200,auto_quantity.size(spec,config,self.server.center.view(config['vm'])))
+            elif self.path == '/api/vm-release':
+                self.reply(200,self.server.queue.release_vm(body.get('id')))
             elif self.path == '/api/vm-remove':
                 self.reply(200, self.server.queue.remove_vm(body.get('id')))
             elif self.path == '/api/vm-sync':

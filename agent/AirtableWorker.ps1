@@ -467,7 +467,10 @@ function Invoke-AirtableCurl($RequestParams) {
   if(-not $match.Success) { throw 'Airtable curl returned an unreadable response.' }
   $status=[int]$match.Groups[2].Value
   if($status -lt 200 -or $status -ge 300) {
-   $exception=New-Object System.Exception("Airtable returned HTTP $status.")
+   $detail=''
+   try { $problem=$match.Groups[1].Value | ConvertFrom-Json; $detail=([string]$problem.error.type+': '+[string]$problem.error.message) } catch { $detail='Response details unavailable.' }
+   if($detail.Length -gt 500){$detail=$detail.Substring(0,500)}
+   $exception=New-Object System.Exception("Airtable returned HTTP $status. $detail")
    $exception.Data['HttpStatus']=$status
    throw $exception
   }
@@ -499,6 +502,7 @@ function Api([string]$method,[string]$url,$body=$null) {
    $code=Get-AirtableHttpStatus $_
    # Stop immediately on an API failure; do not proceed to another batch.
    $detail=[string]$_.ErrorDetails.Message
+   if(-not $detail){$detail=$_.Exception.Message}
    throw "Airtable request failed (HTTP $code). $detail Check token scopes, base access, field names and writable field types."
   }
  }

@@ -4,7 +4,7 @@
   let fleet=[],data={rows:[]},busy=false,resizing=false,dragging=false,detailId='';const duplicateKeys=new Map();
   let sortColumn=10,sortDirection=-1;
   const statusFilters=new Set(),tableCache=new Map();let visibleLimit=250,dateOptionsKey='',sessionInitialized=false,lastSnapshot=null,lastQueueEvent='',dayKey=null;
-  const statusName=r=>r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status==='Error'?'Errored':r.status;
+  const statusName=r=>r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status==='Error'?'Error':r.status;
   const selected=new Set(),saving=new Map(),acknowledged=new Map(),starting=new Set();let mutating=false,toastTimer;
   function toast(count){const box=el('queue-toast');clearTimeout(toastTimer);box.textContent=count?`${count} ${count===1?'pair':'pairs'} started in the queue successfully.`:'No new pairs to start.';box.hidden=false;toastTimer=setTimeout(()=>{box.hidden=true;},5000);}
   const centralDateFormatter=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'});
@@ -26,7 +26,7 @@
   function progress(rows){
     const counts={complete:0,pairing:0,waiting:0,error:0,awaiting:0};
     for(const r of rows){if(r.status==='Cancelled')continue;if(r.status==='Complete')counts.complete++;
-      else if(r.status==='Error')counts.error++;else if(['Queued','Waiting'].includes(r.status))counts.waiting++;
+      else if(['Error','Need check'].includes(r.status))counts.error++;else if(['Queued','Waiting','Need check'].includes(r.status))counts.waiting++;
       else if(r.status==='Awaiting results')counts.awaiting++;else counts.pairing++;}
     const total=Object.values(counts).reduce((a,b)=>a+b,0),percent=total?Math.round(100*counts.complete/total):0;
     const host=el('progress-counts');host.replaceChildren();
@@ -34,7 +34,7 @@
     el('progress-percent').textContent=percent+'%';const track=el('progress-track');track.setAttribute('aria-valuenow',String(percent));track.setAttribute('aria-valuetext',`${counts.complete} of ${total} complete, ${counts.pairing} pairing, ${counts.waiting} waiting, ${counts.error} errors, ${counts.awaiting} awaiting results`);
     for(const name of ['complete','pairing','waiting','error'])track.querySelector('.progress-'+name).style.width=(total?counts[name]*100/total:0)+'%';
   }
-  const pending=r=>['Queued','Waiting'].includes(r.status);
+  const pending=r=>['Queued','Waiting','Need check'].includes(r.status);
   const dollars=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);
   async function action(name,body={}){
     if(mutating)return;mutating=true;render();
@@ -59,8 +59,8 @@
     if(!el('planning-panel').hidden)renderTable('queue-table',[...data.rows.filter(r=>planned(r)&&!starting.has(r.key)),...saving.values()].filter((r,i,rs)=>rs.findIndex(x=>(x.key||x.id)===(r.key||r.id))===i),true);
     el('trading-retry').hidden=!data.rows.some(r=>!r.localDraft&&r.dirty&&(r.closed||r.released22||r.afterId||['Complete','Cancelled'].includes(r.status)));
     const sessionRows=tradingRows();
-    if(!el('trading-panel').hidden){
     progress(sessionRows);
+    if(!el('trading-panel').hidden){
     const filtered=sessionRows.filter(r=>!statusFilters.size||statusFilters.has(statusName(r)));
     renderTable('trading-queue-table',sortedRows(filtered).slice(0,visibleLimit),false);
     el('trading-load-more').hidden=filtered.length<=visibleLimit;
@@ -105,9 +105,10 @@
   function tradeSettings(s,side){
     const [a,b]=String(s.ratio||'1:1').split(':').map(Number),factor=a>0&&b>0?b/a:1;
     const values=side==='right'?[Number(s.stopLoss)*factor,Number(s.profit)*factor]:[Number(s.profit),Number(s.stopLoss)];
-    const money=v=>Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:2}).format(Math.round((v+Number.EPSILON)*100)/100):'—';
+    const money=v=>Number.isFinite(v)?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:2}).format(Math.ceil(v-1e-9)):'—';
     return 'P '+money(values[0])+' L '+money(values[1]);
   }
+  function directionArrow(s,side){const buy=(side==='left')===(s.direction==='buy'),n=node('span',buy?'Buy ↑ ':'Sell ↓ ');n.className=buy?'queue-win':'queue-loss';return n;}
   function renderTable(id,rows,isPlanning){
     const table=el(id);const head=node('thead'),hr=node('tr');
     if(!isPlanning)rows=sortedRows(rows);
@@ -131,7 +132,7 @@
       }else th.textContent=label;
       if(!isPlanning&&column===7){
         const details=node('details');details.className='status-filter';const summary=node('summary',statusFilters.size?'Filter ('+statusFilters.size+')':'Filter');details.append(summary);const menu=node('div');menu.className='status-filter-menu';
-        for(const name of ['All','Queued','Waiting','Preparing','Pairing','Complete','Awaiting results','Errored','Canceled','Removing']){const label=node('label'),box=node('input');box.type='checkbox';box.checked=name==='All'?!statusFilters.size:statusFilters.has(name);box.onchange=()=>{if(name==='All')statusFilters.clear();else box.checked?statusFilters.add(name):statusFilters.delete(name);for(const x of menu.querySelectorAll('input'))x.checked=x.dataset.status==='All'?!statusFilters.size:statusFilters.has(x.dataset.status);summary.textContent=statusFilters.size?'Filter ('+statusFilters.size+')':'Filter';visibleLimit=250;render();};box.dataset.status=name;label.append(box,document.createTextNode(name));menu.append(label);}details.append(menu);details.ondragstart=e=>e.preventDefault();details.onclick=e=>e.stopPropagation();th.append(details);
+        for(const name of ['All','Queued','Waiting','Preparing','Pairing','Complete','Awaiting results','Error','Need check','Canceled','Removing']){const label=node('label'),box=node('input');box.type='checkbox';box.checked=name==='All'?!statusFilters.size:statusFilters.has(name);box.onchange=()=>{if(name==='All')statusFilters.clear();else box.checked?statusFilters.add(name):statusFilters.delete(name);for(const x of menu.querySelectorAll('input'))x.checked=x.dataset.status==='All'?!statusFilters.size:statusFilters.has(x.dataset.status);summary.textContent=statusFilters.size?'Filter ('+statusFilters.size+')':'Filter';visibleLimit=250;render();};box.dataset.status=name;label.append(box,document.createTextNode(name));menu.append(label);}details.append(menu);details.ondragstart=e=>e.preventDefault();details.onclick=e=>e.stopPropagation();th.append(details);
       }
       hr.append(th);
     }
@@ -145,16 +146,16 @@
       const old=cache.rows.get(key);if(old?.signature===signature){if(body.children[position]!==old.tr)body.insertBefore(old.tr,body.children[position]||null);position++;continue;}
       const tr=node('tr'),s=r.spec,selection=node('td');tr.dataset.pair=r.id;tr.dataset.key=r.key||'';
       if(removable(r)){const box=node('input');box.type='checkbox';box.checked=selected.has(r.id);box.disabled=mutating;box.setAttribute('aria-label','Select '+r.id);box.onchange=()=>{box.checked?selected.add(r.id):selected.delete(r.id);updateButtons();};selection.append(box);}
-      tr.append(selection,node('td',r.localDraft?'Draft':r.id.replace(/^PAIR-/, '')));
+      const identity=node('td',r.localDraft?'Draft':r.id.replace(/^PAIR-/, ''));if([1,2,3].includes(r.priority)){const badge=node('small',' · P'+r.priority);badge.title='Queue priority '+r.priority;identity.append(badge);}tr.append(selection,identity);
       for(const side of ['left','right']){const slot=s[side];if(!slot){tr.append(node('td','—'),node('td','—'));continue;}
         const balance=node('td',dollars(((r.after?.[slot]||r.before?.[slot])?.balance ?? s.balances?.[slot]))),settings=node('small');settings.className='pair-settings';
-        const [profit,loss]=tradeSettings(s,side).split(' L ');const p=node('span',profit),l=node('span','L '+loss);p.className='queue-win';l.className='queue-loss';settings.append(p,document.createTextNode(' '),l);balance.append(settings);
+        const [profit,loss]=tradeSettings(s,side).split(' L ');const p=node('span',profit),l=node('span','L '+loss);p.className='queue-win';l.className='queue-loss';settings.append(p,document.createTextNode(' '),l);balance.prepend(directionArrow(s,side));balance.append(settings);
         const account=node('td');account.append(node('div',s.masters[slot]||s.names?.[slot]||'—'));const number=node('small',s.accounts[slot]);number.className='pair-account-number';account.append(number);tr.append(account,balance);
       }
       tr.append(node('td',`${s.ticker.split(' ')[0]} ${s.quantities[s.left]??'—'}/${s.quantities[s.right]??'—'}`));
       const label=starting.has(r.key)?'Starting…':statusName(r);
-      const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase().replaceAll(' ','-');status.append(phase);tr.append(status);
-      for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';tr.append(td);}
+      const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase().replaceAll(' ','-');status.append(phase);if(r.status==='Error'||r.status==='Need check'){const info=node('button','i');info.className='status-info';info.title=r.message||r.releaseMessage||'No additional details';info.setAttribute('aria-label','Details for '+r.id);info.onclick=()=>window.alert(info.title);status.append(info);}tr.append(status);
+      for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';if(slot)td.prepend(directionArrow(s,slot===s.left?'left':'right'));tr.append(td);}
       const completed=r.completedUtc||r.synced||r.cancelled,completedCell=node('td');
       if(completed){const date=new Date(completed);if(Number.isFinite(date.getTime())){completedCell.append(node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)),node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit',second:'2-digit'}).format(date)));}}
       tr.append(completedCell);
@@ -169,13 +170,13 @@
     if(r.status==='Saving…'||starting.has(r.key))return;
     const add=(label,name,extra={},blue=false)=>{const b=node('button',label);b.className=blue?'duplicate-button':'quiet';b.disabled=mutating;b.onclick=()=>action(name,{id:r.id,...extra});target.append(b);};
     if(r.localDraft&&r.draft){const b=node('button','Edit');b.className='quiet';b.disabled=mutating;b.onclick=async()=>{try{const result=await api('/api/queue/edit-draft',{id:r.id});acknowledged.delete(r.key);window.dispatchEvent(new CustomEvent('edit-local-draft',{detail:result.draft.draft}));await poll();}catch(e){el('queue-status').textContent=e.message;}};target.append(b);}
+    if(r.status==='Error')add('Cancel','resolve');
     if(r.status==='Awaiting results'||(r.status==='Error'&&r.closed))add('Skip Results','skip-results');
     if(pending(r)){if(r.duplicateOf&&!r.dispatched)add('Start','start-one');add('Cancel','cancel');}
     if(r.status==='Removing')add('Cancel','cancel');
     if(r.status==='Error'){
       if(!r.started||r.canRetryReadiness)add('Retry','retry-prepare');
       else if(r.closed&&r.afterId)add('Retry sync','retry');
-      add('Cancel','resolve');
     }
     if(r.pairId&&(r.status==='Trading'||(r.status==='Error'&&r.started&&!r.closed))){
       const b=node('button','Close Pair');b.className='close';b.disabled=mutating;

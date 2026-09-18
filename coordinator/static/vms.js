@@ -27,7 +27,7 @@
  function position(vm){return vm.fresh?vm.position:(vm.lastKnown?.position?vm.lastKnown.position+' (last known)':'Unknown');}
  function pairError(vm){return vm.pairId?queueRows.find(row=>row.pairId===vm.pairId&&row.status==='Error'):null;}
  function availability(vm){
-   if(pairError(vm))return 'Errored';
+   if(pairError(vm))return 'Error';
    if(pending.has(vm.id)||vm.refresh?.status==='running')return 'Refreshing…';
    if(vm.pairId)return 'Paired';
    if(vm.defaultAccount?.status==='running')return 'Selecting Sim101…';
@@ -56,6 +56,7 @@
      syncButton.disabled=syncing||!vm.online||!vm.manualSync;syncButton.setAttribute('aria-label','Sync Airtable for '+vm.name);
      syncButton.title=!vm.manualSync?'Update this VM agent to enable remote sync.':syncing?'Sync is running or queued; follow VM Activity.':'Run Sync Airtable Now on this VM. Waits if trading automation is busy.';
      syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);
+     if(vm.pairId){const release=node('button','Release VMs');release.className='quiet';release.onclick=async()=>{release.disabled=true;try{const result=await api('/api/vm-release',{id:vm.id});el('vms-message').textContent=result.message;window.dispatchEvent(new Event('queue-refresh'));await poll();}catch(e){el('vms-message').textContent=e.message;}finally{release.disabled=false;}};actions.append(release);}
      line.append(actions);row.append(line);
      const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
      const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);const secondary=node('div');secondary.className='vm-row-secondary';secondary.append(details);
