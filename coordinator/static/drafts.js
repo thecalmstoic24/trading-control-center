@@ -26,7 +26,8 @@
       if(window.planningSelection.suggestionPool().viewKey!==pool.viewKey)throw Error('The Planning view changed. Click Suggest pairs again.');
       fleet=state.fleet||[];pairs=state.pairs||[];queued=queue.rows||[];
       const session=queue.activeSession;
-      const history=[...(queue.rows||[]),...(queue.history||[])].filter(r=>session?r.sessionId===session:(r.dispatchedAt||r.started||r.created||'').slice(0,10)===new Date().toISOString().slice(0,10));
+      const day=value=>{const date=new Date(value);return Number.isFinite(date.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(date):'';};
+      const history=[...(queue.rows||[]),...(queue.history||[])].filter(r=>session?r.sessionId===session:day(r.dispatchedAt||r.started||r.created||'')===day(Date.now()));
       const result=PairSuggestions.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())],Math.random,history);
       const additions=result.pairs.map(pair=>PairSuggestions.draft(pair,crypto.randomUUID().replaceAll('-','')));
       for(const d of additions){chooseVM(d.left);chooseVM(d.right);drafts.push(d);}

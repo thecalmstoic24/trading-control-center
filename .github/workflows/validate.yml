@@ -69,13 +69,9 @@ jobs:
           $env:NODE_PATH="$env:RUNNER_TEMP/tcc-browser/node_modules"
           node "$env:NODE_PATH/playwright/cli.js" install chromium
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          node tests/test_preview28_browser.cjs
-          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          node tests/test_suggestions_browser.cjs
-          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          node tests/test_preview34_browser.cjs
-          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          node tests/test_preview35_browser.cjs
-          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          node tests/test_preview36_browser.cjs
-          exit $LASTEXITCODE
+          $browserFailed = 0
+          foreach($test in @('test_preview36_browser.cjs','test_preview28_browser.cjs','test_suggestions_browser.cjs','test_preview34_browser.cjs','test_preview35_browser.cjs')) {
+            node "tests/$test"
+            if($LASTEXITCODE -ne 0){$browserFailed = 1}
+          }
+          exit $browserFailed

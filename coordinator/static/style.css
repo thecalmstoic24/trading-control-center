@@ -225,3 +225,4 @@ button:disabled{box-shadow:none;cursor:default}
 .trading-split>.queue-section>.section-title{flex-wrap:nowrap;align-items:center}
 .trading-toolbar{flex:1 1 350px;min-width:260px}.trading-toolbar select{width:190px}
 @media(max-width:1050px){.trading-split>.queue-section>.section-title{flex-wrap:wrap}.trading-progress{margin-left:0}}
+.tabs button[aria-selected=false]{background:#e3ebf1;border-color:#9eafbd;color:#40596c}
