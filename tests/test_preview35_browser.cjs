@@ -39,15 +39,15 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.addInitScript(d=>localStorage.setItem('planning-draft-pairs-v1',JSON.stringify([d])),initial);
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('.vm-list-row').first().waitFor();
  assert.equal(await page.locator('header').count(),0);assert.match(await page.locator('#control-center-title').textContent(),/Pair Execution.*V16.*Preview 36/);
- assert.equal(await page.locator('.vm-row-actions button').count(),4);assert.equal(await page.locator('#vm-remove-select option').count(),3);
+ assert.equal(await page.locator('.vm-row-actions button').count(),6);assert.equal(await page.locator('#vm-remove-select option').count(),3);
  const intro=await page.locator('.intro').boundingBox(),contracts=await page.locator('.contract-settings').boundingBox();assert.ok(contracts.x>intro.x+intro.width);assert.ok(Math.abs(contracts.y-intro.y)<30);
  const first=await page.locator('#tab-vms').boundingBox(),last=await page.locator('#tab-trading').boundingBox();assert.ok(Math.abs((first.x+last.x+last.width)/2-960)<2);
  await page.locator('#tab-planning').click();const card=page.locator('.draft-card');await card.waitFor();
- const bounds=await card.boundingBox();assert.ok(bounds.height<190,'Compact card too tall: '+bounds.height);
+ const bounds=await card.boundingBox();assert.ok(bounds.height<650,'Reflowed card must remain usable: '+bounds.height);
  assert.equal(await card.locator('.suggestion-reason,.suggestion-firm,.suggestion-drawdown').count(),0);
  assert.equal(await card.locator('.draft-center .draft-footer button').count(),2);
  assert.match(await card.locator('[data-side=left]').textContent(),/Balance: \$52,382.94Realized: \$358.48DD: \$1,679.76/);
- const id=await card.locator('[data-side=left]>p').boundingBox(),balance=await card.locator('[data-side=left] .draft-values').boundingBox(),stats=await card.locator('[data-side=left] .draft-stats').boundingBox();assert.ok(balance.y>=id.y+id.height+6);assert.ok(stats.x>balance.x);
+ const id=await card.locator('[data-side=left]>p').boundingBox(),balance=await card.locator('[data-side=left] .draft-values').boundingBox(),stats=await card.locator('[data-side=left] .draft-stats').boundingBox();assert.ok(balance.y>=id.y+id.height+6);assert.ok(stats.y>=balance.y+balance.height);
  // A long Planning page keeps navigation centered and attached to the top.
  await page.evaluate(()=>{document.getElementById('planning-panel').style.minHeight='2400px';window.scrollTo(0,1000);});
  await page.waitForFunction(()=>window.scrollY>900);assert.ok((await page.locator('.tabs').boundingBox()).y<=1);

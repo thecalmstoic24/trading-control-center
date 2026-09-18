@@ -44,6 +44,7 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
    assert.equal(await card.locator('.draft-account').evaluateAll(ns=>ns.every(n=>n.scrollWidth<=n.clientWidth+1)),true);
  }
  await page.locator('.draft-panel').evaluate(n=>{n.style.width='';});
+ await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview39-planning.png')});
  await page.locator('.auto-settings input[type=checkbox]').check();await page.getByRole('button',{name:'Save sizing settings'}).click();
  await page.waitForFunction(()=>document.body.classList.contains('auto-enabled'));
  assert.equal(await card.locator('[data-value-key=leftQuantity]').isVisible(),false);
