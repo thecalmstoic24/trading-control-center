@@ -216,7 +216,7 @@
     const rows=new Map(e.detail.map(r=>[r.id,r]));
     for(const d of drafts)for(const side of ['left','right']){
       const item=d[side],row=rows.get(item?.record);if(!row)continue;
-      item.balance=row.fields.CurrentBalance??null;item.metrics=row.fields;
+      item.balance=(d.suggestion?.strategy===FundedSuggestions.STRATEGY?row.fields.RealCurrentBalance:row.fields.CurrentBalance)??null;item.metrics=row.fields;
       const cell=el('draft-list').querySelector(`[data-key="${d.key}"] [data-side="${side}"] .draft-metrics`);
       if(cell){
         updateMetrics(cell,item);
