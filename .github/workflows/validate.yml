@@ -78,6 +78,7 @@ jobs:
           npm install --prefix "$env:RUNNER_TEMP/tcc-browser" playwright@1.51.1 --ignore-scripts --no-audit --no-fund
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $env:NODE_PATH="$env:RUNNER_TEMP/tcc-browser/node_modules"
+          $env:TEMP=$env:RUNNER_TEMP
           node "$env:NODE_PATH/playwright/cli.js" install chromium
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $browserFailed = 0

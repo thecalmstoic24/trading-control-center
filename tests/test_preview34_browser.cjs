@@ -31,7 +31,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const selection=await page.locator('#planning-select-all').boundingBox(),hide=await page.locator('#planning-column-options').boundingBox(),batch=await page.locator('#draft-add-all').boundingBox(),strategy=await page.locator('.suggestion-beta').boundingBox();
  assert.ok(selection.y>=hide.y+hide.height);assert.ok(selection.height<=28);assert.equal(batch.height,selection.height);assert.ok(batch.y>=strategy.y+strategy.height);assert.ok(strategy.height<100);
  await page.locator('#planning-group-fund').click();
- assert.deepEqual(await page.locator('.fund-heading').allTextContents(),['ALPHA','ZETA','Unspecified fund']);
+ assert.deepEqual(await page.locator('.fund-heading').allTextContents(),['ALPHA (2)','ZETA (2)','Unspecified fund (1)']);
  assert.equal(await page.locator('#planning-table tbody .planning-column-header').count(),3);
  const accountOrder=()=>page.locator('#planning-table tr[data-record]').evaluateAll(rs=>rs.map(r=>r.dataset.account));
  assert.deepEqual(await accountOrder(),['A2','A1','Z1','Z2','U1']);

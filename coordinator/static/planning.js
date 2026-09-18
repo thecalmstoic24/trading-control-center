@@ -37,7 +37,7 @@
     });
   }
   function fundName(row){const key=Object.keys(row.fields||{}).find(k=>k.trim().toLowerCase()==='firm');return display(row.fields[key]).trim().toUpperCase();}
-  function visibleRows(rows,layout,columns){if(!layout.groupByFund)return ordered(rows,layout,columns);const groups=new Map();for(const row of rows){const f=fundName(row);if(!groups.has(f))groups.set(f,[]);groups.get(f).push(row);}return [...groups.keys()].sort((a,b)=>a.localeCompare(b)).flatMap(f=>ordered(groups.get(f),{...layout,sort:layout.fundSort?.[f]||layout.sort},columns));}
+  function visibleRows(rows,layout,columns){if(!layout.groupByFund)return ordered(rows,layout,columns);const groups=new Map();for(const row of rows){const f=fundName(row);if(!groups.has(f))groups.set(f,[]);groups.get(f).push(row);}return [...groups.keys()].sort((a,b)=>!a?1:!b?-1:a.localeCompare(b)).flatMap(f=>ordered(groups.get(f),{...layout,sort:layout.fundSort?.[f]||layout.sort},columns));}
   function reconcile(order,rows){return [...new Set([...order,...rows.map(r=>r.id)])];}
   if(typeof module!=='undefined'&&module.exports){module.exports={display,ordered,reconcile,monetary,cellDisplay,fundName,visibleRows};return;}
   const el=id=>document.getElementById(id);

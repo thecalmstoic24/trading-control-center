@@ -107,7 +107,7 @@ const path=require('node:path'),assert=require('node:assert/strict');
  await page.locator('#draft-add-all').click();
  await page.locator('#draft-message').filter({hasText:'1 pair added to queue. 2 draft(s) remain'}).waitFor();
  assert.equal(writes.length,2);assert.ok(writes.every(w=>w.path==='/api/queue/add'));
- assert.equal(await cards.count(),2);assert.match(await page.locator(`[data-key="${invalidKey}"] .draft-error`).textContent(),/at least \$100/);
+ assert.equal(await cards.count(),2);assert.match(await page.locator(`[data-key="${invalidKey}"] .draft-error`).textContent(),/positive profit and loss/);
  assert.match(await page.locator('#draft-list').textContent(),/Test account rejected/);
  assert.equal(queue.running,false);rejectAccount='';
  await page.locator(`[data-key="${invalidKey}"] [data-value-key=profit]`).fill('100');

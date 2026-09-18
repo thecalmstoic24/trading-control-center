@@ -3,7 +3,7 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try{
  const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));
- let config={enabled:false,vm:'left',bars:10,multiplier:1};
+ let config={enabled:false,vm:'left',bars:10,multiplier:1};const queue={rows:[],running:false,message:'Paused',sessions:[]};
  const fleet=['left','right'].map(id=>({id,name:id,online:true,fresh:true,position:'Flat',accounts:['Sim101'],refresh:{},pairId:'pair'}));
  const draft={key:'a'.repeat(32),ticker:'NQ',direction:'buy',ratio:'1:1',leftQuantity:'2',rightQuantity:'2',profit:'800',stopLoss:'600',left:{account:'A',master:'MFF-TEST'},right:{account:'B',master:'FN-TEST'}};
  await page.addInitScript(d=>localStorage.setItem('planning-draft-pairs-v1',JSON.stringify([d])),draft);
@@ -14,9 +14,12 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
    if(url.pathname==='/api/auto-quantity'){config=body;result=config;}
    if(url.pathname==='/api/auto-quantity/estimate')result={ticker:'MNQ DEC26',leftQuantity:20,rightQuantity:30,distance:20};
    if(url.pathname==='/api/vm-release')result={ok:true,message:'Pair reservations released'};
-   if(url.pathname==='/api/queue/add')result={row:{key:body.draftKey}};
+   if(url.pathname==='/api/queue/add'){
+    const row={id:'DRAFT-'+body.draftKey,key:body.draftKey,localDraft:true,status:'Queued',spec:{...body,left:'left',right:'right',accounts:{left:'A',right:'B'},masters:{left:'MFF-TEST',right:'FN-TEST'},quantities:{left:+body.draft.leftQuantity,right:+body.draft.rightQuantity},balances:{}}};
+    queue.rows.push(row);result={row};
+   }
   }else if(url.pathname==='/api/state')result={version:'16.0-preview.38',dashboard:true,fleet,pairs:[],events:[],vmEvents:[]};
-  else if(url.pathname==='/api/queue')result={rows:[],running:false,message:'Paused',sessions:[]};
+  else if(url.pathname==='/api/queue')result=queue;
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],views:[{key:'test',name:'Test'}],viewKey:'test',updatedAt:1,busy:false,error:''};
   else if(url.pathname==='/api/auto-quantity')result=config;
   else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
