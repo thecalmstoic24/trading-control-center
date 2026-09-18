@@ -4,6 +4,7 @@ Pair receipts come from the authenticated agent after its CSV values have been
 confirmed by Airtable. Accounts browsing remains read-only in planning.py.
 """
 import contracts
+import funded_strategy
 import copy
 import datetime as dt
 import json
@@ -274,7 +275,8 @@ class PairQueue:
         for v in amounts.values():
             if isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or not 0 < v <= 100000 or round(v,2) != v:
                 raise ValueError('Enter positive Currency stop loss and profit target amounts, up to two decimals.')
-        pair_amounts(body)
+        currency_amounts = pair_amounts(body)
+        strategy = body.get('strategy') or (body.get('draft') or {}).get('suggestion', {}).get('strategy')
         accounts = {}; quantities = {}; masters = {}; records = {}; balances = {}; metrics = {}
         if defer_vm and len(members)==2 and body['accounts'][left]==body['accounts'][right]:
             raise ValueError('The same real account cannot be both sides of one pair.')
@@ -301,6 +303,16 @@ class PairQueue:
             balances[slot] = matches[0]['fields'].get('CurrentBalance') if defer_vm else money(matches[0]['fields'].get('CurrentBalance'))
             metrics[slot]={k:matches[0]['fields'].get(k) for k in ('RealDrawdown','CurrentBalance','Realized PnL','stop','Trailing max drawdown','tradingDays','largestProfitDay')}
             metrics[slot]['ScraperNote']=next((str(v)[:500] for k,v in matches[0]['fields'].items() if re.sub('[^a-z]','',k.lower())=='scrapernote' and v is not None),'')
+        if strategy == funded_strategy.STRATEGY:
+            if len(members) != 2:
+                raise ValueError('New Non-consistency requires two accounts.')
+            fields = []
+            for s in (left, right):
+                matches = [r['fields'] for r in source if r.get('fields', {}).get('id') == accounts[s]]
+                if len(matches) != 1:
+                    raise ValueError('New Non-consistency requires two uniquely matched Airtable accounts.')
+                fields.append(matches[0])
+            funded_strategy.validate(*fields, currency_amounts)
         if len(members)==2 and all(accounts[s]!='Sim101' for s in members):
             funds=[]
             for slot in (left,right):
@@ -309,7 +321,7 @@ class PairQueue:
             if funds[0] and funds[0]==funds[1]: raise ValueError('Same fund: choose accounts from different funds.')
         if len(members)==2 and accounts[left] == accounts[right] and accounts[left] != 'Sim101': raise ValueError('The same real account cannot be both sides of one pair.')
         if len(members)==2: validate_quantities(dict(body, quantities=quantities), left, right)
-        return dict(**({'vmMatchPending':True} if defer_vm else {}),**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
+        return dict(**({'strategy':strategy} if strategy == funded_strategy.STRATEGY else {}),**({'vmMatchPending':True} if defer_vm else {}),**({'ratio':body['ratio']} if 'ratio' in body else {}),left=left,right=right,ticker=ticker,direction=direction,accounts=accounts,quantities=quantities,
                     names=names,masters=masters,records=records,balances=balances,metrics=metrics,**amounts)
 
     def validate_vms(self, body):

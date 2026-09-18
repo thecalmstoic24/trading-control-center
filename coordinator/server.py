@@ -32,7 +32,7 @@ import contracts
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.36'
+VERSION = '16.0-preview.37'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
 AGENT_VERSIONS = {'16.0-preview.34','16.0-preview.33','16.0-preview.32','16.0-preview.31','16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
@@ -1250,7 +1250,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             self.reply(200, self.server.center.state(dashboard=self.headers.get('X-Control-View') == 'dashboard'))
             return
-        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/suggestions.js':'suggestions.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
+        files = {'/':'index.html', '/app.js':'app.js', '/planning.js':'planning.js', '/queue.js':'queue.js', '/trading-layout.js':'trading-layout.js', '/vms.js':'vms.js', '/ratio.js': 'ratio.js', '/contracts.js':'contracts.js', '/funded-suggestions.js':'funded-suggestions.js', '/suggestions.js':'suggestions.js', '/drafts.js':'drafts.js', '/draft-payload.js':'draft-payload.js', '/vm-activity.js':'vm-activity.js', '/style.css':'style.css', '/favicon.svg':'favicon.svg'}
         kinds = {'.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
                  '.css':'text/css; charset=utf-8', '.svg':'image/svg+xml'}
         if self.path not in files:

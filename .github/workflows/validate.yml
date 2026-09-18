@@ -43,6 +43,9 @@ jobs:
       - name: Queue registration removal regression
         shell: pwsh
         run: python -m unittest discover -s tests -p test_preview36.py
+      - name: Funded strategy eligibility and queue guards
+        shell: pwsh
+        run: python -m unittest discover -s tests -p "test_funded*.py"
       - name: JavaScript regressions
         shell: pwsh
         run: |
@@ -58,6 +61,8 @@ jobs:
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_vm_sync.cjs
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          node tests/test_funded_suggestions.cjs
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           node tests/test_suggestions.cjs
           exit $LASTEXITCODE
 
@@ -70,7 +75,7 @@ jobs:
           node "$env:NODE_PATH/playwright/cli.js" install chromium
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $browserFailed = 0
-          foreach($test in @('test_preview36_browser.cjs','test_preview28_browser.cjs','test_suggestions_browser.cjs','test_preview34_browser.cjs','test_preview35_browser.cjs')) {
+          foreach($test in @('test_funded_browser.cjs','test_preview36_browser.cjs','test_preview28_browser.cjs','test_suggestions_browser.cjs','test_preview34_browser.cjs','test_preview35_browser.cjs')) {
             node "tests/$test"
             if($LASTEXITCODE -ne 0){$browserFailed = 1}
           }

@@ -20,7 +20,8 @@
     const button=el('suggest-pairs'),status=el('suggestion-status');
     suggesting=true;button.disabled=true;button.textContent='Suggesting…';
     try{
-      if(el('suggestion-strategy').value!==PairSuggestions.STRATEGY)throw Error('Choose a supported strategy.');
+      const strategy=el('suggestion-strategy').value===FundedSuggestions.STRATEGY?FundedSuggestions:PairSuggestions;
+      if(el('suggestion-strategy').value!==strategy.STRATEGY)throw Error('Choose a supported strategy.');
       const pool=window.planningSelection.suggestionPool(),blockedBefore=Object.keys(usage());
       const [state,queue]=await Promise.all([api('/api/state'),api('/api/queue')]);
       if(window.planningSelection.suggestionPool().viewKey!==pool.viewKey)throw Error('The Planning view changed. Click Suggest pairs again.');
@@ -28,8 +29,8 @@
       const session=queue.activeSession;
       const day=value=>{const date=new Date(value);return Number.isFinite(date.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(date):'';};
       const history=[...(queue.rows||[]),...(queue.history||[])].filter(r=>session?r.sessionId===session:day(r.dispatchedAt||r.started||r.created||'')===day(Date.now()));
-      const result=PairSuggestions.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())],Math.random,history);
-      const additions=result.pairs.map(pair=>PairSuggestions.draft(pair,crypto.randomUUID().replaceAll('-','')));
+      const result=strategy.suggest(pool.rows,[...blockedBefore,...Object.keys(usage())],Math.random,history);
+      const additions=result.pairs.map(pair=>strategy.draft(pair,crypto.randomUUID().replaceAll('-','')));
       for(const d of additions){chooseVM(d.left);chooseVM(d.right);drafts.push(d);}
       if(additions.length){save();render();usage();}
       status.textContent=additions.length+' suggested pair'+(additions.length===1?'':'s')+' added from '+pool.scope+'. Review and confirm each card. '+result.skipped.length+' account(s) not used.';
@@ -60,12 +61,12 @@
   }
   const fund=item=>{const name=(item?.master||'').trim().toUpperCase();return name.match(/^(MFF|LCD|FN|BUL|APEX|TOPSTEP|OX)/)?.[0]||name.split(/[-_\s]+/)[0];};
   function problem(d){
-    if(d.suggestion?.strategy===PairSuggestions.STRATEGY&&d.left&&d.right){
+    if([PairSuggestions.STRATEGY,FundedSuggestions.STRATEGY].includes(d.suggestion?.strategy)&&d.left&&d.right){
       const a=PairSuggestions.firm(d.left.metrics),b=PairSuggestions.firm(d.right.metrics);
       if(!a||!b)return 'Missing firm';
       if(a===b)return 'Same fund';
     }
-    const suggestionProblem=PairSuggestions.validateDraft(d);if(suggestionProblem)return suggestionProblem;
+    const suggestionProblem=PairSuggestions.validateDraft(d)||FundedSuggestions.validateDraft(d);if(suggestionProblem)return suggestionProblem;
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
     const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
     if(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a)return 'Invalid quantity';
@@ -224,6 +225,11 @@
     }
     save();
   });
+  el('suggestion-strategy').onchange=()=>{
+    const funded=el('suggestion-strategy').value===FundedSuggestions.STRATEGY;
+    el('test-strategy-info').hidden=funded;el('funded-strategy-info').hidden=!funded;
+  };
+  el('suggestion-strategy').onchange();
   el('suggest-pairs').onclick=suggestPairs;
   el('draft-left').onclick=()=>add('left');el('draft-right').onclick=()=>add('right');
   window.addEventListener('fleet-updated',e=>{fleet=e.detail.fleet||[];pairs=e.detail.pairs||[];
