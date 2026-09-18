@@ -212,4 +212,5 @@ async function poll(){
     for(const id of ['vm-left','vm-right']){const root=$(id);root.querySelector('.position').textContent='Unknown';root.querySelector('.position').className='position idle';root.querySelector('.status').textContent='Status unknown';root.querySelector('.status').classList.remove('fresh');}}
   finally{polling=false;}
 }
+window.addEventListener('load',()=>{fleetEventKey='';poll();});
 poll();setInterval(poll,1000);

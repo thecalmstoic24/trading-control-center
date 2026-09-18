@@ -7,10 +7,11 @@
   const statusName=r=>r.status==='Trading'?'Pairing':r.status==='Cancelled'?'Canceled':r.status==='Error'?'Errored':r.status;
   const selected=new Set(),saving=new Map(),acknowledged=new Map(),starting=new Set();let mutating=false,toastTimer;
   function toast(count){const box=el('queue-toast');clearTimeout(toastTimer);box.textContent=count?`${count} ${count===1?'pair':'pairs'} started in the queue successfully.`:'No new pairs to start.';box.hidden=false;toastTimer=setTimeout(()=>{box.hidden=true;},5000);}
-  const centralDay=value=>{const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);return ['year','month','day'].map(t=>parts.find(p=>p.type===t).value).join('-');};
+  const centralDateFormatter=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'});
+  const centralDay=value=>{const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';const parts=centralDateFormatter.formatToParts(date);return ['year','month','day'].map(t=>parts.find(p=>p.type===t).value).join('-');};
   function tradingRows(){
     const rows=[...data.rows.filter(r=>!planned(r)||starting.has(r.key)),...(data.history||[])],select=el('trading-date');
-    if(!sessionInitialized){sessionInitialized=true;if(data.activeSession)select.dataset.session=data.activeSession;}
+    if(!sessionInitialized&&data.sessions){sessionInitialized=true;if(data.activeSession)select.dataset.session=data.activeSession;}
     const value=select.dataset?.session?'session:'+select.dataset.session:select.value||'today';
     if(select.dataset)delete select.dataset.session;
     const dateOf=r=>centralDay(r.completedUtc||r.synced||r.cancelled||r.dispatchedAt||r.created||'');
@@ -236,5 +237,6 @@
     render();
   });
   window.addEventListener('queue-save-failed',e=>{saving.delete(e.detail.key);render();});
+  window.addEventListener('load',()=>{lastSnapshot=null;lastQueueEvent='';poll();});
   window.addEventListener('queue-refresh',poll);setInterval(()=>{if(!document.hidden)poll();},3000);poll();
 })();

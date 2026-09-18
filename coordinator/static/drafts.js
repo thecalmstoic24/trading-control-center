@@ -107,7 +107,7 @@
   function render(){
     const list=el('draft-list');list.replaceChildren();
     el('draft-remove-all').disabled=addingAll||inFlight.size>0||!drafts.length;
-    el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Q';
+    el('draft-add-all').disabled=addingAll||inFlight.size>0||!drafts.length;el('draft-add-all').textContent=addingAll?'Adding…':'Add All to Queue';
     if(!drafts.length){list.append(make('p','No planned pairs yet. Add two accounts to begin.'));return;}
     drafts.filter(d=>!inFlight.has(d.key)).forEach(d=>{
       const card=make('form');card.className='draft-card';card.dataset.key=d.key;
