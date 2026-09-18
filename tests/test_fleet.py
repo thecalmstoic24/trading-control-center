@@ -157,11 +157,15 @@ class FleetTests(unittest.TestCase):
             center.prepare(dict(ticker='NQ DEC26',stopLoss=100,profit=200),center.generation)
         self.assertFalse(any(command in ('prepare','bind_peer','entry') for _,command,_ in self.fake.calls))
     def tearDown(self):
-        self.fleet.shutdown()
-        for center in [self.fleet.catalog,*self.fleet.pairs.values(),*self.fleet.retired]:
-            center.pool.shutdown(wait=True);center.close_pool.shutdown(wait=True)
-            for handler in center.logger.handlers:handler.close()
+        self.close_test_fleet(self.fleet)
         self.temp.cleanup()
+    @staticmethod
+    def close_test_fleet(fleet):
+        fleet.shutdown()
+        for center in [fleet.catalog,*fleet.pairs.values(),*fleet.retired]:
+            center.pool.shutdown(wait=True);center.close_pool.shutdown(wait=True)
+            for handler in list(center.logger.handlers):
+                handler.close();center.logger.removeHandler(handler)
     def wait_job(self,identity,job):
         deadline=time.monotonic()+3
         while time.monotonic()<deadline:
@@ -253,7 +257,7 @@ class FleetTests(unittest.TestCase):
             self.assertEqual(set(other.pairs),{self.a,self.b})
             self.assertTrue(all(p.active for p in other.pairs.values()))
             self.assertEqual(other.owners,self.fleet.owners)
-        finally:other.shutdown()
+        finally:self.close_test_fleet(other)
     def test_http_actions_require_a_pair_and_preserve_other_pairs(self):
         import http.client
         server=module.ThreadingHTTPServer(('127.0.0.1',0),module.Handler)
@@ -288,7 +292,7 @@ class FleetTests(unittest.TestCase):
             try:
                 self.assertEqual(len(migrated.pairs),1)
                 self.assertTrue(next(iter(migrated.pairs.values())).active)
-            finally:migrated.shutdown()
+            finally:self.close_test_fleet(migrated)
 
 if __name__=='__main__':unittest.main()
 
