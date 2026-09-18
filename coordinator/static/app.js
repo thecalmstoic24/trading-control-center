@@ -8,7 +8,7 @@ let fleetEventKey='';
 let fleetState, selectedPairId=sessionStorage.getItem('selected-pair')||'';
 const drafts={}, pairJobs={};
 const fields = ['left-stop','left-profit','right-stop','right-profit','instrument','left-account','right-account','left-quantity','right-quantity'];
-function alertText(text, error=false) { $('alert').textContent=text; $('alert').classList.toggle('error',error); }
+function alertText(text, error=false) { $('alert').hidden=false;$('alert').textContent=text; $('alert').classList.toggle('error',error); }
 const apiSnapshots=new Map();
 async function api(path, body) {
   const options = {headers:{'X-Control-Token':token},cache:'no-store'};
@@ -90,7 +90,7 @@ function render(s){
   if(!s.pairs.some(p=>p.id===selectedPairId)){
     selectedPairId=s.pairs[0]?.id||'';initialized=false;closedSequence=null;
   }
-  if(s.dashboard){$('pair-workspace').hidden=true;return;}
+  if(s.dashboard){$('pair-workspace').hidden=true;$('alert').hidden=true;return;}
   renderRegistry(s);
   const pair=s.pairs.find(p=>p.id===selectedPairId);
   $('pair-workspace').hidden=true;

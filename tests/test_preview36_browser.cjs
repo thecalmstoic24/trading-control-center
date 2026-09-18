@@ -24,6 +24,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.waitForFunction(()=>document.getElementById('progress-percent').textContent==='60%');
  assert.match(await page.locator('#progress-counts').textContent(),/12 out of 20 complete5 pairing3 waiting/);
  assert.equal(await page.locator('.progress-errors').count(),0);
+ assert.equal(await page.locator('#alert').isVisible(),false,'Authenticated dashboard must hide the startup placeholder');
  assert.equal(await page.locator('.progress-complete').evaluate(e=>e.style.width),'60%');
  assert.equal(await page.locator('.progress-pairing').evaluate(e=>e.style.width),'25%');
  assert.equal(await page.locator('.progress-waiting').evaluate(e=>e.style.width),'15%');
