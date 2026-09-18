@@ -174,12 +174,15 @@
         if(side==='left')accountsGrid.append(block,amounts);else accountsGrid.append(amounts,block);
       }
       const footer=make('div');footer.className='draft-footer';accountsGrid.querySelector('.draft-center').append(footer);
-      const instrumentLabel=make('label','Instrument'),instrument=make('select');instrument.dataset.field='ticker';
+      const instrumentLabel=make('label','Instr.'),instrument=make('select');instrument.dataset.field='ticker';
       const companion=d.ticker.replace(/^(?:MNQ|NQ)(?= |$)/,root=>root==='NQ'?'MNQ':'NQ');
       for(const value of [...new Set(['NQ','MNQ',d.ticker,companion])]){const opt=make('option',value);opt.value=value;instrument.append(opt);}instrument.value=d.ticker;
       instrument.onchange=()=>{
         PairRatio.setInstrument(d,instrument.value);save();render();
-      };instrumentLabel.append(instrument);footer.append(instrumentLabel);
+      };instrumentLabel.append(instrument);const choices=make('div');choices.className='draft-instrument-priority';choices.append(instrumentLabel);
+      const priorityLabel=make('label','Pri.'),priority=make('select');priority.dataset.field='priority';priority.setAttribute('aria-label','Pair priority');
+      for(const [value,text] of [['4','Regular'],['1','1'],['2','2'],['3','3']]){const option=make('option',text);option.value=value;priority.append(option);}
+      priority.value=String(d.priority||4);priority.onchange=()=>{d.priority=Number(priority.value);save();};priorityLabel.append(priority);choices.append(priorityLabel);footer.append(choices);
       const confirm=make('button',inFlight.has(d.key)?'Adding…':'Confirm pair');confirm.type='submit';confirm.disabled=!d.left||!d.right;footer.append(confirm);
       const remove=make('button','Remove');remove.className='quiet';remove.type='button';remove.onclick=()=>{drafts=drafts.filter(x=>x!==d);save();render();usage();};footer.append(remove);
       const notice=make('p',d.notice||'');notice.className='draft-notice';notice.setAttribute('role','status');disabled.append(notice);
@@ -198,7 +201,7 @@
     inFlight.add(d.key);delete d.error;save();render();
     window.dispatchEvent(new CustomEvent('queue-saving',{detail:compactPairDraft(d)}));
     try{
-      const result=await api('/api/queue/add',{autoQuantity:window.autoQuantity?.configuration().enabled?window.autoQuantity.configuration():undefined,localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
+      const result=await api('/api/queue/add',{priority:d.priority||4,autoQuantity:window.autoQuantity?.configuration().enabled?window.autoQuantity.configuration():undefined,localDraft:true,deferVM:true,draft:compactPairDraft(d),draftKey:d.key,left:left||null,right:right||null,accounts:{...(left?{[left]:d.left.account}:{}),...(right?{[right]:d.right.account}:{})},quantities:{...(left?{[left]:Number(d.leftQuantity)}:{}),...(right?{[right]:Number(d.rightQuantity)}:{})},ratio:d.ratio,ticker:d.ticker,direction:d.direction,stopLoss:Number(d.stopLoss),profit:Number(d.profit)});
       window.dispatchEvent(new CustomEvent('queue-saved',{detail:{key:d.key,row:result.row}}));
       drafts=drafts.filter(x=>x.key!==d.key);save();el('draft-message').textContent='Pair added to the queue.';
       window.dispatchEvent(new Event('queue-refresh'));return true;

@@ -15,7 +15,7 @@ let queue={rows:[{id:'PAIR-0077',pairId:'binding-77',status:'Error',message:'ATM
 function emit(name,detail){listeners.get(name)({detail});}
 function row(id){return elements.get('vms-list').children.find(r=>r.dataset.vm===id);}
 function badge(id){return row(id).children[0].children.find(n=>n.className.startsWith('vm-availability'));}
-function message(id){return row(id).children.find(n=>n.className==='vm-row-secondary').children.find(n=>n.tag==='p').textContent;}
+function message(id){return row(id).children[0].children.find(n=>n.className==='vm-refresh-summary').title;}
 emit('fleet-updated',{fleet});assert.equal(badge('left').textContent,'Paired');
 emit('queue-updated',queue);
 for(const id of ['left','right']){
@@ -23,6 +23,13 @@ for(const id of ['left','right']){
  assert.match(message(id),/PAIR-0077.*ATM Edit dialog/);
 }
 assert.equal(badge('other').textContent,'Ready · Available');
+function release(id){return row(id).children[0].children.find(n=>n.className==='vm-row-actions').children.find(n=>n.textContent==='Release VMs');}
+assert.equal(release('other').disabled,true);assert.match(release('other').title,/No pair reservation/);
+assert.equal(release('left').disabled,false);
+assert.equal(row('left').children[0].children.length,8);
+assert.equal(row('left').children[1].hidden,true);
+row('left').children[0].children.find(n=>n.className==='vm-account-toggle quiet').onclick();
+assert.equal(row('left').children[1].hidden,false);
 assert.equal(fleet[0].pairId,'binding-77');
 fleet[0].refresh.status='running';emit('fleet-updated',{fleet});
 assert.equal(badge('left').textContent,'Error');
@@ -42,4 +49,4 @@ assert.equal(badge('left').textContent,'Paired');
 queue.rows=[{id:'PAIR-0078',pairId:'binding-new',status:'Error'}];emit('queue-updated',queue);
 assert.equal(badge('left').textContent,'Error');assert.equal(badge('right').textContent,'Ready · Available');
 assert.match(message('left'),/Pair failed/);
-console.log('PASS: production renderer shows Errored for both bound VMs; error message/color precedence; refresh/disconnect; retry/release; old history/reassignment; Single Pair.');
+console.log('PASS: single-line VM cells, expandable accounts, persistent disabled/enabled release action, Error precedence and ownership guards.');

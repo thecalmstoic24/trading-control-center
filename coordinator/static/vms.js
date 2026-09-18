@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const el=id=>document.getElementById(id),node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
- let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),syncPending=new Set(),removing=new Set(),selected=new Set();
+ let fleet=[],queueRows=[];const open=new Set(),pending=new Set(),syncPending=new Set(),releasePending=new Set(),removing=new Set(),selected=new Set();
  async function refresh(id){
    if(pending.has(id))return;pending.add(id);render();
    try{await api('/api/vm-refresh',{id});await poll();}
@@ -38,9 +38,12 @@
  let lastRender='';
  function render(){
    if(el('vms-panel').hidden)return;
-   const key=JSON.stringify([fleet.map(v=>{const {ageMs,rttMs,...rest}=v;return rest;}),queueRows.map(r=>[r.key,r.id,r.pairId,r.status,r.message,r.errorReleased]),[...pending],[...syncPending],[...removing],[...selected],[...open],sorting]);
+   const key=JSON.stringify([fleet.map(v=>{const {ageMs,rttMs,...rest}=v;return rest;}),queueRows.map(r=>[r.key,r.id,r.pairId,r.status,r.message,r.errorReleased]),[...pending],[...syncPending],[...releasePending],[...removing],[...selected],[...open],sorting]);
    if(key===lastRender)return;lastRender=key;
    const list=el('vms-list'),scroll=list.scrollTop;list.replaceChildren();
+   const headings=node('div');headings.className='vm-list-head';
+   for(const label of ['','VM','Connection','Position','Status','Accounts','Last refresh','Actions'])headings.append(node('span',label));
+   list.append(headings);
    for(const vm of fleet.slice().sort((a,b)=>String(sortValue(a)).localeCompare(String(sortValue(b)),undefined,{numeric:true,sensitivity:'base'})*sorting.direction||a.name.localeCompare(b.name))){
      const row=node('section');row.className='vm-list-row';row.dataset.vm=vm.id;
      const line=node('div');line.className='vm-list-summary';const box=node('input');box.type='checkbox';box.checked=selected.has(vm.id);box.setAttribute('aria-label','Select VM '+vm.name);box.onchange=()=>{box.checked?selected.add(vm.id):selected.delete(vm.id);el('vms-refresh-selected').disabled=!selected.size;};line.append(box,node('strong',vm.name));
@@ -56,11 +59,21 @@
      syncButton.disabled=syncing||!vm.online||!vm.manualSync;syncButton.setAttribute('aria-label','Sync Airtable for '+vm.name);
      syncButton.title=!vm.manualSync?'Update this VM agent to enable remote sync.':syncing?'Sync is running or queued; follow VM Activity.':'Run Sync Airtable Now on this VM. Waits if trading automation is busy.';
      syncButton.onclick=()=>syncAirtable(vm.id);actions.append(syncButton);
-     if(vm.pairId){const release=node('button','Release VMs');release.className='quiet';release.onclick=async()=>{release.disabled=true;try{const result=await api('/api/vm-release',{id:vm.id});el('vms-message').textContent=result.message;window.dispatchEvent(new Event('queue-refresh'));await poll();}catch(e){el('vms-message').textContent=e.message;}finally{release.disabled=false;}};actions.append(release);}
-     line.append(actions);row.append(line);
-     const details=node('details'),summary=node('summary',`${vm.accounts?.length||0} accounts · Show linked account IDs`);details.open=open.has(vm.id);details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)open.add(vm.id);else open.delete(vm.id);};details.append(summary);
-     const accounts=node('div');accounts.className='linked-accounts';for(const account of vm.accounts||[])accounts.append(node('div',account));details.append(accounts);const secondary=node('div');secondary.className='vm-row-secondary';secondary.append(details);
-     secondary.append(node('p',error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.'));row.append(secondary);list.append(row);
+     const release=node('button',releasePending.has(vm.id)?'Releasing…':'Release VMs');release.className='quiet';
+     release.disabled=!vm.pairId||releasePending.has(vm.id);
+     release.title=!vm.pairId?'No pair reservation to release.':releasePending.has(vm.id)?'Release verification is in progress.':'Release this pair after the server verifies it is safe.';
+     release.setAttribute('aria-label','Release VMs for '+vm.name);
+     release.onclick=async()=>{if(!vm.pairId||releasePending.has(vm.id))return;releasePending.add(vm.id);render();try{const result=await api('/api/vm-release',{id:vm.id});el('vms-message').textContent=result.message;window.dispatchEvent(new Event('queue-refresh'));await poll();}catch(e){el('vms-message').textContent=e.message;}finally{releasePending.delete(vm.id);render();}};actions.append(release);
+     const accountToggle=node('button',(open.has(vm.id)?'▾ ':'▸ ')+(vm.accounts?.length||0)+' accounts');accountToggle.className='vm-account-toggle quiet';
+     accountToggle.setAttribute('aria-expanded',String(open.has(vm.id)));accountToggle.setAttribute('aria-label','Show linked account IDs for '+vm.name);
+     accountToggle.onclick=()=>{open.has(vm.id)?open.delete(vm.id):open.add(vm.id);render();};
+     const fullMessage=error?`${error.id} · ${error.message||'Pair failed. Cancel or resolve the pair before reusing this VM.'}`:(vm.manualSync&&(vm.manualSyncPending||/^Sync failed|^Synced |^Exporting |^Sync requested/.test(vm.sync||''))?vm.sync:'')||vm.refresh?.message||vm.accountMessage||vm.message||'Refresh to verify accounts.';
+     const message=node('span',fullMessage.replace(/^Accounts refreshed\.\s*/,'').replace(/ matched accounts? on [^.]+\./,' matched ·').replace(/\s*Sim101 remains available\.?/,' Sim101 available').trim());message.className='vm-refresh-summary';message.title=fullMessage;message.tabIndex=0;message.setAttribute('aria-label',fullMessage);
+     line.append(accountToggle,message,actions);row.append(line);
+     const accounts=node('div');accounts.className='linked-accounts';accounts.hidden=!open.has(vm.id);accounts.setAttribute('aria-label','Linked accounts for '+vm.name);
+     for(const account of vm.accounts||[])accounts.append(node('div',account));
+     if(!vm.accounts?.length)accounts.append(node('div','No linked account IDs. Refresh to verify accounts.'));
+     row.append(accounts);list.append(row);
    }
    list.scrollTop=scroll;
    const select=el('vm-remove-select'),previous=select.value;select.replaceChildren();

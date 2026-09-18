@@ -137,7 +137,7 @@ class PairStore:
     @staticmethod
     def fields(row):
         spec = row['spec']; f = {'Pair ID': row['id'], 'Execution Key': row['key'], 'Status': {'Need check':'Waiting','Removing':'Cancelled'}.get(row['status'],row['status']),
-            'Queue Order': row['order'], 'Instrument': spec['ticker'], 'Currency': 'USD',
+            'Queue Order': row['order'], 'Priority': str(row['priority']) if row.get('priority') in (1,2,3) else None, 'Instrument': spec['ticker'], 'Currency': 'USD',
             'Direction': 'Buy left / Sell right' if spec['direction'] == 'buy' else 'Sell left / Buy right',
             'Created At': row['created'], 'Activity / Error': row.get('message', '')}
         for side in ('left', 'right'):
@@ -231,6 +231,8 @@ class PairQueue:
             self.io.release()
 
     def add(self, body):
+        priority=body.get('priority',4)
+        if type(priority) is not int or priority not in (1,2,3,4): raise ValueError('Priority must be 1, 2, 3, or Regular.')
         quick = body.get('localDraft') is True and body.get('deferVM') is True
         if quick and not body.get('draftKey'): raise ValueError('Draft identity is required.')
         with (self.lock if quick else self.io):
@@ -249,7 +251,7 @@ class PairQueue:
                 number = max(self.next_id, maximum + 1)
                 if not local: self.next_id = number + 1
                 row = dict(id=f'PAIR-{number:04d}', key=draft_key or uuid.uuid4().hex, spec=spec, status='Queued',
-                           priority=4, message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
+                           priority=priority, message='Waiting for Start Queue.', order=len(self.rows)+1, created=now(), dirty=True)
                 if local: row.update(id='DRAFT-'+row['key'],localDraft=True,dirty=False,draft=copy.deepcopy(body.get('draft')))
                 if local and isinstance(row.get('draft'),dict): row['draft']['ticker']=spec['ticker']
                 self.rows.append(row)

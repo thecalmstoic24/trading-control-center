@@ -52,3 +52,33 @@ class AutoQuantityTests(unittest.TestCase):
         import_pending(row,{});self.assertEqual(row['priority'],4)
 
 if __name__=='__main__':unittest.main()
+
+class ExtendedSizingTests(AutoQuantityTests):
+    def test_median_filter_changes_sizing(self):
+        self.view['candles']['bars'][0]['high']=1100
+        self.config['excludeAboveMedian']=3
+        result=aq.size(self.spec,self.config,self.view,self.clock)
+        self.assertEqual(result['averageRange'],10)
+        self.assertEqual(result['usedBars'],2)
+        self.config['excludeAboveMedian']=0
+        self.assertEqual(aq.size(self.spec,self.config,self.view,self.clock)['averageRange'],40)
+
+    def test_reference_and_timeframe_must_match_source(self):
+        self.config.update(reference='MNQ DEC26',timeframe=5)
+        with self.assertRaises(ValueError): aq.size(self.spec,self.config,self.view,self.clock)
+        self.view['candles'].update(instrument='MNQ 12-26',periodMinutes=5)
+        self.assertEqual(aq.size(self.spec,self.config,self.view,self.clock)['timeframe'],5)
+        self.config['reference']='MNQ MAR27'
+        with self.assertRaises(ValueError): aq.size(self.spec,self.config,self.view,self.clock)
+
+    def test_invalid_settings_rejected(self):
+        for key,value in [('timeframe',True),('timeframe',2),('reference','AAPL'),('excludeAboveMedian',.5),('excludeAboveMedian',float('nan'))]:
+            config={**self.config,key:value}
+            with self.assertRaises(ValueError): aq.validate_config(config)
+
+    def test_priority_written_to_airtable(self):
+        from pair_queue import PairStore
+        row=dict(id='PAIR-0001',key='a'*32,status='Queued',priority=2,results={},order=1,created='now',spec=dict(left=None,right=None,ticker='NQ DEC26',direction='buy'))
+        self.assertEqual(PairStore.fields(row)['Priority'],'2')
+        row['priority']=4
+        self.assertIsNone(PairStore.fields(row)['Priority'])

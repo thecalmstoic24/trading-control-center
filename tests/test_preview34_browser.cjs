@@ -23,7 +23,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('header').count(),0);
  assert.ok((await page.locator('#tab-vms').boundingBox()).y<230);
  assert.ok((await page.locator('.vm-list-row').boundingBox()).height<90);
- assert.equal(await page.locator('.vm-row-secondary p').textContent(),'Accounts refreshed. 1 matched account.');
+ assert.equal(await page.locator('.vm-refresh-summary').getAttribute('title'),'Accounts refreshed. 1 matched account.');
  await page.locator('#tab-planning').click();await page.locator('#planning-table tbody tr[data-record]').first().waitFor();
  assert.ok(!(await page.locator('#planning-table thead').textContent()).includes('Order'));
  assert.equal(await page.locator('#suggestion-strategy option:checked').textContent(),'Test Non-consitency');

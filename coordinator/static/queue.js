@@ -53,8 +53,23 @@
     for(const [id,isPlanning] of [['queue-remove-selected',true],['trading-remove-selected',false]])
       el(id).disabled=mutating||!data.rows.some(r=>planned(r)===isPlanning&&removable(r)&&selected.has(r.id));
   }
+  function renderQueueNotice(){
+    const message=String(data.message||'');
+    const upload=/upload pending|result.*(?:sync|upload).*fail|ROW_DOES_NOT_EXIST/i.test(message);
+    for(const id of ['queue-status','trading-queue-status']){
+      const status=el(id),section=status.closest('.queue-section'),title=section?.querySelector('h2');
+      if(title){let badge=title.querySelector('.queue-state');if(!badge){badge=node('span');title.append(badge);}badge.className='queue-state'+(data.running?' running':'');badge.textContent=data.running?'Running':'Paused';}
+      status.textContent=upload?'':message.replace(/^(?:Queue )?(?:Paused|Running)[. ·]*/i,'');
+      let notice=section?.querySelector('.queue-notice');
+      if(!notice&&section){notice=node('div');notice.className='queue-notice';notice.setAttribute('role','status');
+        notice.append(node('strong','Result upload pending'));const summary=node('span');summary.className='queue-notice-summary';notice.append(summary);
+        const retry=node('button','Retry upload');retry.type='button';retry.onclick=()=>action('retry');notice.append(retry);
+        const details=node('details');details.append(node('summary','Details'),node('pre'));notice.append(details);status.after(notice);}
+      if(notice){notice.hidden=!upload;notice.querySelector('.queue-notice-summary').textContent=/ROW_DOES_NOT_EXIST/.test(message)?'Airtable could not find a linked record. Review Details before retrying.':'Results have not reached Airtable yet.';notice.querySelector('pre').textContent=message;notice.querySelector('button').disabled=mutating;}
+    }
+  }
   function render(){
-    el('queue-status').textContent=el('trading-queue-status').textContent=(data.running?'Running · ':'Paused · ')+data.message;
+    renderQueueNotice();
     const valid=new Set(data.rows.filter(removable).map(r=>r.id));for(const id of selected)if(!valid.has(id))selected.delete(id);
     if(!el('planning-panel').hidden)renderTable('queue-table',[...data.rows.filter(r=>planned(r)&&!starting.has(r.key)),...saving.values()].filter((r,i,rs)=>rs.findIndex(x=>(x.key||x.id)===(r.key||r.id))===i),true);
     el('trading-retry').hidden=!data.rows.some(r=>!r.localDraft&&r.dirty&&(r.closed||r.released22||r.afterId||['Complete','Cancelled'].includes(r.status)));

@@ -3,7 +3,7 @@
 function compactPairDraft(d){
  const result={};
  if(['non-consistency-tests','new-non-consistency'].includes(d.suggestion?.strategy))result.suggestion={strategy:d.suggestion.strategy,revision:d.suggestion.revision,reason:String(d.suggestion.reason||'').slice(0,500)};
- for(const k of ['key','ticker','direction','ratio','leftQuantity','rightQuantity','stopLoss','profit','rightStopLoss','rightProfit'])if(d[k]!==undefined)result[k]=d[k];
+ for(const k of ['priority','key','ticker','direction','ratio','leftQuantity','rightQuantity','stopLoss','profit','rightStopLoss','rightProfit'])if(d[k]!==undefined)result[k]=d[k];
  for(const side of ['left','right']){
   const item=d[side];if(!item)continue;
   const slot={};for(const k of ['account','master','record','vm'])slot[k]=String(item[k]??'').slice(0,256);
