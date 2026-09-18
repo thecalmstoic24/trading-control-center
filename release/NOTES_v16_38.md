@@ -1,6 +1,6 @@
-# Preview 38 candidate — workflow completion and Auto Quantity Beta
+# Preview 38 — workflow completion and Auto Quantity Beta
 
-**Release candidate.** Public-source publication is approved. The updater remains on Preview 37 until Windows and browser validation passes.
+**Released September 18, 2026.** The updater points to Preview 38's immutable installer commit `cd7067963a1605bd6125364d4e608e33acef26ce`. SHA256: `040e787b34ea212530ab4e79291e724d7b58d5fcc33058bb83bfdfb8184a6398`.
 
 Update the Control Center **and every participating VM agent**. Existing identities, saved connections, and trade history are retained. Updating software does not start trading.
 
@@ -32,6 +32,8 @@ The live Pair schema was inspected. Combined Result is writable currency and rem
 
 ## Validation scope
 
-Completed locally: 360 Python checks and 10 JavaScript regression scripts. Coordinator and queue tests use simulated agents. Windows and browser checks are pending: public upload was blocked, and the local Chromium download timed out. The release workflow is configured to parse PowerShell, compile transport and SDK-shaped telemetry interfaces, and run browser regressions. A compile check against stubs is not live NinjaTrader certification. Live NinjaTrader compilation, feed arrival and SIM101 end-to-end sizing/recovery must be verified on the installed VMs before using Beta for real-account execution. No live orders were placed during development.
+Passed: 360 Python checks, 10 local JavaScript regression scripts, Windows PowerShell syntax/timing/updater/recovery/transport checks, telemetry compilation against SDK-shaped test interfaces, and all seven Chromium browser suites. [Final release validation](https://github.com/thecalmstoic24/trading-control-center/actions/runs/35394715715) passed for the exact pinned installer commit. Browser screenshots were also reviewed; full-height trading tables, chart placement and the Central Time label were checked.
+
+Coordinator and queue tests use simulated agents. A compile check against stubs is not live NinjaTrader certification. Live NinjaTrader compilation, feed arrival and SIM101 end-to-end sizing/recovery must be verified on the installed VMs before using Beta for real-account execution. No live orders were placed during development.
 
 Pushover remains deferred as requested.
