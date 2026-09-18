@@ -81,6 +81,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  // Trading formatting, conditional result sync and full-height scrolling panels.
  Object.assign(queue.rows[0],{status:'Complete',completedUtc:'2026-09-17T20:55:15Z',dirty:true,closed:'2026-09-17T20:55:15Z'});
  await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));await page.locator('#tab-trading').click();await page.locator('#trading-retry').waitFor();
+ // The historical fixture is intentionally dated; select All dates so this
+ // formatting regression does not expire when the runner's calendar advances.
+ await page.locator('#trading-date').selectOption('all');
  const table=page.locator('#trading-queue-table');await page.waitForFunction(()=>document.querySelector('#trading-queue-table td[data-column="10"]')?.textContent.includes('09/17/2026'));
  assert.equal(await table.locator('td[data-column="1"]').textContent(),'001');assert.equal(await table.locator('td[data-column="6"]').textContent(),'NQ 2/2');
  assert.deepEqual(await table.locator('td[data-column="10"]>div').allTextContents(),['09/17/2026','3:55:15 PM']);
