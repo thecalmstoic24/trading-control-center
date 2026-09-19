@@ -1,6 +1,6 @@
 # Preview 40 checkpoint
 
-Implementation complete; candidate validation and publication in progress. Do not repeat Preview 39 work.
+Preview 40 implemented, published and validated. Do not repeat completed work.
 
 ## Included
 - Approved compact candlestick header, Trading Control Center title, consistent theme.
@@ -13,8 +13,12 @@ Implementation complete; candidate validation and publication in progress. Do no
 - Telemetry installer keeps its error message visible.
 
 ## Validation / release gates
-- 371 existing Python checks passed, three new upload/view checks passed, 11 JavaScript scripts passed locally.
-- Windows agent guards, parser/telemetry build and browser validation required before latest.json promotion.
+- 374 Python checks and 11 local JavaScript scripts passed.
+- Windows agent guards, parser/telemetry build and all seven browser suites passed. Screenshots reviewed.
+- Validation: https://github.com/thecalmstoic24/trading-control-center/actions/runs/35455009709
+- Validated source and installer: f16eb712343287d834c3738229f67042686e7cac
+- Installer SHA256: ab4638bee897167d83fe97c131baa8a4b7c9414c5becd8c09ff5189f48e843cf
+- latest.json pins this immutable validated installer.
 - Update coordinator and VM agents. No telemetry indicator change; existing Preview 39 telemetry does not need recompiling.
 - No real NinjaTrader runtime here: UI automation requires user-machine acceptance; CI covers guards and syntax.
 

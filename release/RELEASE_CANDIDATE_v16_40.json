@@ -1,0 +1,13 @@
+{
+  "version": "16.0-preview.40",
+  "status": "released",
+  "installer": "Setup_Trading_Control_Center_v16.ps1",
+  "sha256": "ab4638bee897167d83fe97c131baa8a4b7c9414c5becd8c09ff5189f48e843cf",
+  "installer_commit": "f16eb712343287d834c3738229f67042686e7cac",
+  "validation_run": "https://github.com/thecalmstoic24/trading-control-center/actions/runs/35455009709",
+  "python_checks": 374,
+  "javascript_scripts": 11,
+  "windows_browser_checks": "passed: all seven suites; screenshots reviewed",
+  "agent_update_required": true,
+  "ninjatrader_setup_required": "No indicator recompile required from Preview 39"
+}
