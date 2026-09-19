@@ -24,7 +24,7 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
   else if(url.pathname==='/api/auto-quantity')result=config;
   else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
   if(result)return route.fulfill({json:result});
-  const file=url.pathname==='/'?'index.html':url.pathname.slice(1);return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+  const file=url.pathname==='/'?'index.html':url.pathname.slice(1);return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.svg')?'image/svg+xml':'text/html'});
  });
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));
  await page.getByRole('button',{name:'Release VMs for left',exact:true}).click();assert.ok(writes.some(w=>w.path==='/api/vm-release'&&w.body.id==='left'));

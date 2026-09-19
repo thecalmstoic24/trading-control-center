@@ -54,14 +54,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  await page.locator('#tab-trading').click();const table=page.locator('#trading-queue-table');await table.locator('tr[data-pair]').waitFor();
  assert.equal(await table.locator('td[data-column="3"] .pair-settings').textContent(),'P $500 L $600');
  assert.equal(await table.locator('td[data-column="5"] .pair-settings').textContent(),'P $900 L $750');
- assert.equal((await table.locator('tbody input[type=checkbox]').boundingBox()).width,16);
+ assert.equal(await table.locator('tbody input[type=checkbox]').count(),0);
  assert.ok((await page.locator('#trading-date').boundingBox()).height<32);
  await table.locator('th[data-column="5"]').dragTo(table.locator('th[data-column="2"]'));
- assert.deepEqual(await table.locator('thead th').evaluateAll(hs=>hs.map(h=>+h.dataset.column)),[0,1,5,2,3,4,6,7,8,9,10,11]);
- assert.equal(await table.locator('tr[data-pair] td').nth(2).locator('.pair-settings').textContent(),'P $900 L $750');
+ assert.deepEqual(await table.locator('thead th').evaluateAll(hs=>hs.map(h=>+h.dataset.column)),[1,5,2,3,4,6,7,8,9,10,11]);
+ assert.equal(await table.locator('tr[data-pair] td').nth(1).locator('.pair-settings').textContent(),'P $900 L $750');
  await table.locator('th[data-column="5"] button').click();assert.equal(await table.locator('th[data-column="5"]').getAttribute('aria-sort'),'ascending');
  await page.reload();await page.locator('#tab-trading').click();await table.locator('tr[data-pair]').waitFor();
- assert.equal(await table.locator('thead th').nth(2).getAttribute('data-column'),'5');
+ assert.equal(await table.locator('thead th').nth(1).getAttribute('data-column'),'5');
  assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);
  await browser.close();console.log('PASS: compact layout, grouped fund headers and sorting, Shift range selection, shared widths, saved grouping/columns, strategy disclosure, configured amounts and ratio, Trading column persistence, no trading writes.');
 })().catch(e=>{console.error(e);process.exit(1)});

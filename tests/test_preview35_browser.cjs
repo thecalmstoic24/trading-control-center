@@ -34,11 +34,11 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    else if(url.pathname==='/api/contracts')result={month:'DEC26',symbols:{NQ:'NQ DEC26',MNQ:'MNQ DEC26'}};
   if(result)return route.fulfill({json:result});
   const file=url.pathname==='/'?'index.html':url.pathname.slice(1);
-  return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html'});
+  return route.fulfill({body:fs.readFileSync(path.join(__dirname,'../coordinator/static',file)),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.svg')?'image/svg+xml':'text/html'});
  });
  await page.addInitScript(d=>localStorage.setItem('planning-draft-pairs-v1',JSON.stringify([d])),initial);
  await page.goto('http://127.0.0.1:8788/#'+'a'.repeat(64));await page.locator('.vm-list-row').first().waitFor();
- assert.equal(await page.locator('header').count(),0);assert.match(await page.locator('#control-center-title').textContent(),/Pair Execution.*V16.*Preview 36/);
+ assert.equal(await page.locator('header').count(),0);assert.match(await page.locator('#control-center-title').textContent(),/Preview 36/);
  assert.equal(await page.locator('.vm-row-actions button').count(),6);assert.equal(await page.locator('#vm-remove-select option').count(),3);
  const intro=await page.locator('.intro').boundingBox(),contracts=await page.locator('.contract-settings').boundingBox();assert.ok(contracts.x>intro.x+intro.width);assert.ok(Math.abs(contracts.y-intro.y)<30);
  const first=await page.locator('#tab-vms').boundingBox(),last=await page.locator('#tab-trading').boundingBox();assert.ok(Math.abs((first.x+last.x+last.width)/2-960)<2);
@@ -80,7 +80,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  saveMode='lost';await card.getByRole('button',{name:'Confirm pair',exact:true}).click();await page.locator('#queue-table tr[data-key="'+ 'c'.repeat(32)+'"] button').first().waitFor();assert.equal(await card.count(),0);
  assert.equal(queue.rows.filter(r=>r.key==='c'.repeat(32)).length,1);
  // Trading formatting, conditional result sync and full-height scrolling panels.
- Object.assign(queue.rows[0],{status:'Complete',completedUtc:'2026-09-17T20:55:15Z',dirty:true,closed:'2026-09-17T20:55:15Z'});
+ Object.assign(queue.rows[0],{status:'Complete',completedUtc:'2026-09-17T20:55:15Z',after:{left:{balance:53002.94},right:{balance:51282.84}},results:{left:620,right:-520},dirty:true,closed:'2026-09-17T20:55:15Z'});
  await page.evaluate(()=>window.dispatchEvent(new Event('queue-refresh')));await page.locator('#tab-trading').click();await page.locator('#trading-retry').waitFor();
  // The historical fixture is intentionally dated; select All dates so this
  // formatting regression does not expire when the runner's calendar advances.
@@ -90,6 +90,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.deepEqual(await table.locator('td[data-column="10"]>div').allTextContents(),['09/17/2026','3:55:15 PM']);
  assert.equal(await table.locator('td[data-column="2"]>div').textContent(),'MFF-DEMO');assert.equal(await table.locator('.pair-account-number').first().textContent(),initial.left.account);
  assert.equal(await table.locator('.pair-settings .queue-win').first().evaluate(e=>getComputedStyle(e).color),'rgb(20, 116, 71)');assert.equal(await table.locator('.pair-settings .queue-loss').first().evaluate(e=>getComputedStyle(e).color),'rgb(180, 35, 50)');
+ assert.deepEqual(await table.locator('.result-balance').allTextContents(),['$53,002.94','$51,282.84']);
+ assert.equal(await table.locator('.result-balance').first().evaluate(e=>getComputedStyle(e).color),'rgb(0, 0, 0)');
+ assert.equal(await table.locator('.result-balance').first().evaluate(e=>getComputedStyle(e).fontSize===getComputedStyle(e.parentElement).fontSize),true);
  const split=await page.locator('#trading-split').boundingBox();assert.ok(split.y+split.height>=1065);assert.ok(split.height>850);
  assert.equal(await page.locator('.activity-scroll').evaluate(e=>getComputedStyle(e).overflowY),'auto');assert.equal(await page.locator('#trading-split .planning-scroll').evaluate(e=>getComputedStyle(e).overflowY),'auto');
  await page.screenshot({path:process.env.TEMP?path.join(process.env.TEMP,'preview35-trading.png'):'/tmp/preview35-trading.png'});
