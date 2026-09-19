@@ -22,7 +22,8 @@ function Get-ChartSnapshot {
  return $script:current
 }
 function Find-UiaById {param($Root,$AutomationId);Check ($AutomationId -ceq 'ChartTraderControlAccountSelector') 'Wrong UI control';return 'account-box'}
-function Select-NinjaAccount {param($Combo,$DesiredAccount);Check ($DesiredAccount -ceq 'Sim101') 'Wrong fallback account';$script:selections++;$script:current.Account=if($script:wrong){'OTHER'}else{'Sim101'};return $script:current.Account}
+function Get-FirstAvailableAccount40 {param($Combo);return 'FIRST-ACCOUNT'}
+function Select-NinjaAccount {param($Combo,$DesiredAccount);Check ($DesiredAccount -ceq 'FIRST-ACCOUNT') 'Wrong fallback account';$script:selections++;$script:current.Account=if($script:wrong){'OTHER'}else{'FIRST-ACCOUNT'};return $script:current.Account}
 function Invalidate-Preparation {$script:invalidations++}
 function Update-StateCache {}
 Reset
@@ -44,7 +45,7 @@ foreach($flag in @('AtmControlFound','AtmControlEnabled')){
 Reset;$current.Position='Unknown';$blocked=$false;try{Select-DefaultAccount31 | Out-Null}catch{$blocked=$true};Check ($blocked -and $selections -eq 0) 'Unknown position accepted'
 Reset;$script:changeAt=2;$blocked=$false;try{Select-DefaultAccount31 | Out-Null}catch{$blocked=$true};Check ($blocked -and $selections -eq 0 -and -not $script:Busy) 'Changed position accepted'
 Reset;$script:wrong=$true;$blocked=$false;try{Select-DefaultAccount31 | Out-Null}catch{$blocked=$true};Check ($blocked -and -not $script:Busy) 'Wrong selection readback accepted'
-Reset;$script:changeAt=3;$blocked=$false;try{Select-DefaultAccount31 | Out-Null}catch{$blocked=$true};Check ($blocked -and -not $script:Busy) 'Non-flat Sim101 accepted'
+Reset;$script:changeAt=3;$blocked=$false;try{Select-DefaultAccount31 | Out-Null}catch{$blocked=$true};Check ($blocked -and -not $script:Busy) 'Non-flat FIRST-ACCOUNT accepted'
 # Dispatch the new command through the production authenticated command handler.
 Reset;$script:AgentStarted=$true
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../agent/ControlBridge.ps1'),[ref]$tokens,[ref]$errors)
@@ -52,4 +53,4 @@ $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefiniti
 Invoke-Expression $fn.Extent.Text
 $result=Invoke-ControlCommand ([pscustomobject]@{Command='ensure_default_account';Body='{}';AgeSeconds=0})
 Check ($result.ok -and $result.changed -and $selections -eq 1) 'Command dispatch failed'
-'PASS: blank-only Sim101 recovery, saved target preservation, idle/Flat/ATM and pending-command guards, verified readback, busy cleanup and authenticated command dispatch.'
+'PASS: blank-only FIRST-ACCOUNT recovery, saved target preservation, idle/Flat/ATM and pending-command guards, verified readback, busy cleanup and authenticated command dispatch.'

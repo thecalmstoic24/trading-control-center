@@ -30,7 +30,7 @@
    if(pairError(vm))return 'Error';
    if(pending.has(vm.id)||vm.refresh?.status==='running')return 'Refreshing…';
    if(vm.pairId)return 'Paired';
-   if(vm.defaultAccount?.status==='running')return 'Selecting Sim101…';
+   if(vm.defaultAccount?.status==='running')return 'Selecting account…';
    if(vm.fresh&&!vm.account)return 'Account selection needed';
    return vm.online&&vm.fresh&&vm.position==='Flat'&&!!vm.account&&!vm.calibrationRequired&&!vm.busy&&!vm.scheduled&&!vm.pending&&!vm.closing&&!vm.pairActive&&vm.accounts?.length>0&&vm.refresh?.status!=='error'?'Ready · Available':'Needs attention';
  }

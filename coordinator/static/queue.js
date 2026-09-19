@@ -127,7 +127,7 @@
   function renderTable(id,rows,isPlanning){
     const table=el(id);const head=node('thead'),hr=node('tr');
     if(!isPlanning)rows=sortedRows(rows);
-    const order=isPlanning?[0,1,2,3,4,5,6,7,11]:columnOrder(id);
+    const order=isPlanning?[0,1,2,3,4,5,6,7,11]:columnOrder(id).filter(c=>c!==0);
     let cache=tableCache.get(id);if(!cache){cache={rows:new Map()};tableCache.set(id,cache);}
     const headKey=JSON.stringify([order,sortColumn,sortDirection]);
     if(cache.headKey!==headKey){
@@ -170,7 +170,7 @@
       tr.append(node('td',`${s.ticker.split(' ')[0]} ${s.quantities[s.left]??'—'}/${s.quantities[s.right]??'—'}`));
       const label=starting.has(r.key)?'Starting…':statusName(r);
       const status=node('td'),phase=node('span',label);phase.className='pair-phase '+r.status.toLowerCase().replaceAll(' ','-');status.append(phase);if(r.status==='Error'||r.status==='Need check'){const info=node('button','i');info.className='status-info';info.title=r.message||r.releaseMessage||'No additional details';info.setAttribute('aria-label','Details for '+r.id);info.onclick=()=>window.alert(info.title);status.append(info);}tr.append(status);
-      for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';if(slot)td.prepend(directionArrow(s,slot===s.left?'left':'right'));tr.append(td);}
+      for(const slot of [s.left,s.right]){const v=r.results?.[slot],td=node('td',dollars(v));td.className=v>0?'queue-win':v<0?'queue-loss':'';if(slot)td.prepend(directionArrow(s,slot===s.left?'left':'right'));if(slot&&r.after?.[slot]?.balance!=null){const balance=node('div',dollars(r.after[slot].balance));balance.className='result-balance';td.append(balance);}tr.append(td);}
       const completed=r.completedUtc||r.synced||r.cancelled,completedCell=node('td');
       if(completed){const date=new Date(completed);if(Number.isFinite(date.getTime())){completedCell.append(node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)),node('div',new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit',second:'2-digit'}).format(date)));}}
       tr.append(completedCell);

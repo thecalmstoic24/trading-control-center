@@ -18,7 +18,7 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
     const row={id:'DRAFT-'+body.draftKey,key:body.draftKey,localDraft:true,status:'Queued',spec:{...body,left:'left',right:'right',accounts:{left:'A',right:'B'},masters:{left:'MFF-TEST',right:'FN-TEST'},quantities:{left:+body.draft.leftQuantity,right:+body.draft.rightQuantity},balances:{}}};
     queue.rows.push(row);result={row};
    }
-  }else if(url.pathname==='/api/state')result={version:'16.0-preview.38',dashboard:true,fleet,pairs:[],events:[],vmEvents:[]};
+  }else if(url.pathname==='/api/state')result={version:'16.0-preview.40',dashboard:true,fleet,pairs:[],events:[],vmEvents:[]};
   else if(url.pathname==='/api/queue')result=queue;
   else if(url.pathname==='/api/planning')result={rows:[],columns:[],views:[{key:'test',name:'Test'}],viewKey:'test',updatedAt:1,busy:false,error:''};
   else if(url.pathname==='/api/auto-quantity')result=config;
@@ -30,9 +30,9 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
  await page.getByRole('button',{name:'Release VMs for left',exact:true}).click();assert.ok(writes.some(w=>w.path==='/api/vm-release'&&w.body.id==='left'));
  await page.locator('#tab-planning').click();
  const card=page.locator('.draft-card');await card.waitFor();
- const input=card.locator('[data-value-key=profit]');await input.fill('100000');assert.ok((await input.boundingBox()).width>=75);
+ const input=card.locator('[data-value-key=profit]');await input.fill('9999');assert.ok((await input.boundingBox()).width>=40);
  assert.equal(await page.locator('.draft-panel .auto-settings').count(),0);
- assert.equal(await page.locator('.auto-fields > label').count(),6);
+ assert.equal(await page.locator('.auto-fields > label').count(),5);
  await card.locator('[data-field=priority]').selectOption('2');
  assert.equal(await page.locator('#queue-status + .queue-notice').isVisible(),true);
  assert.equal(await page.locator('#queue-status + .queue-notice pre').isVisible(),false);
@@ -44,8 +44,8 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
    assert.equal(await card.locator('.draft-account').evaluateAll(ns=>ns.every(n=>n.scrollWidth<=n.clientWidth+1)),true);
  }
  await page.locator('.draft-panel').evaluate(n=>{n.style.width='';});
- await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview39-planning.png')});
- await page.locator('.auto-settings input[type=checkbox]').check();await page.getByRole('button',{name:'Save sizing settings'}).click();
+ await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview40-planning.png')});
+ await page.locator('.auto-settings input[type=checkbox]').check();assert.equal(await card.locator('[data-field=ticker]').isVisible(),false);await page.getByRole('button',{name:'Save',exact:true}).click();
  await page.waitForFunction(()=>document.body.classList.contains('auto-enabled'));
  assert.equal(await card.locator('[data-value-key=leftQuantity]').isVisible(),false);
  assert.equal(await card.locator('[data-field=ticker]').isVisible(),false);
@@ -55,15 +55,12 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
  await card.getByRole('button',{name:'Confirm pair',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('.draft-card'));
  const submission=writes.find(w=>w.path==='/api/queue/add');assert.equal(submission.body.priority,2);assert.equal(submission.body.autoQuantity.vm,'left');assert.equal(submission.body.ratio,'2:3');assert.equal(submission.body.draft.leftQuantity,'20');
- await page.locator('#tab-trading').click();assert.equal(await page.locator('iframe.tv-chart').count(),1);
- await page.waitForTimeout(100);
- const chart=await page.locator('.tv-chart').boundingBox(),left=await page.locator('#trading-split>.queue-section').boundingBox();
- assert.ok(Math.abs(chart.width-left.width)<2);assert.equal(chart.height,220);
- const chartConfig=JSON.parse(decodeURIComponent(new URL(await page.locator('.tv-chart').getAttribute('src')).hash.slice(1)));
- assert.equal(chartConfig.symbol,'CME_MINI:NQ1!');assert.equal(chartConfig.allow_symbol_change,true);
+ await page.locator('#tab-trading').click();assert.equal(await page.locator('iframe.tv-chart').count(),0);
+ assert.equal(await page.locator('#trading-queue-table th[data-column=0]').count(),0);
+ assert.equal(submission.body.autoQuantity.excludeAboveMedian,3);
  assert.match(await page.locator('.activity .section-title').textContent(),/Central Time/);
  assert.equal(await page.locator('.tabs #trading-progress').count(),1);assert.deepEqual(errors,[]);
- await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview39-trading.png')});
- console.log('PASS: VM Release action; six-digit inputs; shared Auto Quantity settings, sizing, ratio, hidden controls, confirmation and chart placement.');
+ await page.screenshot({path:path.join(process.env.TEMP||'/tmp','preview40-trading.png')});
+ console.log('PASS: VM Release action; four-digit inputs; shared Auto Quantity settings, sizing, ratio, hidden controls, confirmation and chart removal.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

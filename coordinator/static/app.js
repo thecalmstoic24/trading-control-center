@@ -83,7 +83,7 @@ function renderRegistry(s) {
   $('close-all').disabled=s.pairs.length===0;
 }
 function render(s){
-  if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent='Pair Execution · V16 · '+label;}
+  if(s.version){const label='Preview '+String(s.version).split('preview.').pop();document.title='Trading Control Center — '+label;document.getElementById('control-center-title').textContent=label;}
   const eventKey=JSON.stringify([s.fleet.map(v=>{const {ageMs,rttMs,...rest}=v;return rest;}),s.pairs,s.vmEvents]);
   if(eventKey!==fleetEventKey){fleetEventKey=eventKey;if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('fleet-updated',{detail:s}));}
   fleetState=s;lost=false;$('server-dot').classList.add('connected');$('server-state').textContent='Coordinator running';

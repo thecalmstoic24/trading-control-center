@@ -203,10 +203,11 @@
   el('planning-save-view').onclick=()=>{try{localStorage.setItem(key,JSON.stringify(layout));el('view-save-status').textContent='View saved';}catch(_){el('view-save-status').textContent='Unable to save view: browser storage is unavailable.';}};
   async function changeView(body){
     requestGeneration++;el('planning-view').disabled=true;el('planning-view-save').disabled=true;
-    try{await api('/api/planning/view',body);await poll();el('planning-view-dialog').close();}
+    try{await api(body.remove?'/api/planning/view/remove':'/api/planning/view',body);await poll();el('planning-view-dialog').close();}
     catch(e){el('planning-view-error').textContent=e.message;el('planning-status').textContent=e.message;el('planning-view').value=viewKey;}
     finally{el('planning-view').disabled=false;el('planning-view-save').disabled=false;}
   }
+  el('planning-remove-view').onclick=()=>{const name=el('planning-view').selectedOptions[0]?.textContent;if(window.confirm('Remove '+name+' from Control Center? The Airtable view itself will remain.'))changeView({key:viewKey,remove:true});};
   el('planning-view').onchange=()=>changeView({key:el('planning-view').value});
   el('planning-add-view').onclick=()=>{el('planning-view-link').value='';el('planning-view-name').value='';el('planning-view-error').textContent='';el('planning-view-dialog').showModal();};
   el('planning-view-cancel').onclick=()=>el('planning-view-dialog').close();

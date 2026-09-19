@@ -34,7 +34,7 @@ import datetime as dt
 from ratios import pair_amounts, validate_quantities
 from account_names import account_id, account_list, trading_name
 
-VERSION = '16.0-preview.39'
+VERSION = '16.0-preview.40'
 # Agent protocol remains at Preview 24; retain older accepted release labels too.
 AGENT_VERSIONS = {'16.0-preview.34','16.0-preview.33','16.0-preview.32','16.0-preview.31','16.0-preview.30.1','16.0-preview.30','16.0-preview.29','16.0-preview.28','16.0-preview.27','16.0-preview.26.1','16.0-preview.26','16.0-preview.25.2','16.0-preview.25.1','16.0-preview.25','16.0-preview.24','16.0-preview.23','16.0-preview.22','16.0-preview.21','16.0-preview.20','16.0-preview.19','16.0-preview.18','16.0-preview.17','16.0-preview.16',VERSION, '16.0-preview.15', '16.0-preview.14', '16.0-preview.13', '16.0-preview.12', '16.0-preview.11', '16.0-preview.10', '16.0-preview.9', '16.0-preview.8', '16.0-preview.7', '16.0-preview.6', '16.0-preview.5', '16.0-preview.4', '16.0-preview.3', '16.0-preview.2', '15.0-preview.1', '15.0-preview.2', '15.0-preview.3', '15.0-preview.4', '15.0-preview.5', '16.0-preview.1'}
 IDS = ('vm-left', 'vm-right')
@@ -762,7 +762,7 @@ class Fleet:
             if not view.get('defaultAccountSelection'): return False
             previous=self.vm_default.get(slot,{})
             if previous.get('status')=='running' or time.monotonic()<previous.get('retryAt',0): return False
-            self.vm_default[slot]={'status':'running','message':'Selecting Sim101 in the blank account box.'}
+            self.vm_default[slot]={'status':'running','message':'Selecting the first available account in Chart 1.'}
         def work():
             try:
                 self.catalog.observe(slot)
@@ -793,7 +793,7 @@ class Fleet:
         if agent.get('refresh',{}).get('status')=='running': return 'refreshing accounts'
         if not agent.get('account'):
             if not agent.get('defaultAccountSelection'): return 'account box blank; select Sim101 or update this agent to Preview 31 for automatic selection'
-            return agent.get('defaultAccount',{}).get('message') or 'account box blank; automatic Sim101 selection pending'
+            return agent.get('defaultAccount',{}).get('message') or 'account box blank; automatic account selection pending'
         return ''
 
     def create_pair(self, left, right):
@@ -1188,6 +1188,7 @@ class Fleet:
                 self.observe(slot)
                 last_probe=time.monotonic()
             self.refresh_on_startup(slot)
+            self.ensure_default_account(slot)
             self.stop.wait(1)
 
     def start(self):
@@ -1292,6 +1293,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, contracts.save(self.server.center.directory, body.get('month','')))
             elif self.path.startswith('/api/queue/'):
                 self.reply(200, self.server.queue.command(self.path.rsplit('/',1)[1], body))
+            elif self.path == '/api/planning/view/remove':
+                self.server.planning.remove_view(body.get('key'))
+                self.reply(200, {'ok':True})
             elif self.path == '/api/planning/view':
                 self.server.planning.select_view(body.get('key'),body.get('link'),body.get('name',''))
                 self.reply(200, {'ok':True})

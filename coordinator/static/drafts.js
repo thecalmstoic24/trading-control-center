@@ -69,6 +69,7 @@
     }
     const suggestionProblem=PairSuggestions.validateDraft(d)||FundedSuggestions.validateDraft(d);if(suggestionProblem)return suggestionProblem;
     if(d.left&&d.right&&fund(d.left)&&fund(d.left)===fund(d.right))return 'Same fund';
+    if(['profit','stopLoss','rightProfit','rightStopLoss'].some(k=>Number(d[k])>9999))return 'Profit and loss must be at most 9,999.';
     const l=Number(d.leftQuantity),r=Number(d.rightQuantity),[a,b]=d.ratio.split(':').map(Number);
     if(!window.autoQuantity?.configuration().enabled&&(!Number.isInteger(l)||!Number.isInteger(r)||l<1||r<1||l>1000||r>1000||l*b!==r*a))return 'Invalid quantity';
     return '';
@@ -83,7 +84,7 @@
   let dragged=null;
   function input(form,d,key,label,type='text',alias=key){
     const l=make('label',label),n=make('input');n.type=type;n.value=d[key];n.required=true;if(key.includes('Quantity')&&window.autoQuantity?.configuration().enabled){n.required=false;n.disabled=true;}n.dataset.field=alias;n.dataset.valueKey=key;
-    if(type==='number'){n.min=key.includes('Quantity')?'1':'0.01';n.max=key.includes('Quantity')?'1000':'100000';n.step=key.includes('Quantity')?'1':'0.01';}
+    if(type==='number'){n.min=key.includes('Quantity')?'1':'0.01';n.max=key.includes('Quantity')?'1000':'9999';n.step=key.includes('Quantity')?'1':'0.01';}
     n.oninput=()=>{
       PairRatio.edit(d,key,n.value);
       for(const other of form.closest('form').querySelectorAll('input[data-value-key]')){
@@ -137,7 +138,7 @@
           const swap=make('button','⇄');swap.type='button';swap.className='draft-swap';swap.title='Swap accounts and their settings';swap.setAttribute('aria-label','Swap accounts and their settings');
           swap.onclick=()=>{PairRatio.swap(d);save();render();usage();};
           const center=make('div');center.className='draft-center';center.append(swap);
-          const label=make('label','Ratio'),select=make('select');select.dataset.field='ratio';select.setAttribute('aria-label','Pair ratio');
+          const label=make('label',''),select=make('select');select.dataset.field='ratio';select.setAttribute('aria-label','Pair ratio');
           for(const value of PairRatio.options){const opt=make('option',value);opt.value=value;select.append(opt);}select.value=d.ratio;
           select.onchange=()=>{d.ratio=select.value;PairRatio.amounts(d);PairRatio.quantities(d);save();render();};label.append(select);center.append(label);accountsGrid.append(center);
         }
@@ -156,7 +157,7 @@
         block.append(make('strong',item?.master||'Select an account'));
         block.append(make('p',item?.account||'Add an account from the table'));
         const metrics=make('div');metrics.className='draft-metrics';updateMetrics(metrics,item);block.append(metrics);
-        const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy':'Sell');direction.type='button';direction.className='quiet draft-direction';direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
+        const direction=make('button',(side==='left')===(d.direction==='buy')?'Buy ↑':'Sell ↓');direction.type='button';direction.className='quiet draft-direction '+((side==='left')===(d.direction==='buy')?'buy':'sell');direction.title='Reverse trade direction';direction.onclick=()=>{d.direction=d.direction==='buy'?'sell':'buy';save();render();};block.append(direction);
         if(item){
           const remove=make('button','×');remove.type='button';remove.className='quiet account-remove';remove.setAttribute('aria-label','Remove account '+item.account);
           remove.onclick=()=>{delete d[side];save();render();usage();};block.append(remove);
@@ -181,7 +182,7 @@
         PairRatio.setInstrument(d,instrument.value);save();render();
       };instrumentLabel.append(instrument);const choices=make('div');choices.className='draft-instrument-priority';choices.append(instrumentLabel);
       const priorityLabel=make('label','Pri.'),priority=make('select');priority.dataset.field='priority';priority.setAttribute('aria-label','Pair priority');
-      for(const [value,text] of [['4','Regular'],['1','1'],['2','2'],['3','3']]){const option=make('option',text);option.value=value;priority.append(option);}
+      for(const [value,text] of [['4',''],['1','1'],['2','2'],['3','3']]){const option=make('option',text);option.value=value;priority.append(option);}
       priority.value=String(d.priority||4);priority.onchange=()=>{d.priority=Number(priority.value);save();};priorityLabel.append(priority);choices.append(priorityLabel);footer.append(choices);
       const confirm=make('button',inFlight.has(d.key)?'Adding…':'Confirm pair');confirm.type='submit';confirm.disabled=!d.left||!d.right;footer.append(confirm);
       const remove=make('button','Remove');remove.className='quiet';remove.type='button';remove.onclick=()=>{drafts=drafts.filter(x=>x!==d);save();render();usage();};footer.append(remove);

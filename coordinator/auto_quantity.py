@@ -9,7 +9,7 @@ from fractions import Fraction
 
 def configuration(directory):
     path=directory/'auto-quantity.json'
-    return json.loads(path.read_text()) if path.exists() else dict(enabled=False,vm='',bars=10,multiplier=1,reference='',timeframe=1,excludeAboveMedian=0)
+    return json.loads(path.read_text()) if path.exists() else dict(enabled=False,vm='',bars=10,multiplier=1,reference='',timeframe=1,excludeAboveMedian=3)
 
 def validate_config(value):
     if not isinstance(value,dict) or type(value.get('enabled')) is not bool: raise ValueError('Invalid Auto Quantity settings.')

@@ -111,6 +111,16 @@ class Planning:
             if not view:raise ValueError('Choose a saved Airtable view.')
             self.active=key;self.data=self.caches.setdefault(key,self.empty_data(view));self.save_views()
         self.wake.set()
+    def remove_view(self, key):
+        with self.lock:
+            if len(self.views)<=1:raise ValueError('Keep at least one saved view. Add another view first.')
+            if not any(v['key']==key for v in self.views):raise ValueError('Choose a saved Airtable view.')
+            self.views=[v for v in self.views if v['key']!=key]
+            self.caches.pop(key,None)
+            if self.active==key:
+                view=self.views[0];self.active=view['key'];self.data=self.caches.setdefault(self.active,self.empty_data(view))
+            self.save_views()
+        self.wake.set()
     def start(self): self.thread.start();self.wake.set()
     def snapshot(self):
         with self.lock:return copy.deepcopy(dict(self.data,views=self.views))

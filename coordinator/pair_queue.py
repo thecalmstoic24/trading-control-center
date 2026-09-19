@@ -210,10 +210,23 @@ class PairQueue:
         for slot in slots(row['spec']):
             if slot in self.fleet.catalog.config: self.fleet.vm_event(slot,row['id']+' · '+status+' · '+message)
 
+    def skip_missing_upload(self, row, exc):
+        # Only a confirmed missing-record response is terminal; preserve other retries.
+        if 'ROW_DOES_NOT_EXIST' not in str(exc):return False
+        row.update(dirty=False,uploadSkipped=True,uploadError=str(exc),message='Upload skipped — Airtable record no longer exists.')
+        row.pop('syncError',None)
+        if self.message.startswith('Background result upload pending:'):self.message=''
+        self.save()
+        return True
+
     def sync(self, row):
         # Queue mutation and background sync are serialized by io.
-        if row.get('remoteDeleted') or row.get('localDraft'): return
-        self.store.push(row)
+        if row.get('remoteDeleted') or row.get('localDraft') or row.get('uploadSkipped'): return
+        try:self.store.push(row)
+        except Exception as exc:
+            with self.lock:
+                if row['status'] in TERMINAL and self.skip_missing_upload(row,exc):return
+            raise
         row.pop('syncError',None)
         with self.lock: row['dirty'] = False; self.save()
 
@@ -886,7 +899,7 @@ class PairQueue:
         # Airtable latency must never occupy the scheduler or a released VM.
         while not self.stop.is_set():
             with self.lock:
-                pending=[copy.deepcopy(r) for r in self.rows if r.get('fast22') and r.get('released22') and r.get('dirty') and not r.get('remoteDeleted')]
+                pending=[copy.deepcopy(r) for r in self.rows if r.get('fast22') and r.get('released22') and r.get('dirty') and not r.get('remoteDeleted') and not r.get('uploadSkipped')]
             for snapshot in pending:
                 try:
                     self.store.push(snapshot)
@@ -898,7 +911,10 @@ class PairQueue:
                             self.save()
                     self.planning.refresh()
                 except Exception as exc:
-                    with self.lock: self.message='Background result upload pending: '+str(exc)
+                    with self.lock:
+                        row=next((r for r in self.rows if r['key']==snapshot['key']),None)
+                        if row == snapshot and self.skip_missing_upload(row,exc):continue
+                        self.message='Background result upload pending: '+str(exc)
             self.stop.wait(5)
 
     def loop(self):
