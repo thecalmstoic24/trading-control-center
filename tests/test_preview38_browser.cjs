@@ -56,7 +56,7 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
  await page.waitForFunction(()=>!document.querySelector('.draft-card'));
  const submission=writes.find(w=>w.path==='/api/queue/add');assert.equal(submission.body.priority,2);assert.equal(submission.body.autoQuantity.vm,'left');assert.equal(submission.body.ratio,'2:3');assert.equal(submission.body.draft.leftQuantity,'20');
  await page.locator('#tab-trading').click();assert.equal(await page.locator('iframe.tv-chart').count(),0);
- assert.equal(await page.locator('#trading-queue-table th[data-column=0]').count(),0);
+ assert.equal(await page.locator('#trading-queue-table th[data-column="0"]').count(),0);
  assert.equal(submission.body.autoQuantity.excludeAboveMedian,3);
  assert.match(await page.locator('.activity .section-title').textContent(),/Central Time/);
  assert.equal(await page.locator('.tabs #trading-progress').count(),1);assert.deepEqual(errors,[]);

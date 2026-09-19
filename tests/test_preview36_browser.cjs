@@ -29,7 +29,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  assert.equal(await page.locator('.progress-complete').evaluate(e=>e.style.width),'60%');
  assert.equal(await page.locator('.progress-pairing').evaluate(e=>e.style.width),'25%');
  assert.equal(await page.locator('.progress-waiting').evaluate(e=>e.style.width),'15%');
- assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).color),'rgb(25, 100, 201)');
+ assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).color),'rgb(36, 103, 196)');
  assert.equal(await page.locator('.pair-phase.waiting').first().evaluate(e=>getComputedStyle(e).animationName),'pairing-pulse');
  assert.equal(await page.locator('.pair-phase.trading').first().evaluate(e=>getComputedStyle(e).animationName),'none');
  const heading=await page.locator('#trading-split h2').first().boundingBox(),gauge=await page.locator('#trading-progress').boundingBox(),date=await page.locator('#trading-date').boundingBox();
